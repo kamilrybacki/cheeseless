@@ -12,6 +12,7 @@ import json
 import os
 import re
 import stat
+import time
 import tomllib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ ENV_VALUE_LIMIT = 1 << 15
 SEED_FILE_LIMIT = 1 << 20
 MOUNT_WALK_ENTRIES = 200_000
 MOUNT_WALK_DEPTH = 64
+MOUNT_WALK_SECONDS = 60.0
 
 type Inode = tuple[int, int]
 
@@ -94,6 +96,7 @@ def _walk_pinned_tree(
     """
     stack: list[tuple[str, ...]] = [()]
     entries = 0
+    deadline = time.monotonic() + MOUNT_WALK_SECONDS
     while stack:
         rel = stack.pop()
         try:
@@ -102,12 +105,26 @@ def _walk_pinned_tree(
             raise SessionOptionError(f"extra read-only path cannot be inspected: {raw}") from exc
         try:
             try:
-                names = sorted(os.listdir(dir_fd))
+                names = []
+                with os.scandir(dir_fd) as scan:
+                    for entry in scan:
+                        if time.monotonic() > deadline:
+                            raise SessionOptionError(
+                                f"extra read-only path time cap reached: {raw}"
+                            )
+                        names.append(entry.name)
+                        if len(names) > MOUNT_WALK_ENTRIES - entries:
+                            raise SessionOptionError(
+                                f"extra read-only path has too many entries: {raw}"
+                            )
+                names.sort()
             except OSError as exc:
                 raise SessionOptionError(
                     f"extra read-only path cannot be inspected: {raw}"
                 ) from exc
             for name in names:
+                if time.monotonic() > deadline:
+                    raise SessionOptionError(f"extra read-only path time cap reached: {raw}")
                 entries += 1
                 if entries > MOUNT_WALK_ENTRIES:
                     raise SessionOptionError(f"extra read-only path has too many entries: {raw}")
@@ -126,6 +143,8 @@ def _walk_pinned_tree(
                     if len(rel) + 1 > MOUNT_WALK_DEPTH:
                         raise SessionOptionError(f"extra read-only path is too deep: {raw}")
                     stack.append((*rel, name))
+                elif not stat.S_ISLNK(info.st_mode):
+                    raise SessionOptionError(f"extra read-only path contains a special file: {raw}")
         finally:
             os.close(dir_fd)
 
@@ -154,6 +173,8 @@ def _check_pinned_inodes(
     hidden_inodes: frozenset[Inode],
 ) -> None:
     info = os.fstat(fd)
+    if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)):
+        raise SessionOptionError(f"extra read-only path is a special file: {raw}")
     if stat.S_ISREG(info.st_mode):
         if (info.st_dev, info.st_ino) in hidden_inodes:
             raise SessionOptionError(f"extra read-only path is hidden material: {raw}")
@@ -228,7 +249,7 @@ def _check_seed_rel(rel: object) -> str:
 
 def _read_seed(rel: str, source: Path, protected: Sequence[Path]) -> tuple[bytes, Inode]:
     try:
-        fd = os.open(source, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError as exc:
         raise SessionOptionError(f"cannot open home seed source: {rel}") from exc
     try:

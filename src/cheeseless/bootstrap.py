@@ -125,21 +125,43 @@ def _protected_roots(
     repo: Any = ctx.repo
     return (
         *_forbidden_roots(repo),
+        *repo.object_dirs(),
         store_root(repo.common_dir(), _state_home(state_dir)),
         _state_home(state_dir),
         *(path for path in explicit if path is not None),
     )
 
 
+PROTECTED_WALK_ENTRIES = 2_000_000
+PROTECTED_WALK_SECONDS = 60.0
+
+
 def _regular_inodes(root: Path, found: set[tuple[int, int]]) -> None:
-    for dirpath, _dirs, names in os.walk(root, followlinks=False):
-        for name in names:
-            try:
+    deadline = _time.monotonic() + PROTECTED_WALK_SECONDS
+    entries = 0
+
+    def onerror(error: OSError) -> None:
+        raise error
+
+    try:
+        for dirpath, dirs, names in os.walk(root, followlinks=False, onerror=onerror):
+            for name in (*dirs, *names):
+                entries += 1
+                if entries > PROTECTED_WALK_ENTRIES:
+                    raise SessionOptionError("protected inode scan entry cap reached")
+                if _time.monotonic() > deadline:
+                    raise SessionOptionError("protected inode scan time cap reached")
                 info = os.lstat(os.path.join(dirpath, name))
-            except OSError:
-                continue
-            if stat.S_ISREG(info.st_mode):
-                found.add((info.st_dev, info.st_ino))
+                if stat.S_ISLNK(info.st_mode):
+                    info = os.stat(os.path.join(dirpath, name))
+                    if stat.S_ISDIR(info.st_mode):
+                        raise SessionOptionError(
+                            "protected directory symlinks are an unsupported layout"
+                        )
+                if stat.S_ISREG(info.st_mode):
+                    found.add((info.st_dev, info.st_ino))
+    except OSError as exc:
+        raise SessionOptionError("protected inode scan cannot be inspected") from exc
 
 
 def _hidden_inodes(ctx: Context, frozen: Any, state_dir: Path | None) -> frozenset[tuple[int, int]]:
@@ -158,6 +180,8 @@ def _hidden_inodes(ctx: Context, frozen: Any, state_dir: Path | None) -> frozens
             continue
         if stat.S_ISREG(info.st_mode):
             found.add((info.st_dev, info.st_ino))
+    for objects in repo.object_dirs():
+        _regular_inodes(objects, found)
     _regular_inodes(Path(repo.common_dir()), found)
     _regular_inodes(store_root(repo.common_dir(), _state_home(state_dir)), found)
     return frozenset(found)

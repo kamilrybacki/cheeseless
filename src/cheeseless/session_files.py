@@ -145,9 +145,10 @@ def _walk_tree(
     max_entries: int | None = None,
     max_depth: int | None = None,
     seconds: float | None = None,
-    clock: Callable[[], float] = time.monotonic,
+    clock: Callable[[], float] | None = None,
 ) -> str | None:
     """Walk ``root_fd`` iteratively; return the cap that stopped it, if any."""
+    clock = time.monotonic if clock is None else clock
     maximum_entries = EVIDENCE_ENTRIES if max_entries is None else max_entries
     maximum_depth = EVIDENCE_DEPTH if max_depth is None else max_depth
     limit_seconds = EVIDENCE_SECONDS if seconds is None else seconds
@@ -165,11 +166,21 @@ def _walk_tree(
                 continue
             try:
                 try:
-                    names = sorted(os.listdir(dir_fd))
+                    names = []
+                    with os.scandir(dir_fd) as scan:
+                        for entry in scan:
+                            if clock() > deadline:
+                                return "time cap reached"
+                            names.append(entry.name)
+                            if len(names) > maximum_entries - entries:
+                                break
+                    names.sort()
                 except OSError:
                     continue
                 on_dir(rel)
                 for name in names:
+                    if clock() > deadline:
+                        return "time cap reached"
                     entries += 1
                     if entries > maximum_entries:
                         return "entry cap reached"
