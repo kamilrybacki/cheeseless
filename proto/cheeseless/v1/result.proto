@@ -1,0 +1,37 @@
+// Gate result (ledger D1, Q38, Q43, D7). Per-criterion pass/fail only: no output,
+// timing or holdout information may ever be added here (AC 4).
+syntax = "proto3";
+
+package cheeseless.v1;
+
+enum Status {
+  // Fail closed: PASS must never be the zero value.
+  STATUS_UNSPECIFIED = 0;
+  STATUS_PASS = 1;
+  STATUS_FAIL = 2;
+  STATUS_BLOCKED = 3;
+}
+
+// Public per-criterion outcome: id and status only.
+message CriterionResult {
+  string criterion_id = 1;
+  Status status = 2;
+}
+
+// A Result carries no Error: errors travel only in the response oneof, so free text
+// can never ride along with a verdict.
+message Result {
+  reserved 8;
+  reserved "error";
+  // Freeze digest (D7).
+  string task_id = 1;
+  string tree_hash = 2;
+  string baseline_digest = 3;
+  string profile = 4;
+  string tool_version = 5;
+  Status status = 6;
+  repeated CriterionResult criteria = 7;
+  // HMAC over the canonical encoding of every other field, including status and
+  // criteria (Q43, P11). A verdict that is not covered can be flipped unnoticed.
+  bytes hmac_tag = 9;
+}

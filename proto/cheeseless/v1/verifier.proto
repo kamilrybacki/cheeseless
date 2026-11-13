@@ -1,0 +1,42 @@
+// The only verbs the agent-reachable verifier exposes (Q43). Freeze, promote and
+// disable are host CLI only and deliberately absent. Documentation of the contract;
+// no gRPC transport is generated (protojson over a UDS).
+syntax = "proto3";
+
+package cheeseless.v1;
+
+import "cheeseless/v1/error.proto";
+import "cheeseless/v1/result.proto";
+
+message RunRequest {
+  string task_id = 1;
+}
+
+message RunResponse {
+  oneof outcome {
+    Result result = 1;
+    Error error = 2;
+  }
+  // One CRITERION_FAILED per FAIL criterion of `result`, carrying only the frozen
+  // public description (ledger I9, I10). Empty unless `result` is set.
+  repeated Error criterion_failures = 3;
+}
+
+message StatusRequest {
+  string task_id = 1;
+}
+
+message StatusResponse {
+  oneof outcome {
+    Result result = 1;
+    Error error = 2;
+  }
+  // One CRITERION_FAILED per FAIL criterion of `result`, carrying only the frozen
+  // public description (ledger I9, I10). Empty unless `result` is set.
+  repeated Error criterion_failures = 3;
+}
+
+service Verifier {
+  rpc Run(RunRequest) returns (RunResponse);
+  rpc Status(StatusRequest) returns (StatusResponse);
+}

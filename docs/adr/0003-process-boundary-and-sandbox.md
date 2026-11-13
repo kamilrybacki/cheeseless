@@ -26,7 +26,11 @@ fresh `/proc`, all capabilities dropped, `--new-session`, `--die-with-parent` (l
   from the trusted store/base (`$XDG_STATE_HOME/cheeseless/<repo-id>/`, Q55); the candidate is built in its own venv;
   `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`; `rootdir`/`confcutdir` pinned; runner is `python -I`
 from a trusted venv, env and `PYTEST_ADDOPTS` scrubbed, candidate never on its path (D4).
-- Fail closed (Q43): any infra error is FAIL; no isolation-downgrade flags.
+- Runner isolation (D12): the runner starts each candidate in its own bwrap, so the runner,
+  its tmpfs and hidden inputs sit outside the candidate's PID and mount namespaces; the
+  runner sets `PR_SET_DUMPABLE=0`; candidate seccomp denies `ptrace`, `process_vm_*`.
+- Fail closed (Q43): an infra error is never PASS; the cause is stored for the operator,
+  the agent sees only what ADR 0008 allows (D17); no isolation-downgrade flags.
 
 ## Consequences
 - ✅ Closes runner hijack, candidate disk exfiltration and socket leaks (criteria 14-16, 18).
