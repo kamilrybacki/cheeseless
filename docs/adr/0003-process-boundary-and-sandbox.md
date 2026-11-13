@@ -23,7 +23,7 @@ fresh `/proc`, all capabilities dropped, `--new-session`, `--die-with-parent` (l
 - Each candidate run uses a throwaway overlay, scrubbed env, and the whole process tree
   is killed; nothing it writes is agent-visible (Q40).
 - Trusted runner closure (Q36): tests, conftest, pytest config and runner deps come only
-  from the trusted store/base (location: open, ledger Q55); the candidate is built in its own venv;
+  from the trusted store/base (`$XDG_STATE_HOME/cheeseless/<repo-id>/`, Q55); the candidate is built in its own venv;
   `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`; `rootdir`/`confcutdir` pinned; runner is `python -I`
 from a trusted venv, env and `PYTEST_ADDOPTS` scrubbed, candidate never on its path (D4).
 - Fail closed (Q43): any infra error is FAIL; no isolation-downgrade flags.

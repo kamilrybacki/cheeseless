@@ -20,7 +20,9 @@ Minimal feedback.
 - The run budget is per task identity, shared across sessions and CI; defaults 30 local
   and 5 CI, configurable per repo (Q38).
   Task identity is assigned at freeze by the operator (digest of the frozen criteria);
-  a run reserves budget atomically in the trusted store before hidden input (D7). The holdout is rotated after N CI failures (Q38); exhaustion and N: open, ledger Q54.
+  a run reserves budget atomically in the trusted store before hidden input (D7). 
+  Exhausted budget ends the task `BLOCKED`; only the operator grants more runs. The
+  holdout rotates after 3 failed CI holdout attempts, re-frozen by the operator (Q54).
 - Freeze preconditions (Q44, Q9): suite RED on baseline; skip/xfail/empty collection is
   an error; at least one visible and one holdout test per criterion (stratified);
   seed drawn after approval; static check that tests read no candidate paths/env; no

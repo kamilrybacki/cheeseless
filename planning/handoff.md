@@ -21,22 +21,16 @@ source of truth; changes land through `promote`, not hooks.
    reviews plus their merge. Background only; the ledger wins on conflicts.
 5. [`../AGENTS.md`](../AGENTS.md) — rules for agents working here (ADR format, review, security).
 
-## Open before the phases they block
+## Open decisions
 
-- **Q54** run-budget exhaustion and holdout rotation trigger (blocks phases 2 and 7).
-- **Q55** trusted store location and contents, CI secrets (blocks phases 2 and 10).
-- **Q56** promote path allowlist and sensitive-file list (blocks phase 9).
-
-Each has a proposed default in the ledger. The operator confirms or changes them; record
-the answer as a ledger row and update the affected ADR before it is accepted.
+Nothing. Q54–Q56 were accepted with their proposed defaults on 2026-11-13 (ledger).
 
 ## Next steps
 
-1. Confirm Q54–Q56 with the operator.
-2. The cross-vendor review of ADRs 0001–0008 is addressed (ledger "ADR review", D4–D10).
-   After Q54–Q56, re-review the changed ADRs once and move them to `accepted`.
-3. Phase 0 of the implementation plan: skeleton, import-linter contracts, proto, CI.
-4. Continue phase by phase, tests first, cross-vendor review of each phase's diff.
+1. The cross-vendor review of ADRs 0001–0008 is addressed (ledger "ADR review", D4–D10).
+   Re-review the ADRs changed since (0002–0008) once, then move them to `accepted`.
+2. Phase 0 of the implementation plan: skeleton, import-linter contracts, proto, CI.
+3. Continue phase by phase, tests first, cross-vendor review of each phase's diff.
 
 ## Constraints
 
