@@ -1,0 +1,132 @@
+[project]
+name = "cheeseless"
+version = "0.0.0"
+description = "A git-native black-box quality gate for coding agents."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "protobuf>=7.35.1,<8",
+    "mcp>=2,<3",
+    "pyyaml>=6,<7",
+    "pytest>=8,<10",
+    "mitmproxy>=12.3.1,<13",
+]
+
+[project.scripts]
+cheeseless = "cheeseless.bootstrap:main"
+
+[dependency-groups]
+dev = [
+    "grpcio-tools>=1.74",
+    "cryptography>=45",
+    "import-linter>=2.3",
+    "mypy>=1.15",
+    "pytest>=8",
+    "pytest-cov>=6",
+    "ruff>=0.9",
+    "types-pyyaml>=6.0.12.20261113",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cheeseless"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=cheeseless --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["cheeseless"]
+omit = ["*/adapters/inbound/proto/*"]
+
+[tool.coverage.report]
+fail_under = 80
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["src/cheeseless/adapters/inbound/proto"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+strict = true
+files = ["src", "scripts"]
+exclude = ["src/cheeseless/adapters/inbound/proto/"]
+
+[[tool.mypy.overrides]]
+module = ["cheeseless.adapters.inbound.proto.*"]
+ignore_errors = true
+
+[tool.importlinter]
+root_package = "cheeseless"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Hexagonal layers"
+type = "layers"
+layers = [
+    "cheeseless.bootstrap",
+    "cheeseless.adapters",
+    "cheeseless.app",
+    "cheeseless.ports",
+    "cheeseless.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Adapters are independent of each other"
+type = "independence"
+modules = [
+    "cheeseless.adapters.inbound.cli",
+    "cheeseless.adapters.inbound.uds",
+    "cheeseless.adapters.inbound.mcp",
+    "cheeseless.adapters.outbound.git",
+    "cheeseless.adapters.outbound.sandbox",
+    "cheeseless.adapters.outbound.runner",
+    "cheeseless.adapters.outbound.store",
+    "cheeseless.adapters.outbound.egress",
+    "cheeseless.adapters.outbound.ci",
+]
+
+[[tool.importlinter.contracts]]
+name = "Inner layers never see generated proto or protobuf"
+type = "forbidden"
+source_modules = [
+    "cheeseless.domain",
+    "cheeseless.ports",
+    "cheeseless.app",
+]
+forbidden_modules = [
+    "cheeseless.adapters",
+    "cheeseless.bootstrap",
+    "google",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain does no I/O"
+type = "forbidden"
+source_modules = ["cheeseless.domain"]
+forbidden_modules = [
+    "os",
+    "subprocess",
+    "socket",
+    "pathlib",
+    "shutil",
+    "sqlite3",
+    "http",
+    "urllib",
+    "tempfile",
+]
+
+[[tool.mypy.overrides]]
+module = ["grpc_tools", "grpc_tools.*"]
+ignore_missing_imports = true
