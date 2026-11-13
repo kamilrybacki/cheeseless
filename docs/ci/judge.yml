@@ -1,0 +1,104 @@
+# cheeseless CI judge: workflow template. Copy to .github/workflows/judge.yml in the
+# protected repository. It is a `workflow_run` workflow, so GitHub always runs the copy on
+# the DEFAULT branch, never the version from the pull request.
+#
+# Setup: see docs/ci/README.md. Secret: CHEESELESS_CI_BUNDLE (output of `cheeseless ci-export`).
+name: cheeseless-judge
+
+on:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: cheeseless-judge-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  judge:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Install bubblewrap and allow unprivileged user namespaces
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Resolve the pull request from the head SHA
+        id: pr
+        run: |
+          set -euo pipefail
+          # Never trust PR numbers carried in the event payload; resolve from the SHA.
+          prs=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
+            --jq '[.[] | select(.state == "open")]')
+          [ "$(jq length <<<"$prs")" = "1" ] || { echo "expected exactly one open PR"; exit 1; }
+          base_ref=$(jq -r '.[0].base.ref' <<<"$prs")
+          [ "$base_ref" = "$DEFAULT_BRANCH" ] || { echo "refusing non-default base: $base_ref"; exit 1; }
+          echo "number=$(jq -r '.[0].number' <<<"$prs")" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(jq -r '.[0].base.sha' <<<"$prs")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.13.1"
+
+      - name: Install cheeseless (default branch)
+        run: uv sync --locked
+
+      - name: Fetch the PR head as objects only
+        run: |
+          set -euo pipefail
+          # No checkout of PR content: only the objects, addressed by SHA.
+          git fetch --no-tags origin "+refs/pull/${{ steps.pr.outputs.number }}/head:refs/cheeseless/pr-head"
+          [ "$(git rev-parse refs/cheeseless/pr-head)" = "$HEAD_SHA" ] || { echo "head moved"; exit 1; }
+
+      - name: Judge
+        id: judge
+        env:
+          CHEESELESS_CI_BUNDLE: ${{ secrets.CHEESELESS_CI_BUNDLE }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+        run: |
+          set +e
+          uv run cheeseless ci-judge --base "$(git rev-parse "origin/${DEFAULT_BRANCH}")" \
+            --head "$HEAD_SHA" --json > verdict.json
+          code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Post the check run
+        run: |
+          set -euo pipefail
+          # Re-check that the PR head is unchanged before posting.
+          current=$(gh api "repos/${REPO}/pulls/${{ steps.pr.outputs.number }}" --jq .head.sha)
+          [ "$current" = "$HEAD_SHA" ] || { echo "PR head changed; not posting"; exit 1; }
+          # Fail closed: success only on exit 0 AND a verdict whose status is "pass".
+          # Anything else (FAIL, BLOCKED, usage/infra error, freeze drift) is a failure.
+          status=$(jq -r '.status // empty' verdict.json 2>/dev/null || true)
+          if [ "${{ steps.judge.outputs.code }}" = "0" ] && [ "$status" = "pass" ]; then
+            conclusion=success
+          else
+            conclusion=failure
+          fi
+          summary=$(jq -c '{status, criteria}' verdict.json 2>/dev/null || echo '{}')
+          gh api "repos/${REPO}/check-runs" -X POST \
+            -f name="cheeseless judge" -f head_sha="$HEAD_SHA" \
+            -f status=completed -f conclusion="$conclusion" \
+            -f "output[title]=cheeseless judge: ${conclusion}" \
+            -f "output[summary]=${summary}"
