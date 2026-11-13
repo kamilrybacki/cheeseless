@@ -100,9 +100,7 @@ class EgressAddon:
         if decision is not None:
             self._apply_decision(flow, host, decision)
             return
-        hit = self._scan_parts(
-            (request.pretty_url, *headers.keys(), *headers.values())
-        )
+        hit = self._scan_parts((request.pretty_url, *headers.keys(), *headers.values()))
         if hit is not None:
             self._block(flow, host, hit)
             return

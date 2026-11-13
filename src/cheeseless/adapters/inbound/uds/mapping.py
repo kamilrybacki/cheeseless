@@ -117,8 +117,7 @@ def gate_error_from_proto(msg: error_pb2.Error) -> GateError:
         raise MappingError("docs anchor does not match catalogue")
     reason = msg.reason
     if reason != entry.reason and not (
-        code is ErrorCode.CRITERION_FAILED
-        and reason.startswith(entry.reason + " Criterion: ")
+        code is ErrorCode.CRITERION_FAILED and reason.startswith(entry.reason + " Criterion: ")
     ):
         raise MappingError("reason does not match catalogue")
     if msg.pre_hidden_stderr_tail and code not in {

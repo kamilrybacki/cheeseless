@@ -131,9 +131,7 @@ def prepare(
                     timeout=timeout,
                 )
             suite = first.suite
-            problems = freeze_problems(
-                [c.id for c in contract.criteria], suite
-            )
+            problems = freeze_problems([c.id for c in contract.criteria], suite)
             if problems:
                 raise FreezeError(problems)
             if _observations(first.suite) != _observations(second.suite):
@@ -142,9 +140,7 @@ def prepare(
 
     if not tests:
         raise FreezeError(["the hidden suite collected no usable tests"])
-    task_id = freeze_digest(
-        baseline_commit, acceptance_tree, canonical_contract_bytes(contract)
-    )
+    task_id = freeze_digest(baseline_commit, acceptance_tree, canonical_contract_bytes(contract))
     fingerprints = build_fingerprints(
         task_id,
         _hidden_contents(repo, baseline_commit, hidden_blobs),
