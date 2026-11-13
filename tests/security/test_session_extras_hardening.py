@@ -213,18 +213,28 @@ def test_pre_existing_evidence_destination_is_refused(frozen, tmp_path, no_launc
     _reject(frozen, tmp_path, no_launch, evidence_dir=evidence)
 
 
-def test_evidence_destination_with_planted_truncated_link_is_refused(tmp_path: Path) -> None:
+def test_evidence_destination_with_planted_truncated_link_is_refused(tmp_path, monkeypatch):
+    from cheeseless import session_files
+
     home = tmp_path / "home"
     home.mkdir()
-    (home / "note.txt").write_text("content", encoding="utf-8")
+    (home / "note.txt").write_bytes(b"content")
     target = tmp_path / "target"
-    target.write_text("keep", encoding="utf-8")
+    original = CANARY.encode() + b"\x00keep exactly\n"
+    target.write_bytes(original)
     evidence = tmp_path / "evidence"
-    evidence.mkdir()
-    (evidence / "TRUNCATED").symlink_to(target)
-    with pytest.raises(SessionOptionError):
-        copy_evidence(home, evidence)
-    assert target.read_text(encoding="utf-8") == "keep"
+    create = session_files._create_evidence_dir
+
+    def plant(*args):
+        fd = create(*args)
+        (evidence / "TRUNCATED").symlink_to(target)
+        return fd
+
+    monkeypatch.setattr(session_files, "_create_evidence_dir", plant)
+    result = copy_evidence(home, evidence, limit=0)
+    assert result.truncated
+    assert target.read_bytes() == original
+    assert CANARY not in _tree_text(evidence)
 
 
 def test_new_evidence_marker_is_a_regular_file(tmp_path: Path) -> None:
@@ -336,3 +346,240 @@ def test_mounted_dir_with_unreadable_subdir_is_refused(frozen, tmp_path, no_laun
         _reject(frozen, tmp_path, no_launch, extra_read_only=[holder])
     finally:
         locked.chmod(0o700)
+
+
+@pytest.mark.parametrize("kind", ["socket", "fifo", "device"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_special_mount_is_refused(frozen, tmp_path, no_launch, kind, nested):
+    import socket
+    import tempfile
+
+    _hidden(frozen)
+    holder = tmp_path / "holder"
+    holder.mkdir()
+    source = holder / "special"
+    if kind == "socket":
+        with tempfile.TemporaryDirectory(dir="/tmp") as short:
+            with socket.socket(socket.AF_UNIX) as sock:
+                sock.bind(str(Path(short) / "s"))
+                os.rename(Path(short) / "s", source)
+    elif kind == "fifo":
+        os.mkfifo(source)
+    else:
+        source = Path("/dev/null")
+        if nested:
+            pytest.skip("device creation requires privileges")
+    with pytest.raises(SessionOptionError, match="special file"):
+        prepare_extras(
+            protected=(),
+            temp_bases=(),
+            reserved_env=(),
+            extra_read_only=[holder if nested else source],
+        )
+    _reject(frozen, tmp_path, no_launch, extra_read_only=[holder if nested else source])
+
+
+def test_seed_symlink_is_refused(frozen, tmp_path, no_launch):
+    source = tmp_path / "seed"
+    source.symlink_to(_hidden(frozen))
+    with pytest.raises(SessionOptionError, match="cannot open"):
+        prepare_extras(protected=(), temp_bases=(), reserved_env=(), home_seed={"cfg": source})
+    assert no_launch == []
+
+
+def test_fifo_seed_is_refused(frozen, tmp_path, no_launch):
+    _hidden(frozen)
+    source = tmp_path / "seed"
+    os.mkfifo(source)
+    _reject(frozen, tmp_path, no_launch, home_seed={"cfg": source})
+
+
+@pytest.mark.parametrize("failure", ["walk", "lstat", "cap", "deadline"])
+def test_protected_enumeration_fails_closed(frozen, tmp_path, no_launch, monkeypatch, failure):
+    _hidden(frozen)
+    holder = tmp_path / "holder"
+    holder.mkdir()
+    if failure == "walk":
+
+        def broken_walk(root, **kwargs):
+            if "onerror" in kwargs:
+                kwargs["onerror"](PermissionError("unreadable protected directory"))
+            return iter(())
+
+        monkeypatch.setattr(bootstrap.os, "walk", broken_walk)
+    elif failure == "lstat":
+        original = os.lstat
+
+        def broken_stat(path, *args, **kwargs):
+            if str(path).endswith("HEAD"):
+                raise PermissionError("unreadable protected entry")
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(bootstrap.os, "lstat", broken_stat)
+    elif failure == "cap":
+        monkeypatch.setattr(bootstrap, "PROTECTED_WALK_ENTRIES", 0, raising=False)
+    else:
+        monkeypatch.setattr(bootstrap, "PROTECTED_WALK_SECONDS", -1, raising=False)
+    _reject(frozen, tmp_path, no_launch, extra_read_only=[holder])
+
+
+def _fresh_env(root):
+    repo = GitRepository.discover(make_repo(root / "repo"))
+    store = FileStore(store_root(repo.common_dir(), root / "state"))
+    commit(prepare(repo, PytestRunner(), BwrapSandbox()), store)
+    return _Env(repo, root / "state")
+
+
+@pytest.mark.parametrize("attack", ["mount", "seed", "hardlink"])
+def test_external_objects_are_protected(tmp_path, no_launch, attack):
+    env = _fresh_env(tmp_path)
+    obj = _loose_object(env, "acceptance/hidden/test_score.py")
+    relative = obj.relative_to(env.repo.common_dir() / "objects")
+    cache = tmp_path / "cache"
+    (env.repo.common_dir() / "objects").rename(cache)
+    (env.repo.common_dir() / "objects").symlink_to(cache, target_is_directory=True)
+    assert CANARY.encode() in env.repo.show(
+        env.repo.head_commit(), "acceptance/hidden/test_score.py"
+    )
+    obj = cache / relative
+    assert CANARY.encode() in zlib.decompress(obj.read_bytes())
+    if attack == "seed":
+        _reject(env, tmp_path, no_launch, home_seed={"blob": obj})
+    else:
+        holder = cache
+        if attack == "hardlink":
+            holder = tmp_path / "holder"
+            holder.mkdir()
+            os.link(obj, holder / "blob")
+        _reject(env, tmp_path, no_launch, extra_read_only=[holder])
+
+
+def test_shared_clone_alternate_is_protected(tmp_path, no_launch):
+    source = _fresh_env(tmp_path / "source")
+    obj = _loose_object(source, "acceptance/hidden/test_score.py")
+    subprocess.run(  # noqa: S603
+        ["git", "clone", "--shared", str(source.repo.root), str(tmp_path / "clone")],  # noqa: S607
+        check=True,
+        capture_output=True,
+    )
+    repo = GitRepository.discover(tmp_path / "clone")
+    store = FileStore(store_root(repo.common_dir(), tmp_path / "state"))
+    commit(prepare(repo, PytestRunner(), BwrapSandbox()), store)
+    env = _Env(repo, tmp_path / "state")
+    assert CANARY.encode() in zlib.decompress(obj.read_bytes())
+    holder = tmp_path / "holder"
+    holder.mkdir()
+    os.link(obj, holder / "blob")
+    _reject(env, tmp_path, no_launch, extra_read_only=[holder])
+
+
+@pytest.mark.parametrize("kind", ["directory", "file"])
+def test_protected_internal_symlinks(tmp_path, no_launch, kind):
+    env = _fresh_env(tmp_path)
+    holder = tmp_path / "holder"
+    holder.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    target = external / "hidden"
+    target.write_text(CANARY)
+    link = env.repo.common_dir() / "linked"
+    link.symlink_to(external if kind == "directory" else target)
+    os.link(target, holder / "blob")
+    _reject(env, tmp_path, no_launch, extra_read_only=[holder])
+
+
+@pytest.mark.parametrize("consumer", ["mount", "evidence", "projection"])
+@pytest.mark.parametrize("limit", ["entries", "deadline"])
+def test_listing_is_bounded(tmp_path, monkeypatch, consumer, limit):
+    from cheeseless import session_files, session_options
+
+    root = tmp_path / "tree"
+    root.mkdir()
+    for n in range(20):
+        (root / str(n)).write_text("safe")
+    # The canary remains outside the scanned tree and all produced evidence.
+    (tmp_path / "hidden").write_text(CANARY)
+    module = session_options if consumer == "mount" else session_files
+    prefix = "MOUNT_WALK" if consumer == "mount" else "EVIDENCE"
+    monkeypatch.setattr(
+        module,
+        prefix + ("_ENTRIES" if limit == "entries" else "_SECONDS"),
+        3 if limit == "entries" else 1,
+        raising=False,
+    )
+    now = [0.0]
+    if limit == "deadline":
+        monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    original = os.scandir
+    consumed = []
+
+    class Scan:
+        def __init__(self, path):
+            self.scan = original(path)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.scan.close()
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            item = next(self.scan)
+            consumed.append(item.name)
+            if limit == "deadline":
+                now[0] = 2.0
+            assert len(consumed) <= (4 if limit == "entries" else 1)
+            return item
+
+    monkeypatch.setattr(os, "scandir", Scan)
+    dest = tmp_path / "evidence"
+    if consumer == "mount":
+        with pytest.raises(SessionOptionError, match="entries|time"):
+            prepare_extras(protected=(), temp_bases=(), reserved_env=(), extra_read_only=[root])
+    elif consumer == "evidence":
+        assert copy_evidence(root, dest).truncated
+    else:
+        dest.mkdir()
+        write_projection_list(root, dest)
+        assert (dest / "TRUNCATED").exists()
+    monkeypatch.setattr(os, "scandir", original)
+    assert consumed, "the directory must be enumerated with bounded scandir"
+    assert CANARY not in _tree_text(dest) if dest.exists() else True
+
+
+@pytest.mark.parametrize("layout", ["environment", "environment-alternate", "recursive", "depth"])
+def test_object_directory_discovery(tmp_path, monkeypatch, no_launch, layout):
+    env = _fresh_env(tmp_path)
+    obj = _loose_object(env, "acceptance/hidden/test_score.py")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    blob = cache / "blob"
+    blob.write_bytes(obj.read_bytes())
+    assert CANARY.encode() in zlib.decompress(blob.read_bytes())
+    if layout.startswith("environment"):
+        key = (
+            "GIT_OBJECT_DIRECTORY"
+            if layout == "environment"
+            else "GIT_ALTERNATE_OBJECT_DIRECTORIES"
+        )
+        monkeypatch.setenv(key, str(cache))
+    else:
+        parent = env.repo.common_dir() / "objects"
+        for index in range(7 if layout == "depth" else 2):
+            child = (
+                cache
+                if index == (6 if layout == "depth" else 1)
+                else tmp_path / f"alternate{index}"
+            )
+            child.mkdir(exist_ok=True)
+            (parent / "info").mkdir(exist_ok=True)
+            (parent / "info" / "alternates").write_text(
+                "\n# ignored comment\n" + os.path.relpath(child, parent) + "\n"
+            )
+            parent = child
+    if layout != "depth":
+        assert cache.resolve() in env.repo.object_dirs()
+    _reject(env, tmp_path, no_launch, extra_read_only=[cache])
