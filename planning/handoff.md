@@ -59,10 +59,15 @@ source of truth; changes land through `promote`, not hooks.
   head tree (never a checkout), runs the full suite in the sandbox and prints only the
   aggregate and visible-criterion statuses. Template in `docs/ci/`. See ledger P10-9…P10-14.
 
+- Phase 11 E2E (2026-11-13): Claude Code and Codex each fixed the toy inside
+  `cheeseless session` via MCP `gate_run`, the canary stayed out of the projection, and
+  `promote` + `ci-judge` passed. Signalled sessions now tear down (P11-7). Timings and Codex
+  operator requirements are in ledger P11-9 and P11-10.
+
 ## Remaining
 
 - Phase 10 follow-ups: a trusted cross-run CI budget counter (P10-6, required before release); verify `docs/ci/judge.yml` and the `ci.yml` bwrap step on real GitHub (P10-7, P10-8).
-- Phase 11 toy-repo E2E across real Codex/Claude sessions and overhead measurements.
+- Phase 11 follow-ups (ledger P11-11): bake socket/task into the MCP shim; per-request allow-log; an opt-in `e2e_agent` test that drives a real agent.
 - Phase 12 sanitizer and publication.
 - Residual phase 8 limits: sentinel markers are harvested, not mandated per artifact
   class; 64-bit rolling-hash collisions are theoretical; bytes clean before a mid-stream
