@@ -6,9 +6,8 @@ reviewers: [gpt-6.1-terra]
 # 0007. Route all gated egress through a host-side DLP proxy
 
 ## Context
-Tests are plaintext on GitHub (ledger Q42), so any network path to the project's repo,
-its mirrors or a model's server-side web tools hands the gated agent the hidden cases.
-A domain allowlist alone cannot stop a model API from fetching them for the agent (Q48).
+Tests are plaintext on GitHub (ledger Q42): any network path to the repo, its mirrors or
+a model's server-side web tools hands the agent hidden cases; an allowlist cannot stop it (Q48).
 
 ## Options
 - **Allowlist only** (sandbox network filter): cheap, blind to content and server tools.
@@ -25,11 +24,12 @@ repo-content and server-tool paths (Q48, Q49, ledger R1–R3).
 - Rules: domain allowlist (model APIs, named registries); model-API requests carrying
   server-side tools rejected (`EGRESS_SERVER_TOOL_DENIED`); registries GET only, the
   project's own package names and repo identity blocked.
-- Every response, SSE and archives unpacked recursively up to a cap included, is scanned
-  for sentinels, encoded forms and winnowing fingerprints of hidden content minus public
-  k-grams (Q48). Over-cap, encrypted or uninspectable content is blocked (D9).
-- Streaming: `Accept-Encoding: identity` is forced; encoded streams are blocked. Each
-  chunk is scanned before forwarding while a tail ≥ the longest pattern is held back.
+- Every response and SSE stream is scanned for sentinels, encoded forms and winnowing
+  fingerprints of hidden content minus public k-grams (Q48). Archives (by magic bytes) are
+  buffered whole and forwarded only after recursive inspection is clean; over-cap,
+  encrypted or uninspectable content is blocked (D9, D16).
+- Streaming: `Accept-Encoding: identity` is forced; encoded streams are blocked. A chunk
+  is forwarded only once scanned, holding back max(longest pattern, w + k − 1) (D16).
 - On a hit, forwarding stops and the proxy tells the session supervisor to tear down
   the sandbox (`flow.kill()` cannot cut in-transit flows); session ends `BLOCKED`,
   holdout rotates, operator gets host, rule and fingerprint id, never content (Q49, R2).

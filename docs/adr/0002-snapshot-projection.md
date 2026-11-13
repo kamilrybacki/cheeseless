@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-11-13
 reviewers: [gpt-6.1-terra]
 ---
@@ -19,8 +19,10 @@ Tests also have to be readable by humans and live in the same repo (Q42).
 Snapshot projection. One repo with plaintext tests in git and on GitHub; no `hidden/`
 subfolder: everything under `acceptance/` except `contract/` is hidden from the gated
 agent (Q42). The local working tree does not materialise those paths: sparse-checkout removes them
-and keeps them absent, `cheeseless doctor` checks for strays (Q47, ledger D5); the
-verifier reads blobs from git into tmpfs.
+and keeps them absent (Q47, ledger D5); the verifier reads blobs from git into tmpfs.
+Session start runs a stray check, fail closed, before projection and agent launch: a
+materialised hidden path, or any file matching a hidden blob hash or sentinel, means no
+session (`BLOCKED`); `cheeseless doctor` runs the same check on demand (D11).
 Humans use `cheeseless show`/`edit` or GitHub (Q47).
 
 ## Consequences

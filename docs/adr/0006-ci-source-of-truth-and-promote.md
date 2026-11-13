@@ -15,13 +15,17 @@ promote and CI, so both must be immune to changes of tests, runner config and CI
 
 ## Decision
 Enforce at promote and CI.
-- CI takes `acceptance/` and the runner closure from the base branch, fails on
-  protected-path changes and runs the full suite including holdout (Q21, Q36). PR code runs only in a job with
-  no secrets and a read-only token; seed and key live in a separate job that never
-  checks out or runs PR code (ledger D8, Q55).
+- The CI verdict comes from a judge workflow defined on the base branch (`workflow_run`),
+  never from a workflow the PR can edit (ledger D15, revises D8). It fetches the PR head
+  named in the event as data, takes `acceptance/` and the runner closure from the base
+  branch, fails on protected-path changes and runs the full suite including holdout
+  (Q21, Q36). Build and tests run only in the candidate sandbox (ADR 0003); seed and key
+  stay in the runner process (Q55). Logs never show per-criterion holdout results. PR-defined
+  jobs get no secrets and a read-only token; no `pull_request_target` with a PR checkout.
 - Promote applies the exact evaluated tree (Q43) as a patch onto `gate/<task>`, then a
   PR (Q17). It uses a source-path allowlist (default `src/**`, `tests/**`, `docs/**`, `README*`; Q56); build, dependency, CI and agent-instruction
   files are "sensitive" and need human approval; symlinks and submodules are rejected (Q37).
+  The Q17 hard denylist sits under the allowlist and wins over repo config and approval (Q56).
 - Hooks and cooperative instructions are UX only, not a security boundary (Q12, Q30/31, Q41).
 
 ## Consequences

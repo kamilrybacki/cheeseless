@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-11-13
 reviewers: [gpt-6.1-terra]
 ---
@@ -25,9 +25,10 @@ One typed error (Q50). Every agent-facing response (MCP structuredContent, CLI
 - No hidden content in `reason` or `details`; every response is DLP-scanned (Q50).
 Stages (Q51): before the first hidden input (build, import, missing CLI executable,
 startup crash, public smoke tests from `contract/`) the response carries full detail
-(code plus a DLP-scanned stderr tail, about 4 KB). After hidden input only
-`CRITERION_FAILED` with the public criterion description. Pre-hidden errors do not
-consume the run budget (Q52); `INFRA_ERROR` after hidden input does (ledger D2).
+(code plus a DLP-scanned stderr tail, about 4 KB). After hidden input the agent sees
+only per-criterion `CRITERION_FAILED` with the public criterion description; an infra
+failure there is stored as `INFRA_ERROR` for the operator, charged (ledger D2) and shown
+as FAIL of the unfinished criteria (D17). Pre-hidden errors cost no run budget (Q52).
 Pre-hidden attempts have their own rate and cgroup limits; over it, `RATE_LIMITED` (D10).
 
 ## Consequences
