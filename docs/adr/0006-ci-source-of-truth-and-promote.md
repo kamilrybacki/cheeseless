@@ -18,9 +18,9 @@ Enforce at promote and CI.
 - CI takes `acceptance/` and the runner closure from the base branch, fails on
   protected-path changes and runs the full suite including holdout (Q21, Q36). PR code runs only in a job with
   no secrets and a read-only token; seed and key live in a separate job that never
-  checks out or runs PR code (ledger D8; layout with Q55).
+  checks out or runs PR code (ledger D8, Q55).
 - Promote applies the exact evaluated tree (Q43) as a patch onto `gate/<task>`, then a
-  PR (Q17). It uses a source-path allowlist (contents: open, ledger Q56); build, dependency, CI and agent-instruction
+  PR (Q17). It uses a source-path allowlist (default `src/**`, `tests/**`, `docs/**`, `README*`; Q56); build, dependency, CI and agent-instruction
   files are "sensitive" and need human approval; symlinks and submodules are rejected (Q37).
 - Hooks and cooperative instructions are UX only, not a security boundary (Q12, Q30/31, Q41).
 

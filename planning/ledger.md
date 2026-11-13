@@ -140,7 +140,7 @@ docs/source, passt/slirp4netns man pages).
 | D2 | `INFRA_ERROR` after the first hidden input consumes budget; otherwise a candidate that crashes the verifier after reading inputs gets free oracle runs. Q52's exemption covers pre-hidden stages only. Derived from Q38, Q52. | Q52 |
 | D3 | Public tests make training-data memorisation a stronger residual risk than in the draft; holdout hides cases from the gated agent only, not from the public (consequence of Q42). | — |
 
-### Proposed defaults pending operator confirmation
+### Defaults accepted by the operator (2026-11-13)
 
 | # | Proposed default | Revises |
 |---|------------------|---------|
