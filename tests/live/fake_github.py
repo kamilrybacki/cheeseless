@@ -469,6 +469,8 @@ class FakeGitHub:
     def _open_pull(
         self, repo: RepoState, label: str, data: dict[str, object], query: str
     ) -> Response:
+        if label == "pusher":  # live: the pusher PAT has no pull request scope (found live)
+            return Response(403, {"message": "Resource not accessible by personal access token"})
         number = len(repo.pulls) + 1
         repo.pulls[number] = {"head": str(data.get("head")), "state": "open"}
         return Response(201, {"number": number})
@@ -476,6 +478,8 @@ class FakeGitHub:
     def _get_pull(
         self, repo: RepoState, label: str, data: object, query: str, number: str
     ) -> Response:
+        if label == "pusher":  # live: the pusher PAT has no pull request scope (found live)
+            return Response(403, {"message": "Resource not accessible by personal access token"})
         pull = repo.pulls.get(int(number))
         if pull is None:
             return Response(404, {"message": "Not Found"})
@@ -491,6 +495,8 @@ class FakeGitHub:
     def _close_pull(
         self, repo: RepoState, label: str, data: dict[str, object], query: str, number: str
     ) -> Response:
+        if label == "pusher":  # live: the pusher PAT has no pull request scope (found live)
+            return Response(403, {"message": "Resource not accessible by personal access token"})
         repo.pulls[int(number)]["state"] = "closed"
         return Response(200, {})
 

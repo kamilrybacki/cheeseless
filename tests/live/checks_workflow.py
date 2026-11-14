@@ -112,7 +112,7 @@ def _pin(ctx: Ctx, repo: Repo, default: str) -> list[str]:
 
 
 def _state(repo: Repo, token_branch_pr: int, ctx: Ctx) -> str:
-    resp = repo.call("GET", f"pulls/{token_branch_pr}", ctx.config.pusher_token)
+    resp = repo.call("GET", f"pulls/{token_branch_pr}", ctx.config.admin_token)
     return str(resp.get("mergeable_state"))
 
 
@@ -129,10 +129,12 @@ def check_11_required_check_source(ctx: Ctx) -> CheckResult:
     branch, sha = _probe_branch(ctx, repo, "11")
     number = 0
     try:
+        # The pull request is scaffolding for the mergeable_state read; the pusher PAT has no
+        # pull request scope (found live), so the admin token opens and closes it.
         pr = repo.call(
-            "POST", "pulls", pusher, {"title": "live probe", "head": branch, "base": default}
+            "POST", "pulls", observer, {"title": "live probe", "head": branch, "base": default}
         )
-        made = need(pr, {201}, "pusher cannot open a pull request").get("number")
+        made = need(pr, {201}, "cannot open the probe pull request").get("number")
         number = made if isinstance(made, int) else 0
         run = completed_run(ctx, repo, observer, sha, "live-probe.yml", "live-probe")
         if run is None:
@@ -140,7 +142,7 @@ def check_11_required_check_source(ctx: Ctx) -> CheckResult:
         jobs = job_conclusions(repo, observer, run)
         if jobs.get("fake-check") != "success":
             raise Precondition("the forged-check job did not succeed")
-        checks = need(repo.call("GET", f"commits/{sha}/check-runs", pusher), {200}, "check runs")
+        checks = need(repo.call("GET", f"commits/{sha}/check-runs", observer), {200}, "check runs")
         items = checks.get("check_runs")
         if not isinstance(items, list) or not any(
             isinstance(c, dict)
@@ -170,7 +172,7 @@ def check_11_required_check_source(ctx: Ctx) -> CheckResult:
         )
     finally:
         if number:
-            repo.call("PATCH", f"pulls/{number}", pusher, {"state": "closed"})
+            repo.call("PATCH", f"pulls/{number}", observer, {"state": "closed"})
         drop_branch(repo, pusher, branch)
     if satisfied:
         return passed("11", "only the judge App's check run satisfies the required check", rows)
