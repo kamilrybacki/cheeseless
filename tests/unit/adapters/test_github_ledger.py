@@ -330,3 +330,42 @@ def test_default_send_caps_the_response(server: str) -> None:
 def test_default_send_maps_connection_failures() -> None:
     with pytest.raises(TransportError):
         default_send(urllib.request.Request("http://127.0.0.1:1/"), 2.0)
+
+
+# -- seeding: write_root and create_ref -------------------------------------------
+
+
+def test_write_root_creates_a_parentless_commit() -> None:
+    send = FakeSend(
+        {
+            ("POST", "git/blobs"): (201, {"sha": BLOB}),
+            ("POST", "git/trees"): (201, {"sha": TREE}),
+            ("POST", "git/commits"): (201, {"sha": C1}),
+        }
+    )
+    sha = _transport(send).write_root(message=b"seed", files={RECORD_FILE: b"seed"})
+    assert sha == C1
+    assert send.body(2) == {"message": "seed", "tree": TREE, "parents": []}
+
+
+@pytest.mark.parametrize(
+    ("status", "result"), [(201, UpdateResult.UPDATED), (422, UpdateResult.REJECTED)]
+)
+def test_create_ref_posts_a_new_branch(status: int, result: UpdateResult) -> None:
+    send = FakeSend({("POST", "git/refs"): (status, {})})
+    assert _transport(send).create_ref(BRANCH, C1) is result
+    assert send.body(0) == {"ref": f"refs/heads/{BRANCH}", "sha": C1}
+
+
+@pytest.mark.parametrize("status", [403, 404, 409, 500])
+def test_create_ref_other_statuses_are_transport_errors(status: int) -> None:
+    send = FakeSend({("POST", "git/refs"): (status, {})})
+    with pytest.raises(TransportError):
+        _transport(send).create_ref(BRANCH, C1)
+
+
+def test_create_ref_refuses_a_bad_sha_before_any_request() -> None:
+    send = FakeSend({})
+    with pytest.raises(LedgerMalformed):
+        _transport(send).create_ref(BRANCH, "nope")
+    assert send.requests == []

@@ -146,6 +146,21 @@ def build_parser() -> argparse.ArgumentParser:
     cij.add_argument("--timeout", type=float, default=300.0)
     cij.add_argument("--json", action="store_true")
 
+    init = sub.add_parser(
+        "ci-budget-init",
+        help="Seed the CI budget ledger branch once; prints the root for ci-export.",
+    )
+    init.add_argument(
+        "--budget-repo",
+        required=True,
+        help="OWNER/NAME of the private CI budget ledger repository.",
+    )
+    init.add_argument(
+        "--repo-id",
+        required=True,
+        help="Numeric GitHub repository id of the judged repo (GITHUB_REPOSITORY_ID).",
+    )
+
     _add_session_parser(sub)
     return parser
 
