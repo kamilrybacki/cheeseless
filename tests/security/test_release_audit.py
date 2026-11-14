@@ -1038,6 +1038,14 @@ def test_actual_build_output_is_audited_and_packaging_is_complete(
 ) -> None:
     if shutil.which("uv") is None:
         pytest.skip("uv is required to build release archives")
+    shallow = subprocess.run(  # noqa: S603 - fixed git argv
+        ["git", "-C", str(ROOT), "rev-parse", "--is-shallow-repository"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if shallow.stdout.strip() == "true":
+        pytest.skip("the release audit fails closed on shallow clones; fetch full history")
     module = _load()
     report = tmp_path / "report"
 
