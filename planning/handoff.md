@@ -1,8 +1,11 @@
 # Handoff — start here
 
-State on 2026-11-14: host-side core, phase 6 isolation closure and the phase 8 egress DLP
-proxy are implemented. The proxy is exercised end to end with local TLS fixtures, real
-mitmproxy, the host UDS bridge and a real bwrap agent profile; CI/E2E/release are pending.
+State on 2026-11-14: phases 0–11 are implemented and merged (PR #1, PR #2). Branch
+`feat/release-blockers` closes release blockers: judge secret isolation (P10-22), the CI
+budget counter design (P10-23…P10-26) and the per-class sentinel minimum (P8-12, P8-13).
+ADRs 0001/0003/0005/0006/0007 were reworded to close H1–H4 and M2 and are `accepted` after
+cross-vendor review (ledger "ADR re-review, round 3").
+Release (phase 12) is pending.
 This file is the entry point for a fresh session on this repository.
 
 ## What cheeseless is
@@ -66,11 +69,19 @@ source of truth; changes land through `promote`, not hooks.
 
 ## Remaining
 
-- Phase 10 follow-ups: a trusted cross-run CI budget counter (P10-6, required before release); verify `docs/ci/judge.yml` and the `ci.yml` bwrap step on real GitHub (P10-7, P10-8).
+- Phase 10 follow-ups: the cross-run CI budget counter is implemented on
+  `feat/release-blockers` (ledger P10-27, P10-28; retires P10-13 and P10-19). **P10-6 stays
+  open** until the operator release gate runs on real GitHub: P1 acceptance plus the eleven
+  live checks in section 6 of [`research/ci-budget-counter.md`](research/ci-budget-counter.md)
+  (P10-7). There is no `cheeseless ci-budget-init` yet; the operator seeds the ledger root
+  commit by hand (`docs/ci/README.md`). The `ci.yml` bwrap step is verified (P10-8).
+- GitHub `refs/pull/1` and `refs/pull/2` still hold commits with the old author email;
+  removing them needs GitHub Support or a fresh repository (operator decision).
 - Phase 11 follow-ups (ledger P11-11): bake socket/task into the MCP shim; per-request allow-log; an opt-in `e2e_agent` test that drives a real agent.
 - Phase 12 sanitizer and publication.
-- Residual phase 8 limits: sentinel markers are harvested, not mandated per artifact
-  class; 64-bit rolling-hash collisions are theoretical; bytes clean before a mid-stream
+- Residual phase 8 limits (P8-12): freeze requires two private sentinel markers per
+  artifact class, but markers split across files or hidden behind other reversible
+  encodings are not detected; 64-bit rolling-hash collisions are theoretical; bytes clean before a mid-stream
   hit may reach the client; below-k paraphrases/transforms pass; archive caps block
   rather than partially inspect; HTTP upgrades/QUIC are blocked, not inspected; the
   operator alert sink is stderr plus the trusted-store event log.
@@ -88,7 +99,7 @@ ruff check . / mypy / lint-imports (4 kept) / gen_proto --check / gen_errors_doc
 ## Verification on 2026-11-14
 
 ```
-uv run --frozen pytest                 # 463 passed, 83.76% coverage (shared tree)
+uv run pytest --cov                    # 1037 passed, 1 skipped, 87.55% coverage (feat/release-blockers)
 uv run --frozen ruff check .
 uv run --frozen mypy                   # no issues
 uv run --frozen lint-imports           # 4 contracts kept

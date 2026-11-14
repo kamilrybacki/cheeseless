@@ -100,3 +100,56 @@ def test_prepare_needs_two_identical_runs_and_builds_fingerprints(toy_repo, tmp_
     flaky = _FakeRunner([_suite(TestOutcome.FAILED), _suite(TestOutcome.PASSED)])
     with pytest.raises(FreezeError, match="flaky"):
         prepare(repo, flaky, _FakeSandbox(tmp_path))
+
+
+class _Boom:
+    def __getattr__(self, name):
+        raise AssertionError(f"freeze should refuse before using {name}")
+
+
+def test_prepare_refuses_a_suite_with_too_few_sentinels(tmp_path):
+    from tests.toy import TOY_FILES, make_repo
+
+    files = dict(TOY_FILES)
+    files["acceptance/hidden/test_normalize.py"] = "def test_x(candidate):\n    pass\n"
+    files["acceptance/hidden/test_score.py"] = "def test_y(candidate):\n    pass\n"
+    repo = GitRepository.discover(make_repo(tmp_path / "toy", files))
+    from cheeseless.app.freeze import FreezeError
+
+    with pytest.raises(FreezeError, match="sentinel"):
+        prepare(repo, _Boom(), _Boom())
+
+
+MARKER = "CHEESELESS-SENTINEL-diag01abc"
+
+
+def test_freeze_error_redacts_markers_in_every_problem():
+    from cheeseless.app.freeze import FreezeError
+    from cheeseless.domain.dlp import digest
+
+    error = FreezeError([f"t::x[{MARKER}] is skipped", f"collection error: {MARKER}"])
+    placeholder = f"<sentinel digest {digest(MARKER.encode())}>"
+    assert all(MARKER not in problem for problem in error.problems)
+    assert all(placeholder in problem for problem in error.problems)
+    assert MARKER not in str(error)
+    assert MARKER not in repr(error.args)
+
+
+class _FailingBuildSandbox(_FakeSandbox):
+    def build(self, *args, **kwargs):
+        from cheeseless.ports.sandbox import StepOutcome
+
+        return StepOutcome(False, 1, f"Traceback: assert x == {MARKER!r}")
+
+
+def test_prepare_redacts_markers_in_build_stderr(toy_repo, tmp_path):
+    from cheeseless.app.freeze import FreezeError
+    from cheeseless.domain.dlp import digest
+
+    repo = GitRepository.discover(toy_repo)
+    with pytest.raises(FreezeError) as caught:
+        prepare(repo, _FakeRunner([]), _FailingBuildSandbox(tmp_path / "sb"))
+    message = str(caught.value)
+    assert "build failed" in message
+    assert MARKER not in message
+    assert f"<sentinel digest {digest(MARKER.encode())}>" in message

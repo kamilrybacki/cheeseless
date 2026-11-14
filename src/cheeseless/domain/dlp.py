@@ -38,8 +38,12 @@ ARCHIVE_MEMBER_LIMIT = 8 * 1024 * 1024
 ARCHIVE_FILE_LIMIT = 256
 ARCHIVE_DEPTH_LIMIT = 4
 DIGEST_HEX = 32
+MIN_SENTINELS_PER_CLASS = 2
 
 _SENTINEL = re.compile(rb"CHEESELESS-(?:SENTINEL|CANARY)-[A-Za-z0-9_-]{6,64}")
+_SENTINEL_TEXT = re.compile(_SENTINEL.pattern.decode(), re.IGNORECASE)
+_WHITESPACE = re.compile(rb"\s+")
+_BASE64_ALIGNMENTS = (0, 1, 2)
 
 ARTIFACT_TESTS = "tests"
 ARTIFACT_FIXTURES = "fixtures"
@@ -53,6 +57,13 @@ ARTIFACT_CLASSES = (
     ARTIFACT_SEED,
     ARTIFACT_NOTES,
 )
+
+_PATH_WORDS = re.compile(r"[/._-]+")
+_EXPECTED_WORDS = frozenset({"expected", "golden", "snapshot", "snapshots"})
+_SEED_WORDS = frozenset({"seed", "seeds"})
+_FIXTURE_WORDS = frozenset({"fixture", "fixtures", "data"})
+_NOTE_WORDS = frozenset({"note", "notes"})
+_NOTE_SUFFIXES = (".md", ".txt")
 
 
 def digest(data: bytes) -> str:
@@ -175,16 +186,124 @@ def kgram_set(data: bytes, k: int = KGRAM_SIZE) -> frozenset[int]:
 
 
 def artifact_class(path: str) -> str:
+    """Classify a hidden artifact by whole words in its lowercased path.
+
+    Paths are split on ``/``, ``.``, ``_`` and ``-`` so only complete words count:
+    ``seedless_test.py`` is a test, not a seed. When several words match, the first
+    matching class in this documented precedence wins:
+
+    1. expected: ``expected``, ``golden``, ``snapshot`` or ``snapshots``;
+    2. seed: ``seed`` or ``seeds``;
+    3. fixtures: ``fixture``, ``fixtures`` or ``data``;
+    4. notes: the word ``note``/``notes``, or a ``.md``/``.txt`` extension;
+    5. tests: everything else.
+
+    The precedence means ``data/expected.json`` is expected and ``data/seed.json`` is
+    seed, while ``fixtures/notes.md`` is fixtures because fixtures outrank notes.
+    """
     lowered = path.lower()
-    if "fixture" in lowered or "data/" in lowered:
-        return ARTIFACT_FIXTURES
-    if "expected" in lowered or "golden" in lowered or "snapshot" in lowered:
+    words = set(_PATH_WORDS.split(lowered))
+    if words & _EXPECTED_WORDS:
         return ARTIFACT_EXPECTED
-    if "seed" in lowered:
+    if words & _SEED_WORDS:
         return ARTIFACT_SEED
-    if "note" in lowered or lowered.endswith((".md", ".txt")):
+    if words & _FIXTURE_WORDS:
+        return ARTIFACT_FIXTURES
+    if words & _NOTE_WORDS or lowered.endswith(_NOTE_SUFFIXES):
         return ARTIFACT_NOTES
     return ARTIFACT_TESTS
+
+
+def _sentinel_tokens(data: bytes) -> set[bytes]:
+    return {match.group(0) for match in _SENTINEL.finditer(data)}
+
+
+def _base64_cores(token: bytes) -> tuple[bytes, ...]:
+    """The base64 characters of ``token`` that do not depend on its neighbours.
+
+    For each byte alignment ``p`` the token is encoded after ``p`` filler bytes; only
+    the characters whose six bits lie wholly inside the token are kept, so the core
+    occurs in the base64 of any larger blob that holds the token at that alignment.
+    """
+    cores = []
+    for prefix in _BASE64_ALIGNMENTS:
+        encoded = base64.b64encode(b"\0" * prefix + token)
+        start = -(-8 * prefix // 6)
+        end = 8 * (prefix + len(token)) // 6
+        cores.append(encoded[start:end])
+    return tuple(cores)
+
+
+def _is_exposed(token: bytes, public: Sequence[bytes], lowered: Sequence[bytes]) -> bool:
+    folded = (token.lower(), token[::-1].lower(), token.hex().encode())
+    if any(form in surface for surface in lowered for form in folded):
+        return True
+    cores = _base64_cores(token)
+    return any(core in surface for surface in public for core in cores)
+
+
+def redact_sentinels(text: str) -> str:
+    """Replace every sentinel marker in ``text``, in any letter case, with a digest."""
+    return _SENTINEL_TEXT.sub(
+        lambda match: f"<sentinel digest {digest(match.group(0).encode())}>", text
+    )
+
+
+def sentinel_problems(
+    hidden: Sequence[tuple[str, bytes]],
+    public: Sequence[bytes],
+    minimum: int = MIN_SENTINELS_PER_CLASS,
+) -> list[str]:
+    """Refuse hidden suites that plant too few (or pre-exposed) sentinels.
+
+    Each artifact class with hidden artifacts needs ``minimum`` distinct sentinel
+    tokens that the projection does not already contain. ``public`` holds every
+    agent-visible byte string, including projection file paths. A hidden token counts
+    as exposed when any public surface contains it raw, reversed or as hex (all three
+    compared case-insensitively), or as base64 at any of the three byte alignments
+    (case-sensitive), also after removing whitespace so line-wrapped base64 counts.
+    Boundary characters are trimmed from the base64 core, so a near-miss marker that
+    differs only in those bits is refused too (fail closed). Matching is by substring,
+    so a public ``...-alpha01X`` still reveals a hidden ``...-alpha01`` token. Only
+    digests are reported.
+
+    Protection boundary (accepted residual, ADR 0007): other reversible encodings
+    (rot13, base32, url-encoding, compression, ...) and a marker split across several
+    public files or paths are not detected.
+    """
+    tokens_by_class: dict[str, set[bytes]] = {cls: set() for cls in ARTIFACT_CLASSES}
+    present: set[str] = set()
+    for path, data in hidden:
+        cls = artifact_class(path)
+        present.add(cls)
+        tokens_by_class[cls] |= _sentinel_tokens(data)
+    all_tokens = set().union(*tokens_by_class.values())
+    lowered = [surface.lower() for surface in public]
+    # Line-wrapped base64 (MIME, PEM, ``base64`` CLI) splits a core across lines.
+    compact = [_WHITESPACE.sub(b"", surface) for surface in public]
+    exposed: set[bytes] = {
+        token
+        for token in all_tokens
+        if _is_exposed(token, [*public, *compact], [*lowered, *(c.lower() for c in compact)])
+    }
+
+    problems: list[str] = []
+    reported_exposed: set[bytes] = set()
+    for cls in ARTIFACT_CLASSES:
+        if cls not in present:
+            continue
+        tokens = tokens_by_class[cls]
+        for token in sorted(tokens & exposed):
+            if token not in reported_exposed:
+                reported_exposed.add(token)
+                problems.append(f"a sentinel is visible in the projection (digest {digest(token)})")
+        private = tokens - exposed
+        if len(private) < minimum:
+            problems.append(
+                f"artifact class {cls!r} has {len(private)} distinct sentinel token(s); "
+                f"freeze requires at least {minimum}"
+            )
+    return problems
 
 
 def sentinel_forms(data: bytes) -> tuple[tuple[str, str, str], ...]:
@@ -663,6 +782,7 @@ __all__ = [
     "Fingerprints",
     "KGRAM_SIZE",
     "LiteralForm",
+    "MIN_SENTINELS_PER_CLASS",
     "ScanHit",
     "StreamScanner",
     "artifact_class",
@@ -672,5 +792,7 @@ __all__ = [
     "kgram_set",
     "literal_forms",
     "looks_archive",
+    "redact_sentinels",
     "rolling_hashes",
+    "sentinel_problems",
 ]

@@ -2,7 +2,17 @@
 # protected repository. It is a `workflow_run` workflow, so GitHub always runs the copy on
 # the DEFAULT branch, never the version from the pull request.
 #
-# Setup: see docs/ci/README.md. Secret: CHEESELESS_CI_BUNDLE (output of `cheeseless ci-export`).
+# Setup: see docs/ci/README.md. Everything secret lives in the `cheeseless-judge` environment,
+# limited to the default branch: secrets CHEESELESS_CI_BUNDLE (output of `cheeseless ci-export`)
+# and CHEESELESS_JUDGE_APP_KEY, variables CHEESELESS_JUDGE_APP_CLIENT_ID and
+# CHEESELESS_BUDGET_REPO (name of the private ledger repository, same owner). Never store them
+# as repository secrets: any branch workflow a pusher writes can read those.
+#
+# Two short-lived judge App tokens, never both alive next to the candidate:
+#   - budget token: contents write on the ledger repository only, minted right before the
+#     judge, given only to the judge step and revoked right after it;
+#   - checks token: checks write on this repository, minted only after the judge.
+# The token action also revokes each token when the job ends.
 name: cheeseless-judge
 
 on:
@@ -20,10 +30,14 @@ jobs:
   judge:
     if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
+    # Environment secrets reach only jobs that name the environment, and only on the
+    # branches it allows (configure: default branch only, no tags).
+    environment: cheeseless-judge
+    # GITHUB_TOKEN is read-only. The verdict is posted by the dedicated judge App, so a
+    # pusher's own workflow (shared github-actions app) cannot forge the required check.
     permissions:
       contents: read
       pull-requests: read
-      checks: write
     env:
       GH_TOKEN: ${{ github.token }}
       HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -69,10 +83,26 @@ jobs:
           git fetch --no-tags origin "+refs/pull/${{ steps.pr.outputs.number }}/head:refs/cheeseless/pr-head"
           [ "$(git rev-parse refs/cheeseless/pr-head)" = "$HEAD_SHA" ] || { echo "head moved"; exit 1; }
 
+      # The cross-run CI budget lives on a ledger branch in the private ledger repository.
+      # This token can append to it and nothing else: contents write, ledger repository only.
+      - name: Mint the budget ledger token
+        id: budget
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CHEESELESS_JUDGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CHEESELESS_JUDGE_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.CHEESELESS_BUDGET_REPO }}
+          permission-contents: write
+
+      # ci-judge removes CHEESELESS_BUDGET_TOKEN from its environment before any sandbox
+      # exists, and the sandbox clears the environment. GITHUB_REPOSITORY_ID, GITHUB_RUN_ID
+      # and GITHUB_RUN_ATTEMPT come from the runner and key the budget charge.
       - name: Judge
         id: judge
         env:
           CHEESELESS_CI_BUNDLE: ${{ secrets.CHEESELESS_CI_BUNDLE }}
+          CHEESELESS_BUDGET_TOKEN: ${{ steps.budget.outputs.token }}
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
         run: |
           set +e
@@ -82,11 +112,36 @@ jobs:
           echo "code=$code" >> "$GITHUB_OUTPUT"
           exit 0
 
+      # Revoke the budget token as soon as the judge is done, whatever happened. A failed
+      # revoke changes no verdict; the token action retries at job end and it expires anyway.
+      - name: Revoke the budget ledger token
+        id: revoke-budget
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.budget.outputs.token }}
+        run: |
+          [ -n "$GH_TOKEN" ] || exit 0
+          gh api installation/token -X DELETE --silent \
+            || echo "::warning::budget token revoke failed; it is revoked again at job end"
+
+      # Minted only after the judge has finished, so the candidate run never coexists with
+      # the App credentials. Checks write only; revoked when the job ends.
+      - name: Mint the judge App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CHEESELESS_JUDGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CHEESELESS_JUDGE_APP_KEY }}
+          permission-checks: write
+
       - name: Post the check run
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          READ_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Re-check that the PR head is unchanged before posting.
-          current=$(gh api "repos/${REPO}/pulls/${{ steps.pr.outputs.number }}" --jq .head.sha)
+          # Re-check that the PR head is unchanged before posting (read-only token).
+          current=$(GH_TOKEN="$READ_TOKEN" gh api "repos/${REPO}/pulls/${{ steps.pr.outputs.number }}" --jq .head.sha)
           [ "$current" = "$HEAD_SHA" ] || { echo "PR head changed; not posting"; exit 1; }
           # Fail closed: success only on exit 0 AND a verdict whose status is "pass".
           # Anything else (FAIL, BLOCKED, usage/infra error, freeze drift) is a failure.

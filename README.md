@@ -45,7 +45,9 @@ Residual limits (ADR 0001/0007 and ledger P8-9): paraphrase/transform leaks belo
 k-gram or marker length, theoretical 64-bit rolling-hash collisions, bytes already
 forwarded before a mid-stream hit, archive caps are hard blocks, and HTTP upgrades/QUIC
 are blocked rather than inspected. Sentinel markers are harvested from the author's
-hidden artifacts; a per-class minimum is not yet a freeze precondition.
+hidden artifacts, and freeze requires at least two distinct markers per artifact class
+that has hidden files. A marker that also appears in the agent-visible projection does
+not count and makes freeze refuse.
 
 Requires Python >=3.12 and `mitmproxy>=12.3.1,<13` (pinned in `pyproject.toml`).
 

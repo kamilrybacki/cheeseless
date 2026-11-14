@@ -20,9 +20,9 @@ from cheeseless.domain.promote_policy import is_protected
 from cheeseless.domain.result import CriterionResult, Result, sign
 from cheeseless.domain.status import Status
 from cheeseless.ports.repository import Repository
+from cheeseless.ports.run_counter import RunCounter
 from cheeseless.ports.runner import SuiteRunner
 from cheeseless.ports.sandbox import Sandbox
-from cheeseless.ports.store import Store
 
 
 class FreezeDrift(Exception):
@@ -84,12 +84,12 @@ def _selection(frozen: FrozenTask) -> Mapping[str, str]:
 
 def judge(
     repo: Repository,
-    store: Store,
     runner: SuiteRunner,
     sandbox: Sandbox,
     frozen: FrozenTask,
     key: bytes,
     *,
+    counter: RunCounter,
     base_commit: str,
     head_commit: str,
     tool_version: str = "0.1.0",
@@ -144,7 +144,10 @@ def judge(
                     return CiVerdict(Status.FAIL, head_tree, JudgeReason.SMOKE_FAILED)
 
                 # (d) Budget from the CI pool, charged only once a hidden run is about to happen.
-                if store.reserve_run(frozen.task.lineage_id, Pool.CI) is None:
+                # Every earlier exit leaves the counter untouched. From here on the charge is
+                # kept whatever happens (no refund path: a refund would be a rollback
+                # primitive). A ``CounterError`` lands in the outer handler: BLOCKED.
+                if counter.reserve_run(frozen.task.lineage_id, Pool.CI) is None:
                     return CiVerdict(Status.BLOCKED, head_tree, JudgeReason.BUDGET_EXHAUSTED)
 
                 # (e) The full suite, visible plus holdout, from the frozen acceptance tree.

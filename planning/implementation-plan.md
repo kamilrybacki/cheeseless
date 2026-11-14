@@ -43,9 +43,8 @@ Phases 3 and 4 can run in parallel with 1–2. Phase 8 can start once phase 4 ex
 its fingerprint input comes from phase 7.
 
 **Phase 8 status (2026-11-13).** End-to-end proxy, freeze fingerprints, pre-hidden stderr
-DLP and supervisor are implemented. Residual protections are listed in ledger P8-9
-(per-class sentinel minimum, alert transport, full bridge parity); they do not gate the
-working end-to-end path but must close before release.
+DLP and supervisor are implemented. Residual protections are listed in ledger P8-9;
+P8-12 closes the per-class sentinel minimum and accepts the rest as ADR 0007 residuals.
 
 ## Acceptance-criteria coverage
 

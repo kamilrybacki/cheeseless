@@ -9,20 +9,24 @@ all diagnostics go to stderr and never carry hidden material.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import re
-import shutil
+import secrets
 import sys
 from pathlib import Path
 
+from cheeseless.adapters.outbound.ci.github_ledger import LedgerTransport, UrllibLedgerTransport
+from cheeseless.adapters.outbound.ci.ledger_counter import LedgerCounter
 from cheeseless.adapters.outbound.git.repository import GitRepository
 from cheeseless.adapters.outbound.runner.pytest_runner import PytestRunner
 from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
-from cheeseless.app.ci_judge import FreezeDrift, judge
-from cheeseless.bootstrap import _ensure_outside, _private_dir, _state_home
+from cheeseless.app.ci_judge import CiVerdict, FreezeDrift, JudgeReason, judge
+from cheeseless.bootstrap import _ensure_outside, _state_home
 from cheeseless.ci_bundle import (
+    BudgetLedgerRef,
     Bundle,
     BundleError,
     decode_bundle,
@@ -30,9 +34,13 @@ from cheeseless.ci_bundle import (
     encode_bundle,
 )
 from cheeseless.domain.budget import Pool
+from cheeseless.domain.budget_ledger import LedgerIdentity, branch_for, new_claim, run_key
 from cheeseless.domain.status import Status
 
 BUNDLE_ENV = "CHEESELESS_CI_BUNDLE"
+BUDGET_TOKEN_ENV = "CHEESELESS_BUDGET_TOKEN"  # noqa: S105 - an env var name
+# Set by the Actions runner for the judged repository; never taken from the PR.
+EVENT_ENV = ("GITHUB_REPOSITORY_ID", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")
 EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_USAGE = 2
@@ -59,7 +67,14 @@ def ci_export(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     frozen, seed = store.load_task(task_id)
     limit = store.budget(frozen.task.lineage_id, Pool.CI).limit
-    raw = encode_bundle(frozen, seed, store.hmac_key(), ci_limit=limit)
+    ledger = BudgetLedgerRef(
+        repo=args.budget_repo, branch=branch_for(frozen.task.lineage_id), root=args.budget_root
+    )
+    try:
+        raw = encode_bundle(frozen, seed, store.hmac_key(), ci_limit=limit, budget=ledger)
+    except BundleError as exc:
+        _err(f"ci-export refused: {exc}")
+        return EXIT_USAGE
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
         fd = os.open(out, flags, 0o600)
@@ -93,31 +108,77 @@ def _emit(verdict_public: dict[str, object], as_json: bool) -> None:
         print(f"  {crit['id']}: {crit['status']}")
 
 
+def make_ledger_transport(repo: str, token: str) -> LedgerTransport:
+    """The real ledger transport (tests substitute an in-memory one)."""
+    return UrllibLedgerTransport(repo, token)
+
+
+def _make_counter(bundle: Bundle, token: str) -> LedgerCounter:
+    """The CI budget counter pinned by the bundle. ``ValueError`` on any bad input."""
+    if not token:
+        raise ValueError(f"no budget token: set {BUDGET_TOKEN_ENV}")
+    missing = [name for name in EVENT_ENV if not os.environ.get(name)]
+    if missing:
+        raise ValueError(f"missing workflow event variables: {', '.join(missing)}")
+    repo_id, run_id, attempt = (os.environ[name] for name in EVENT_ENV)
+    identity = LedgerIdentity(repo_id=repo_id, lineage=bundle.frozen.task.lineage_id)
+    key = run_key(run_id, attempt)
+    return LedgerCounter(
+        make_ledger_transport(bundle.budget.repo, token),
+        store_key=bundle.key,
+        identity=identity,
+        branch=bundle.budget.branch,
+        root=bundle.budget.root,
+        limit=bundle.ci_limit,
+        run_key=key,
+        claim=new_claim(secrets.token_bytes(16)),
+    )
+
+
+def _confirmed(verdict: CiVerdict, counter: LedgerCounter) -> CiVerdict:
+    """Every charged verdict stands only while its charge is still on the chain (fail closed).
+
+    A lost charge is an incident whatever the outcome, so a FAIL is re-checked too.
+    """
+    if not counter.charged and verdict.status is not Status.PASS:
+        return verdict
+    if counter.confirm_still_on_chain():
+        return verdict
+    return dataclasses.replace(verdict, status=Status.BLOCKED, reason=JudgeReason.INFRA_ERROR)
+
+
 def ci_judge(args: argparse.Namespace) -> int:
+    # The budget token leaves the environment first, before anything can spawn a process.
+    token = os.environ.pop(BUDGET_TOKEN_ENV, "")
     for name, value in (("--base", args.base), ("--head", args.head)):
         if not _SHA.fullmatch(value):
             _err(f"ci-judge: {name} must be a full 40-character lowercase commit SHA")
             return EXIT_USAGE
     try:
         bundle = _load_bundle(args.bundle_file)
+        counter = _make_counter(bundle, token)
     except BundleError as exc:
         _err(f"ci-judge refused: {exc}")
         return EXIT_USAGE
-    state = _private_dir("cheeseless-ci-")
+    except ValueError as exc:  # messages never include the token
+        _err(f"ci-judge refused: invalid budget ledger configuration: {exc}")
+        return EXIT_USAGE
+    finally:
+        del token
     try:
         repo = GitRepository.discover(Path.cwd())
-        store = FileStore(state / "store")
         verdict = judge(
             repo,
-            store,
             PytestRunner(),
             BwrapSandbox(),
             bundle.frozen,
             bundle.key,
+            counter=counter,
             base_commit=args.base,
             head_commit=args.head,
             timeout=args.timeout,
         )
+        verdict = _confirmed(verdict, counter)
     except FreezeDrift:
         _err("FREEZE_DRIFT: the default branch acceptance/ tree differs from the frozen task")
         return EXIT_FREEZE_DRIFT
@@ -125,7 +186,10 @@ def ci_judge(args: argparse.Namespace) -> int:
         _err(f"ci-judge failed: {type(exc).__name__}")
         return EXIT_USAGE
     finally:
-        shutil.rmtree(state, ignore_errors=True)
+        for alert in counter.alerts:
+            _err(alert)
+    if counter.observed is not None:
+        _err(f"budget used {counter.observed} of {bundle.ci_limit}")
     _err(f"reason: {verdict.reason}")
     _emit(verdict.public(), args.json)
     return EXIT_PASS if verdict.status is Status.PASS else EXIT_FAIL
@@ -135,4 +199,11 @@ def run(args: argparse.Namespace) -> int:
     return ci_export(args) if args.command == "ci-export" else ci_judge(args)
 
 
-__all__ = ["BUNDLE_ENV", "ci_export", "ci_judge", "run"]
+__all__ = [
+    "BUDGET_TOKEN_ENV",
+    "BUNDLE_ENV",
+    "ci_export",
+    "ci_judge",
+    "make_ledger_transport",
+    "run",
+]

@@ -1,5 +1,6 @@
 """DLP scanners: every chunk split, literal forms, archives (Q46, D16, I7)."""
 
+import base64
 import gzip
 import hashlib
 import io
@@ -238,3 +239,177 @@ def test_body_scanner_buffers_archives_until_clean():
     out += body.close()
     assert out == raw
     assert body.hit is None
+
+
+TOKEN_A = b"CHEESELESS-SENTINEL-alpha01"
+TOKEN_B = b"CHEESELESS-SENTINEL-beta02"
+TOKEN_C = b"CHEESELESS-SENTINEL-gamma03"
+
+
+def test_sentinel_problems_flags_a_class_below_the_minimum():
+    hidden = [("acceptance/hidden/test_a.py", b"# " + TOKEN_A)]
+    problems = dlp.sentinel_problems(hidden, [])
+    assert len(problems) == 1
+    assert "tests" in problems[0]
+    assert "1" in problems[0]
+    assert str(dlp.MIN_SENTINELS_PER_CLASS) in problems[0]
+    assert TOKEN_A.decode() not in problems[0]
+
+
+def test_sentinel_problems_accepts_exactly_the_minimum():
+    hidden = [("acceptance/hidden/test_a.py", TOKEN_A + b" " + TOKEN_B)]
+    assert dlp.sentinel_problems(hidden, []) == []
+
+
+def test_sentinel_problems_counts_a_duplicate_token_once():
+    hidden = [
+        ("acceptance/hidden/test_a.py", TOKEN_A),
+        ("acceptance/hidden/test_b.py", TOKEN_A + b" " + TOKEN_A),
+    ]
+    problems = dlp.sentinel_problems(hidden, [])
+    assert len(problems) == 1
+    assert "1" in problems[0]
+
+
+def test_sentinel_problems_does_not_count_a_publicly_visible_token():
+    hidden = [("acceptance/hidden/test_a.py", TOKEN_A + b" " + TOKEN_B)]
+    problems = dlp.sentinel_problems(hidden, [b"projection leaks " + TOKEN_B])
+    text = " ".join(problems)
+    assert any("visible in the projection" in problem for problem in problems)
+    assert dlp.digest(TOKEN_B) in text
+    assert any("tests" in problem and "1" in problem for problem in problems)
+    assert TOKEN_B.decode() not in text
+
+
+def test_sentinel_problems_ignores_classes_without_hidden_artifacts():
+    hidden = [("acceptance/hidden/test_a.py", TOKEN_A + b" " + TOKEN_B)]
+    assert dlp.sentinel_problems(hidden, []) == []
+
+
+def test_sentinel_problems_never_puts_a_token_in_a_message():
+    hidden = [("acceptance/hidden/a_fixture.py", TOKEN_C)]
+    problems = dlp.sentinel_problems(hidden, [TOKEN_C])
+    text = " ".join(problems)
+    assert problems
+    assert TOKEN_C.decode() not in text
+
+
+def test_sentinel_problems_detects_a_suffixed_public_copy():
+    hidden = [("acceptance/hidden/test_a.py", TOKEN_A + b" " + TOKEN_B)]
+    problems = dlp.sentinel_problems(hidden, [b"copy " + TOKEN_A + b"X"])
+    text = " ".join(problems)
+    assert any("visible in the projection" in problem for problem in problems)
+    assert dlp.digest(TOKEN_A) in text
+    assert TOKEN_A.decode() not in text
+
+
+def test_sentinel_problems_detects_a_prefixed_public_copy():
+    hidden = [("acceptance/hidden/test_a.py", TOKEN_A + b" " + TOKEN_B)]
+    problems = dlp.sentinel_problems(hidden, [b"prefix" + TOKEN_A])
+    text = " ".join(problems)
+    assert any("visible in the projection" in problem for problem in problems)
+    assert TOKEN_A.decode() not in text
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("acceptance/hidden/test_x.py", dlp.ARTIFACT_TESTS),
+        ("acceptance/hidden/data/fixtures.json", dlp.ARTIFACT_FIXTURES),
+        ("acceptance/hidden/expected/out.json", dlp.ARTIFACT_EXPECTED),
+        ("acceptance/hidden/golden/out.txt", dlp.ARTIFACT_EXPECTED),
+        ("acceptance/hidden/snapshot/out.json", dlp.ARTIFACT_EXPECTED),
+        ("acceptance/hidden/seed.json", dlp.ARTIFACT_SEED),
+        ("acceptance/hidden/notes.md", dlp.ARTIFACT_NOTES),
+        ("acceptance/hidden/readme.md", dlp.ARTIFACT_NOTES),
+        ("acceptance/hidden/data/expected.json", dlp.ARTIFACT_EXPECTED),
+        ("acceptance/hidden/data/seed.json", dlp.ARTIFACT_SEED),
+        ("acceptance/hidden/fixtures/notes.md", dlp.ARTIFACT_FIXTURES),
+        ("acceptance/hidden/seedless_test.py", dlp.ARTIFACT_TESTS),
+    ],
+)
+def test_artifact_class_matches_whole_path_words_with_precedence(path, expected):
+    assert dlp.artifact_class(path) == expected
+
+
+def _base64_at(token: bytes, prefix_len: int) -> bytes:
+    """A longer base64 blob in which ``token`` starts at the given byte alignment."""
+    return base64.b64encode(b"q" * (prefix_len + 3) + token + b"!trailing bytes")
+
+
+@pytest.mark.parametrize(
+    "encode",
+    [
+        pytest.param(lambda t: t.lower(), id="lowercase"),
+        pytest.param(lambda t: t[::-1], id="reversed"),
+        pytest.param(lambda t: t[::-1].lower(), id="reversed-lowercase"),
+        pytest.param(lambda t: t.hex().encode(), id="hex"),
+        pytest.param(lambda t: t.hex().upper().encode(), id="hex-upper"),
+        pytest.param(lambda t: _base64_at(t, 0), id="base64-align0"),
+        pytest.param(lambda t: _base64_at(t, 1), id="base64-align1"),
+        pytest.param(lambda t: _base64_at(t, 2), id="base64-align2"),
+    ],
+)
+def test_sentinel_problems_detects_an_encoded_public_copy(encode):
+    hidden = [("acceptance/hidden/test_a.py", TOKEN_A + b" " + TOKEN_B + b" " + TOKEN_C)]
+    problems = dlp.sentinel_problems(hidden, [b"blob: " + encode(TOKEN_A) + b" end"])
+    text = " ".join(problems)
+    assert any("visible in the projection" in problem for problem in problems)
+    assert dlp.digest(TOKEN_A) in text
+    assert TOKEN_A.decode() not in text
+
+
+def test_sentinel_problems_keeps_base64_case_sensitive():
+    hidden = [("acceptance/hidden/test_a.py", TOKEN_A + b" " + TOKEN_B)]
+    swapped = base64.b64encode(TOKEN_A).swapcase()
+    assert dlp.sentinel_problems(hidden, [swapped]) == []
+
+
+def test_sentinel_forms_are_unchanged_by_exposure_forms():
+    forms = {form: packed for _, form, packed in dlp.sentinel_forms(TOKEN_A)}
+    assert set(forms) == {"raw", "base64", "hex", "reversed"}
+    assert forms["base64"].endswith(f":{len(base64.b64encode(TOKEN_A))}")
+
+
+def test_redact_sentinels_replaces_each_marker_with_its_digest():
+    text = f"hidden/test_x.py::test_y[{TOKEN_A.decode()}] and {TOKEN_B.decode()}"
+    redacted = dlp.redact_sentinels(text)
+    assert TOKEN_A.decode() not in redacted
+    assert TOKEN_B.decode() not in redacted
+    assert f"<sentinel digest {dlp.digest(TOKEN_A)}>" in redacted
+    assert f"<sentinel digest {dlp.digest(TOKEN_B)}>" in redacted
+    assert redacted.startswith("hidden/test_x.py::test_y[<sentinel digest ")
+
+
+def test_redact_sentinels_leaves_marker_free_text_alone():
+    assert dlp.redact_sentinels("criterion normalize needs at least 2 tests") == (
+        "criterion normalize needs at least 2 tests"
+    )
+
+
+@pytest.mark.parametrize("line_end", [b"\n", b"\r\n", b" "])
+def test_sentinel_problems_detects_line_wrapped_base64(line_end):
+    hidden = [("acceptance/hidden/test_a.py", TOKEN_A + b" " + TOKEN_B + b" " + TOKEN_C)]
+    wrapped = base64.encodebytes(b"x" * 48 + TOKEN_A + b"!tail").replace(b"\n", line_end)
+    problems = dlp.sentinel_problems(hidden, [wrapped])
+    assert any(dlp.digest(TOKEN_A) in problem for problem in problems)
+
+
+def test_sentinel_problems_refuses_a_base64_near_miss_conservatively():
+    # Boundary sextets are trimmed, so a public marker differing only in its last bits
+    # still counts as exposing the hidden one. Freeze fails closed; the author renames.
+    hidden = [("acceptance/hidden/test_a.py", TOKEN_A + b" " + TOKEN_B + b" " + TOKEN_C)]
+    near_miss = base64.b64encode(b"z" + TOKEN_A[:-1] + b"0")
+    problems = dlp.sentinel_problems(hidden, [near_miss])
+    assert any(dlp.digest(TOKEN_A) in problem for problem in problems)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [TOKEN_A.decode().lower(), "Cheeseless-Sentinel-alpha01", "cheeseless-canary-xyz123"],
+)
+def test_redact_sentinels_ignores_case(variant):
+    redacted = dlp.redact_sentinels(f"skipped: {variant}")
+    assert variant not in redacted
+    assert "<sentinel digest " in redacted
+    assert "cheeseless-" not in redacted.lower()
