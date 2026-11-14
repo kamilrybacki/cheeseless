@@ -61,6 +61,7 @@ class RepoState:
     runs: list[dict[str, object]] = field(default_factory=list)
     jobs: dict[int, dict[str, str]] = field(default_factory=dict)
     pulls: dict[int, dict[str, object]] = field(default_factory=dict)
+    files: set[tuple[str, str]] = field(default_factory=set)
     checks: list[tuple[str, str]] = field(default_factory=list)  # (sha, source label)
 
 
@@ -129,6 +130,7 @@ class FakeGitHub:
             (("PUT", r"contents/(.+)"), self._put_contents),
             (("GET", r"contents/(.+)"), self._get_contents),
             (("POST", "check-runs"), self._post_check),
+            (("GET", r"commits/([^/]+)/check-runs"), self._list_checks),
             (("GET", r"actions/workflows/([^/]+)/runs"), self._list_runs),
             (("GET", "actions/runs"), self._list_runs),
             (("GET", r"actions/runs/(\d+)/jobs"), self._run_jobs),
@@ -196,7 +198,7 @@ class FakeGitHub:
             and not self._bypass(label)
         ):
             return Response(
-                403, {"message": "Cannot create ref due to creations being restricted."}
+                403, {"message": "Repository rule violations found: creations restricted"}
             )
         if branch in repo.refs:
             return Response(422, {"message": "Reference already exists"})
@@ -223,11 +225,17 @@ class FakeGitHub:
             return Response(404, {"message": "Not Found"})
         if self._is_ledger(repo, branch) and self.knobs.rulesets_enforced:
             if not self._bypass(label):
-                return Response(403, {"message": "Cannot update this ref."})
+                return Response(
+                    403, {"message": "Repository rule violations found: update restricted"}
+                )
             if force and not self._descends(repo, sha, repo.refs[branch]):
-                return Response(403, {"message": "Cannot force-push to this ref."})
+                return Response(
+                    403, {"message": "Repository rule violations found: non_fast_forward"}
+                )
             if force and self._descends(repo, repo.refs[branch], sha):
-                return Response(403, {"message": "Cannot rewind this ref."})
+                return Response(
+                    403, {"message": "Repository rule violations found: non_fast_forward"}
+                )
         if (
             not force
             and not self.knobs.lost_update
@@ -241,7 +249,7 @@ class FakeGitHub:
         self, repo: RepoState, label: str, data: object, query: str, branch: str
     ) -> Response:
         if self._is_ledger(repo, branch) and self.knobs.rulesets_enforced:
-            return Response(403, {"message": "Cannot delete this ref."})
+            return Response(403, {"message": "Repository rule violations found: deletion"})
         if label == "verdict" or branch not in repo.refs:
             return Response(404, {"message": "Not Found"})
         del repo.refs[branch]
@@ -295,10 +303,12 @@ class FakeGitHub:
     ) -> Response:
         branch = str(data.get("branch") or repo.default)
         outside = repo.full != LEDGER
-        if label == "budget" and not (self.knobs.budget_reaches_judged and outside):
+        if label == "budget" and outside and not self.knobs.budget_reaches_judged:
             return Response(404, {"message": "Not Found"})
         if label == "verdict" and not self.knobs.verdict_writes_contents:
             return Response(403, {"message": "Resource not accessible by integration"})
+        if (branch, path) in repo.files and "sha" not in data:
+            return Response(409, {"message": "sha was not supplied"})
         if repo.full == SAME and branch == repo.default and self.knobs.same_repo_protected:
             return Response(409, {"message": "Repository rule violations found"})
         if branch not in repo.refs:
@@ -306,6 +316,7 @@ class FakeGitHub:
         sha = self._sha()
         repo.commits[sha] = ("tree-" + sha, (repo.refs[branch],))
         repo.refs[branch] = sha
+        repo.files.add((branch, path))
         self._after_push(repo, branch, path, sha)
         return Response(201, {"commit": {"sha": sha}})
 
@@ -313,17 +324,16 @@ class FakeGitHub:
         if repo.full != JUDGED or not self.knobs.actions_enabled or branch == repo.default:
             return
         if path.endswith("live-probe.yml"):
-            read = "success" if self.knobs.branch_reads_secret else "failure"
+            read = "failure" if self.knobs.branch_reads_secret else "success"
             self._run(
                 repo,
                 sha,
                 "live-probe.yml",
                 "live-probe",
                 "success",
-                {"with-env": read, "no-env": read, "fake-check": "success"},
+                {"control": "success", "with-env": read, "no-env": read, "fake-check": "success"},
             )
-            if self.knobs.actions_can_forge:
-                repo.checks.append((sha, "actions"))
+            repo.checks.append((sha, "actions"))
         else:
             ok = "success" if self.knobs.judge_succeeds else "failure"
             self._run(repo, sha, "live-canary-judge.yml", "live-canary-judge", ok, {"judge": ok})
@@ -373,7 +383,47 @@ class FakeGitHub:
         self, repo: RepoState, label: str, data: object, query: str, rid: str
     ) -> Response:
         jobs = repo.jobs.get(int(rid), {})
-        return Response(200, {"jobs": [{"name": k, "conclusion": v} for k, v in jobs.items()]})
+        return Response(
+            200,
+            {
+                "jobs": [
+                    {
+                        "name": k,
+                        "conclusion": v,
+                        "steps": [
+                            {"name": "secret-absent", "conclusion": v},
+                            {
+                                "name": "secret-present",
+                                "conclusion": "success" if v == "failure" else "skipped",
+                            },
+                        ],
+                    }
+                    for k, v in jobs.items()
+                ]
+            },
+        )
+
+    def _list_checks(
+        self, repo: RepoState, label: str, data: object, query: str, sha: str
+    ) -> Response:
+        return Response(
+            200,
+            {
+                "check_runs": [
+                    {
+                        "head_sha": s,
+                        "name": CHECK,
+                        "conclusion": "success",
+                        "app": {
+                            "id": 15368 if source == "actions" else int(APP_ID),
+                            "slug": "github-actions" if source == "actions" else "judge",
+                        },
+                    }
+                    for s, source in repo.checks
+                    if s == sha
+                ]
+            },
+        )
 
     # ----- pull requests ------------------------------------------------------------------
     def _open_pull(
@@ -391,7 +441,11 @@ class FakeGitHub:
             return Response(404, {"message": "Not Found"})
         sha = repo.refs.get(str(pull["head"]), "")
         sources = {src for s, src in repo.checks if s == sha}
-        satisfied = "verdict" in sources or "app" in sources or "actions" in sources
+        satisfied = (
+            "verdict" in sources
+            or "app" in sources
+            or ("actions" in sources and self.knobs.actions_can_forge)
+        )
         return Response(200, {"mergeable_state": "clean" if satisfied else "blocked"})
 
     def _close_pull(

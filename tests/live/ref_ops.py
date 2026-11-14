@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 from tests.live.github_client import GitHubClient, Response, Token
 
-REJECT = frozenset({401, 403, 422})
-SCOPE_DENIED = frozenset({401, 403, 404})
+REJECT = frozenset({403, 422})
+SCOPE_DENIED = frozenset({403, 404})
 
 
 class Precondition(Exception):
@@ -89,3 +89,40 @@ def poll(
             return False
         sleep(every)
         waited += every
+
+
+def protection_rejection(resp: Response) -> bool:
+    if resp.status == 401:
+        raise Precondition("credential authentication failed")
+    message = str(resp.get("message") or "").lower()
+    evidence = any(
+        word in message
+        for word in (
+            "rule violation",
+            "ruleset",
+            "protected branch",
+            "branch protection",
+            "repository rule",
+            "gh006",
+            "gh013",
+        )
+    )
+    if resp.status in {403, 409, 422} and evidence:
+        return True
+    if resp.status not in {200, 201, 204}:
+        raise Precondition("rejection has no attributable protection evidence")
+    return False
+
+
+def write_control(repo: Repo, actor: Token, suffix: str) -> None:
+    from tests.live.checks_tokens import put_contents
+
+    base = repo.get_ref(repo.default_branch(actor), actor)
+    if base is None:
+        raise Precondition("write control has no base commit")
+    branch = f"live-control/{suffix}"
+    need(repo.create_ref(branch, base, actor), {201}, "create unprotected control")
+    try:
+        need(put_contents(repo, actor, f"control-{suffix}.txt", branch), {201}, "write control")
+    finally:
+        need(repo.delete_ref(branch, actor), {204}, "clean up control")

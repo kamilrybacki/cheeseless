@@ -1,7 +1,7 @@
 """Prepare the operator prerequisites of the live GitHub release gate (phase 13).
 
 Every step is idempotent and a dry run unless ``--apply`` is given. GitHub is reached only
-through the ``gh`` CLI, so this script never reads, stores or prints a token. Disposable
+through the ``gh`` CLI except for in-process HTTPS App manifest conversion. Disposable
 repositories are always private and always named ``cheeseless-canary-*``; teardown refuses
 anything else.
 
@@ -27,6 +27,8 @@ import stat
 import subprocess  # noqa: S404 - the gh CLI is the only GitHub boundary
 import sys
 import threading
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -42,6 +44,7 @@ JUDGE_FILE = ".github/workflows/live-canary-judge.yml"
 CI_FILE = ".github/workflows/live-canary-ci.yml"
 SECRET_NAME = "CHEESELESS_LIVE_CANARY_SECRET"  # noqa: S105 - a name, never a value
 ROLES = ("ledger", "judged", "fresh")
+OWNERSHIP_FILE = Path(".cheeseless-live-ownership.json")
 
 CI_WORKFLOW = """name: live-canary-ci
 on: [push, pull_request]
@@ -142,7 +145,11 @@ Say = Callable[[str], None]
 
 def _canary(full: str) -> str:
     owner, _, name = full.partition("/")
-    if not owner or not name.startswith(PREFIX):
+    if (
+        not owner
+        or not re.fullmatch(r"[A-Za-z0-9_.-]+", owner)
+        or not re.fullmatch(re.escape(PREFIX) + r"[A-Za-z0-9_.-]+", name)
+    ):
         raise SetupError(f"refusing {full!r}: not a {PREFIX}* repository")
     return full
 
@@ -163,12 +170,40 @@ def _default_branch(api: Api, repo: str) -> str:
     return name if isinstance(name, str) else "main"
 
 
-def ensure_repos(api: Api, plan: Plan, apply: bool, say: Say) -> None:
+def _ownership(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            raise ValueError
+        return data
+    except (ValueError, OSError) as err:
+        raise SetupError("invalid ownership manifest") from err
+
+
+def _repo_id(body: Any) -> int:
+    value = body.get("id") if isinstance(body, dict) else None
+    if type(value) is not int or value <= 0:
+        raise SetupError("repository response has no numeric ID")
+    return value
+
+
+def ensure_repos(api: Api, plan: Plan, apply: bool, say: Say, manifest_path: Path) -> None:
+    owned = _ownership(manifest_path)
     for role in plan.roles:
         full = _canary(plan.repo(role))
-        status, _ = api.call("GET", f"repos/{full}")
+        status, current = api.call("GET", f"repos/{full}")
         if _ok(status):
             say(f"repo {full}: exists")
+            if apply:
+                rid = _repo_id(current)
+                previous = owned.get(full, {})
+                owned[full] = {
+                    "id": rid,
+                    "created": previous.get("id") == rid and previous.get("created") is True,
+                }
+                manifest_path.write_text(json.dumps(owned, indent=2) + "\n")
             continue
         if status != 404:
             raise SetupError(f"read {full} failed with HTTP {status}")
@@ -176,7 +211,11 @@ def ensure_repos(api: Api, plan: Plan, apply: bool, say: Say) -> None:
         if apply:
             path = f"orgs/{plan.owner}/repos" if plan.org else "user/repos"
             body = {"name": full.split("/")[1], "private": True, "auto_init": True}
-            _expect(api.call("POST", path, body)[0], f"create {full}")
+            status, created = api.call("POST", path, body)
+            _expect(status, f"create {full}")
+            rid = _repo_id(created)
+            owned[full] = {"id": rid, "created": True}
+            manifest_path.write_text(json.dumps(owned, indent=2) + "\n")
 
 
 def ensure_environment(api: Api, plan: Plan, apply: bool, say: Say) -> None:
@@ -293,11 +332,17 @@ def ensure_required_check(api: Api, plan: Plan, apply: bool, say: Say) -> None:
 
 
 def run_setup(
-    api: Api, secrets_port: SecretWriter, plan: Plan, *, apply: bool, say: Say
+    api: Api,
+    secrets_port: SecretWriter,
+    plan: Plan,
+    *,
+    apply: bool,
+    say: Say,
+    manifest_path: Path | None = None,
 ) -> list[str]:
     """Run every step in order; the result lists env var names the operator must export."""
     say(f"mode: {'APPLY' if apply else 'dry run (no changes; pass --apply)'}")
-    ensure_repos(api, plan, apply, say)
+    ensure_repos(api, plan, apply, say, manifest_path or OWNERSHIP_FILE)
     ensure_environment(api, plan, apply, say)
     ensure_secret(secrets_port, plan, apply, say)
     ensure_workflows(api, plan, apply, say)
@@ -314,13 +359,29 @@ def run_setup(
     return names
 
 
-def run_teardown(api: Api, plan: Plan, *, apply: bool, say: Say) -> None:
-    for role in (*ROLES, "same"):
-        full = _canary(plan.repo(role))
-        status, _ = api.call("GET", f"repos/{full}")
-        if not _ok(status):
+def run_teardown(
+    api: Api, plan: Plan, *, apply: bool, say: Say, manifest_path: Path | None = None
+) -> None:
+    owned = _ownership(manifest_path or OWNERSHIP_FILE)
+    configured = {plan.repo(role) for role in plan.roles}
+    # Validate the complete manifest before making any deletion.
+    for full in owned:
+        _canary(full)
+    for full, entry in owned.items():
+        if (
+            full not in configured
+            or not isinstance(entry, dict)
+            or entry.get("created") is not True
+        ):
+            say(f"repo {full}: refusing deletion (not created by this setup/configuration)")
+            continue
+        status, current = api.call("GET", f"repos/{full}")
+        if status == 404:
             say(f"repo {full}: absent")
             continue
+        _expect(status, "read repository before teardown")
+        if _repo_id(current) != entry.get("id"):
+            raise SetupError("repository ID changed; refusing teardown")
         say(f"repo {full}: {'deleting' if apply else 'would delete'}")
         if apply:
             _expect(api.call("DELETE", f"repos/{full}")[0], f"delete {full}")
@@ -349,6 +410,28 @@ def write_key(path: Path, pem: str) -> None:
         handle.write(pem)
 
 
+def convert_manifest(
+    code: str, *, opener: Callable[..., Any] = urllib.request.urlopen
+) -> dict[str, Any]:
+    """Exchange the one-time code in-process; default HTTPS verification stays enabled."""
+    from urllib.parse import quote
+
+    request = urllib.request.Request(  # noqa: S310 - fixed HTTPS origin
+        f"https://api.github.com/app-manifests/{quote(code, safe='')}/conversions",
+        data=b"{}",
+        method="POST",
+        headers={"Accept": "application/vnd.github+json"},
+    )
+    try:
+        with opener(request, timeout=30) as response:
+            body = json.load(response)
+        if not isinstance(body, dict):
+            raise ValueError
+        return body
+    except Exception:
+        raise SetupError("manifest conversion failed (response details suppressed)") from None
+
+
 def run_manifest(
     api: Api,
     owner: str,
@@ -359,6 +442,7 @@ def run_manifest(
     say: Say,
     wait: float = 600.0,
     port: int = 0,
+    convert: Callable[[str], dict[str, Any]] = convert_manifest,
 ) -> int | None:
     if not apply:
         say("manifest flow: would start a local callback server and print one URL (pass --apply)")
@@ -410,8 +494,7 @@ def run_manifest(
     finally:
         server.shutdown()
         server.server_close()
-    status, body = api.call("POST", f"app-manifests/{result['code']}/conversions", {})
-    _expect(status, "manifest conversion")
+    body = convert(result["code"])
     if not isinstance(body, dict) or "pem" not in body or "id" not in body:
         raise SetupError("manifest conversion returned an unexpected body")
     write_key(key_file, str(body["pem"]))
@@ -430,6 +513,7 @@ def build_parser() -> argparse.ArgumentParser:
         cmd.add_argument("--org", action="store_true", help="owner is an organisation")
         cmd.add_argument("--apply", action="store_true", help="perform the changes")
         if name != "manifest":
+            cmd.add_argument("--ownership-manifest", type=Path, default=OWNERSHIP_FILE)
             cmd.add_argument("--suffix", default="gate")
             cmd.add_argument("--same-repo", action="store_true")
         if name == "setup":
@@ -456,9 +540,18 @@ def main(
             args.owner, args.suffix, getattr(args, "app_id", None), args.org, args.same_repo
         )
         if args.command == "teardown":
-            run_teardown(api, plan, apply=args.apply, say=say)
+            run_teardown(
+                api, plan, apply=args.apply, say=say, manifest_path=args.ownership_manifest
+            )
             return 0
-        names = run_setup(api, secrets_port or GhSecrets(), plan, apply=args.apply, say=say)
+        names = run_setup(
+            api,
+            secrets_port or GhSecrets(),
+            plan,
+            apply=args.apply,
+            say=say,
+            manifest_path=args.ownership_manifest,
+        )
     except SetupError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2

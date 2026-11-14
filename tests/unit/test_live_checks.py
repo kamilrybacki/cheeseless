@@ -137,15 +137,22 @@ def test_check_8_is_not_applicable_without_a_same_repo() -> None:
 
 
 # ----- exact statuses ----------------------------------------------------------------------
-@pytest.mark.parametrize("status", [401, 403, 422])
+@pytest.mark.parametrize("status", [403, 422])
 def test_creation_rejection_passes_only_on_the_exact_statuses(status: int) -> None:
     ctx = make_ctx()
     original = ctx.client.request
 
     def spoof(method: str, path: str, *, token: Token | None = None, json: object = None):  # type: ignore[no-untyped-def]
         resp = original(method, path, token=token, json=json)
-        if method == "POST" and path.endswith("git/refs") and token and token.label == "pusher":
-            return Response(status, {"message": "refused"})
+        if (
+            method == "POST"
+            and path.endswith("git/refs")
+            and token
+            and token.label == "pusher"
+            and isinstance(json, dict)
+            and str(json.get("ref")).startswith("refs/heads/cheeseless/budget/")
+        ):
+            return Response(status, {"message": "Repository rule violations found"})
         return resp
 
     ctx.client.request = spoof  # type: ignore[method-assign]
@@ -159,7 +166,14 @@ def test_creation_with_any_other_status_is_not_a_pass(status: int) -> None:
     original = ctx.client.request
 
     def spoof(method: str, path: str, *, token: Token | None = None, json: object = None):  # type: ignore[no-untyped-def]
-        if method == "POST" and path.endswith("git/refs") and token and token.label == "pusher":
+        if (
+            method == "POST"
+            and path.endswith("git/refs")
+            and token
+            and token.label == "pusher"
+            and isinstance(json, dict)
+            and str(json.get("ref")).startswith("refs/heads/cheeseless/budget/")
+        ):
             return Response(status, {"message": "x"})
         return original(method, path, token=token, json=json)
 
@@ -402,3 +416,117 @@ def test_live_suite_is_skipped_unless_enabled() -> None:
     assert out.returncode == 0, out.stdout
     assert "13 skipped" in out.stdout
     assert time.monotonic() > 0
+
+
+@pytest.mark.parametrize("number", [3, 6, 7, 8, 12])
+def test_authentication_failure_never_proves_protection(number: int) -> None:
+    ctx = make_ctx()
+    original = ctx.client.request
+
+    def reject(method, path, *, token=None, json=None):  # type: ignore[no-untyped-def]
+        if method in {"POST", "PUT", "PATCH", "DELETE"}:
+            return Response(401, {"message": "Bad credentials"})
+        return original(method, path, token=token, json=json)
+
+    ctx.client.request = reject  # type: ignore[method-assign]
+    assert ALL[number](ctx).outcome is Outcome.PRECONDITION_MISSING
+
+
+def test_existing_file_conflict_is_not_branch_protection() -> None:
+    ctx = make_ctx()
+    original = ctx.client.request
+
+    def conflict(method, path, *, token=None, json=None):  # type: ignore[no-untyped-def]
+        if method == "PUT" and isinstance(json, dict) and json.get("branch") == "main":
+            return Response(409, {"message": "sha was not supplied"})
+        return original(method, path, token=token, json=json)
+
+    ctx.client.request = conflict  # type: ignore[method-assign]
+    assert ALL[8](ctx).outcome is Outcome.PRECONDITION_MISSING
+
+
+@pytest.mark.parametrize("state", ["cancelled", "failure"])
+def test_workflow_infrastructure_failure_is_precondition(state: str) -> None:
+    ctx = make_ctx()
+    original = ctx.client.request
+
+    def broken(method, path, *, token=None, json=None):  # type: ignore[no-untyped-def]
+        if path.endswith("/jobs"):
+            return Response(
+                200,
+                {
+                    "jobs": [
+                        {"name": n, "conclusion": state} for n in ("with-env", "no-env", "control")
+                    ]
+                },
+            )
+        return original(method, path, token=token, json=json)
+
+    ctx.client.request = broken  # type: ignore[method-assign]
+    assert ALL[9](ctx).outcome is Outcome.PRECONDITION_MISSING
+
+
+def test_absent_forged_check_is_precondition() -> None:
+    ctx = make_ctx()
+    original = ctx.client.request
+
+    def missing(method, path, *, token=None, json=None):  # type: ignore[no-untyped-def]
+        if "/check-runs" in path and method == "GET":
+            return Response(200, {"check_runs": []})
+        return original(method, path, token=token, json=json)
+
+    ctx.client.request = missing  # type: ignore[method-assign]
+    assert ALL[11](ctx).outcome is Outcome.PRECONDITION_MISSING
+
+
+def test_app_pin_requires_exact_id() -> None:
+    from dataclasses import replace
+
+    ctx = make_ctx()
+    ctx.config = replace(ctx.config, app_id="424")
+    assert ALL[11](ctx).outcome is Outcome.PRECONDITION_MISSING
+
+
+@pytest.mark.parametrize("number,actor", [(3, "pusher"), (3, "budget"), (3, "app"), (6, "budget")])
+def test_same_actor_must_pass_write_control(number: int, actor: str) -> None:
+    ctx = make_ctx()
+    original = ctx.client.request
+
+    def no_control(method, path, *, token=None, json=None):  # type: ignore[no-untyped-def]
+        if method == "PUT" and "/contents/control-" in path and token.label == actor:
+            return Response(403, {"message": "Resource not accessible"})
+        return original(method, path, token=token, json=json)
+
+    ctx.client.request = no_control  # type: ignore[method-assign]
+    assert ALL[number](ctx).outcome is Outcome.PRECONDITION_MISSING
+
+
+@pytest.mark.parametrize("status", [401, 403, 422])
+def test_matrix_generic_rejection_is_not_ruleset_evidence(status: int) -> None:
+    ctx = make_ctx()
+    original = ctx.client.request
+
+    def generic(method, path, *, token=None, json=None):  # type: ignore[no-untyped-def]
+        if method == "POST" and path.endswith("git/refs") and isinstance(json, dict):
+            if (
+                str(json.get("ref")).startswith("refs/heads/cheeseless/budget/")
+                and token.label == "pusher"
+            ):
+                return Response(status, {"message": "Unrelated error"})
+        return original(method, path, token=token, json=json)
+
+    ctx.client.request = generic  # type: ignore[method-assign]
+    assert ALL[3](ctx).outcome is Outcome.PRECONDITION_MISSING
+
+
+def test_fake_models_existing_contents_conflict_separately() -> None:
+    from tests.live.fake_github import SAME
+    from tests.live.ref_ops import Repo
+
+    ctx = make_ctx(Knobs(same_repo_protected=False))
+    repo = Repo(ctx.client, SAME)
+    actor = ctx.minter.mint(SAME)
+    assert checks_tokens.put_contents(repo, actor, "fixture.txt").status == 201
+    conflict = checks_tokens.put_contents(repo, actor, "fixture.txt")
+    assert conflict.status == 409
+    assert "sha" in str(conflict.get("message"))

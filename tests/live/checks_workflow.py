@@ -38,11 +38,20 @@ def check_09_branch_workflow_blind(ctx: Ctx) -> CheckResult:
     finally:
         drop_branch(repo, pusher, branch)
     rows = [f"job {name}: {state}" for name, state in sorted(jobs.items())]
-    reads = [jobs.get("with-env"), jobs.get("no-env")]
-    if "with-env" not in jobs or "no-env" not in jobs:
-        raise Precondition(f"the probe run has no with-env/no-env jobs ({sorted(jobs)})")
-    if "success" in reads:
-        return failed("9", "a branch workflow read the canary environment secret", rows)
+    if jobs.get("control") != "success":
+        raise Precondition("workflow execution control did not succeed")
+    details = need(repo.call("GET", f"actions/runs/{run['id']}/jobs", pusher), {200}, "jobs")
+    items = details.get("jobs")
+    probes = (
+        {j.get("name"): j for j in items if isinstance(j, dict)} if isinstance(items, list) else {}
+    )
+    for name in ("with-env", "no-env"):
+        job = probes.get(name, {})
+        steps = {s.get("name"): s.get("conclusion") for s in job.get("steps", [])}
+        if steps.get("secret-present") == "success":
+            return failed("9", "a branch workflow read the canary environment secret", rows)
+        if job.get("conclusion") != "success" or steps.get("secret-absent") != "success":
+            raise Precondition("secret absence was not demonstrated by a successful probe")
     return passed("9", "a pusher's branch workflow cannot read the environment secret", rows)
 
 
@@ -84,9 +93,11 @@ def _pin(ctx: Ctx, repo: Repo, default: str) -> list[str]:
     pinned = [
         f"{c.get('context')} app_id={c.get('app_id')}"
         for c in (checks if isinstance(checks, list) else [])
-        if isinstance(c, dict) and c.get("context") == CHECK_NAME
+        if isinstance(c, dict)
+        and c.get("context") == CHECK_NAME
+        and c.get("app_id") == int(ctx.config.app_id)
     ]
-    if not any(f"app_id={ctx.config.app_id}" in p for p in pinned):
+    if not pinned:
         raise Precondition(f"{CHECK_NAME!r} is not required and pinned to the judge App")
     return pinned
 
@@ -116,6 +127,22 @@ def check_11_required_check_source(ctx: Ctx) -> CheckResult:
         run = completed_run(ctx, repo, pusher, sha, "live-probe.yml", "live-probe")
         if run is None:
             raise Precondition("the branch workflow never completed")
+        jobs = job_conclusions(repo, pusher, run)
+        if jobs.get("fake-check") != "success":
+            raise Precondition("the forged-check job did not succeed")
+        checks = need(repo.call("GET", f"commits/{sha}/check-runs", pusher), {200}, "check runs")
+        items = checks.get("check_runs")
+        if not isinstance(items, list) or not any(
+            isinstance(c, dict)
+            and c.get("head_sha") == sha
+            and c.get("name") == CHECK_NAME
+            and c.get("conclusion") == "success"
+            and isinstance(c.get("app"), dict)
+            and c["app"].get("slug") == "github-actions"
+            and c["app"].get("id") != int(ctx.config.app_id)
+            for c in items
+        ):
+            raise Precondition("no successful GitHub Actions forged check exists on the target SHA")
         fake = poll(
             lambda: _state(repo, number, ctx) in {"blocked", "clean", "unstable"},
             sleep=ctx.sleep,

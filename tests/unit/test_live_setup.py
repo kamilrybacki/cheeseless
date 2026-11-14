@@ -31,6 +31,11 @@ def _load() -> ModuleType:
 setup = _load()
 
 
+@pytest.fixture(autouse=True)
+def ownership_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(setup, "OWNERSHIP_FILE", tmp_path / "ownership.json")
+
+
 class FakeApi:
     """In-memory GitHub: repos, rulesets, files, environment policies."""
 
@@ -51,7 +56,11 @@ class FakeApi:
             rest = "/".join(parts[3:])
             known = full in self.repos
             if method == "GET" and rest == "":
-                return (200, {"default_branch": "main"}) if known else (404, None)
+                return (
+                    (200, {"default_branch": "main", "id": sum(full.encode())})
+                    if known
+                    else (404, None)
+                )
             if method == "DELETE" and rest == "":
                 self.deleted.append(full)
                 self.repos.discard(full)
@@ -82,7 +91,7 @@ class FakeApi:
                 return 200, None
         if method == "POST" and path in {"user/repos", "orgs/o/repos"}:
             self.repos.add(f"o/{body['name']}")  # type: ignore[index]
-            return 201, None
+            return 201, {"id": sum(f"o/{body['name']}".encode())}
         return 404, None
 
 
@@ -168,7 +177,7 @@ def test_same_repo_adds_role() -> None:
 def test_teardown_only_canary() -> None:
     api = FakeApi({"o/cheeseless-canary-t-ledger", "o/keepme"})
     setup.run_teardown(api, _plan(), apply=True, say=lambda _: None)
-    assert api.deleted == ["o/cheeseless-canary-t-ledger"]
+    assert api.deleted == []
     assert "o/keepme" in api.repos
 
 
@@ -252,7 +261,16 @@ def test_manifest_flow_end_to_end(tmp_path: Path) -> None:
     api = Conv()
     worker = threading.Thread(
         target=lambda: result.update(
-            id=setup.run_manifest(api, "o", key, org=False, apply=True, say=say, wait=10)
+            id=setup.run_manifest(
+                api,
+                "o",
+                key,
+                org=False,
+                apply=True,
+                say=say,
+                wait=10,
+                convert=lambda code: api.call("POST", f"app-manifests/{code}/conversions")[1],
+            )
         )
     )
     worker.start()
@@ -281,3 +299,76 @@ def test_manifest_requests_least_permissions() -> None:
 def test_workflows_match_probe_expectations() -> None:
     assert "cheeseless-judge" in setup.JUDGE_WORKFLOW
     assert setup.SECRET_NAME in setup.JUDGE_WORKFLOW
+
+
+def test_preexisting_repo_is_never_owned_or_deleted(tmp_path: Path) -> None:
+    api = FakeApi(("o/cheeseless-canary-t-ledger", "o/cheeseless-canary-t-same"))
+    path = tmp_path / "ownership.json"
+    setup.run_setup(api, FakeSecrets(), _plan(), apply=True, say=lambda _: None, manifest_path=path)
+    setup.run_teardown(api, _plan(), apply=True, say=lambda _: None, manifest_path=path)
+    assert "o/cheeseless-canary-t-ledger" not in api.deleted
+    assert "o/cheeseless-canary-t-same" not in api.deleted
+
+
+def test_conversion_uses_https_without_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("conversion invoked a subprocess")
+
+    monkeypatch.setattr(setup.subprocess, "run", forbidden)
+    seen = []
+
+    def opener(request: Any, *, timeout: float) -> Any:
+        seen.append((request.full_url, request.method, timeout))
+        return io.BytesIO(b'{"id": 42, "pem": "fixture"}')
+
+    code = "".join(["one", "time"])
+    assert setup.convert_manifest(code, opener=opener)["id"] == 42
+    assert seen == [(f"https://api.github.com/app-manifests/{code}/conversions", "POST", 30)]
+
+
+def test_teardown_deletes_owned_ids_only_and_preserves_ownership_on_rerun(tmp_path: Path) -> None:
+    api = FakeApi()
+    path = tmp_path / "ownership.json"
+    for _ in range(2):
+        setup.run_setup(
+            api, FakeSecrets(), _plan(), apply=True, say=lambda _: None, manifest_path=path
+        )
+    data = json.loads(path.read_text())
+    assert all(entry["created"] is True and isinstance(entry["id"], int) for entry in data.values())
+    setup.run_teardown(api, _plan(), apply=False, say=lambda _: None, manifest_path=path)
+    assert not api.deleted
+    setup.run_teardown(api, _plan(), apply=True, say=lambda _: None, manifest_path=path)
+    assert set(api.deleted) == set(data)
+
+
+def test_teardown_refuses_replaced_repository_id(tmp_path: Path) -> None:
+    full = "o/cheeseless-canary-t-ledger"
+    api = FakeApi((full,))
+    path = tmp_path / "ownership.json"
+    path.write_text(json.dumps({full: {"id": 1, "created": True}}))
+    with pytest.raises(setup.SetupError, match="ID changed"):
+        setup.run_teardown(api, _plan(), apply=True, say=lambda _: None, manifest_path=path)
+    assert not api.deleted
+
+
+def test_teardown_refuses_noncanary_manifest_entry(tmp_path: Path) -> None:
+    path = tmp_path / "ownership.json"
+    path.write_text(json.dumps({"o/precious": {"id": 1, "created": True}}))
+    api = FakeApi()
+    with pytest.raises(setup.SetupError, match="not a"):
+        setup.run_teardown(api, _plan(), apply=True, say=lambda _: None, manifest_path=path)
+    assert not api.deleted
+
+
+def test_conversion_errors_hide_code_and_response_body() -> None:
+    code = "".join(["one", "time"])
+
+    def broken(*args: Any, **kwargs: Any) -> Any:
+        raise ValueError(code + " response-private-material")
+
+    with pytest.raises(setup.SetupError) as caught:
+        setup.convert_manifest(code, opener=broken)
+    assert code not in str(caught.value)
+    assert "response-private-material" not in str(caught.value)

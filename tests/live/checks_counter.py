@@ -11,7 +11,15 @@ from tests.live.model import (
     passed,
     precondition_missing,
 )
-from tests.live.ref_ops import REJECT, Precondition, Repo, need, sha_of
+from tests.live.ref_ops import (
+    REJECT,
+    Precondition,
+    Repo,
+    need,
+    protection_rejection,
+    sha_of,
+    write_control,
+)
 from tests.live.rulesets import list_response, load_rulesets, require_b, ruleset_a, ruleset_b
 
 ACTORS = ("pusher", "budget", "app")
@@ -31,7 +39,7 @@ def expectation(actor: str, op: str) -> tuple[frozenset[int], str]:
             return frozenset({201}), "accepted (201)"
         if op == "fast_forward":
             return frozenset({200}), "accepted (200)"
-    return REJECT, "rejected (401/403/422)"
+    return REJECT, "rejected with ruleset evidence (403/422)"
 
 
 def _tokens(ctx: Ctx) -> dict[str, Token]:
@@ -109,16 +117,24 @@ def check_03_ruleset_matrix(ctx: Ctx) -> CheckResult:
         raise Precondition("Ruleset A (restrict deletion, block force push) is not active")
     _require_pusher_write(ctx, repo)
     tokens = _tokens(ctx)
-    branch, base = _probe(ctx, repo, "matrix")
+    for name, credential in tokens.items():
+        write_control(repo, credential, ctx.random_hex() + "-" + name)
     app = tokens["app"]
     rows: list[str] = []
     bad = 0
     for actor in ACTORS:
         token = tokens[actor]
         for op in OPS:
+            branch, base = _probe(ctx, repo, f"matrix-{actor}-{op}")
+            tip = repo.child(base, app, "independent operation base")
+            need(repo.update_ref(branch, tip, app, force=False), {200}, "prepare matrix cell")
             resp = _attempt(ctx, repo, branch, base, op, actor, token, app)
             codes, text = expectation(actor, op)
-            ok = resp.status in codes
+            ok = (
+                (protection_rejection(resp) and resp.status in codes)
+                if codes == REJECT
+                else resp.status in codes
+            )
             bad += 0 if ok else 1
             rows.append(
                 f"{actor}/{op}: HTTP {resp.status}, expected {text}: {'ok' if ok else 'MISMATCH'}"
@@ -196,6 +212,7 @@ def check_12_creation_rejected(ctx: Ctx) -> CheckResult:
     repo = Repo(ctx.client, ctx.config.ledger_repo)
     require_b(ctx)
     _require_pusher_write(ctx, repo)
+    write_control(repo, ctx.config.pusher_token, ctx.random_hex() + "-12")
     app = ctx.app_token()
     base = sha_of(
         need(repo.call("GET", f"git/ref/heads/{repo.default_branch(app)}", app), {200}, "base"),
@@ -205,6 +222,6 @@ def check_12_creation_rejected(ctx: Ctx) -> CheckResult:
     resp = repo.create_ref(
         f"cheeseless/budget/live-{ctx.random_hex()}-new", base, ctx.config.pusher_token
     )
-    if resp.status in REJECT:
+    if protection_rejection(resp) and resp.status in REJECT:
         return passed("12", "branch creation is refused under Ruleset B", [resp.meta()])
-    return failed("12", "creation was not refused with 401, 403 or 422", [resp.meta()])
+    return failed("12", "creation was not refused by the ruleset", [resp.meta()])

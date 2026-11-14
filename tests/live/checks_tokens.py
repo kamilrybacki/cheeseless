@@ -6,10 +6,15 @@ import base64
 
 from tests.live.github_client import Response, Token
 from tests.live.model import CheckResult, Ctx, failed, guarded, not_applicable, passed
-from tests.live.ref_ops import REJECT, SCOPE_DENIED, Precondition, Repo, need, sha_of
-
-# A write to a protected branch may also answer 409 (the contents API reports it so).
-PROTECTED = REJECT | {409}
+from tests.live.ref_ops import (
+    SCOPE_DENIED,
+    Precondition,
+    Repo,
+    need,
+    protection_rejection,
+    sha_of,
+    write_control,
+)
 
 
 def put_contents(repo: Repo, token: Token, path: str, branch: str | None = None) -> Response:
@@ -38,6 +43,8 @@ def post_check_run(repo: Repo, token: Token, sha: str, name: str) -> Response:
 
 
 def _denied(label: str, resp: Response, rows: list[str]) -> bool:
+    if resp.status == 401:
+        raise Precondition("credential authentication failed")
     ok = resp.status in SCOPE_DENIED
     rows.append(f"{label}: {resp.meta()}: {'denied' if ok else 'NOT DENIED'}")
     return ok
@@ -47,12 +54,13 @@ def _denied(label: str, resp: Response, rows: list[str]) -> bool:
 def check_06_budget_token_scope(ctx: Ctx) -> CheckResult:
     judged = Repo(ctx.client, ctx.config.judged_repo)
     actor = ctx.budget_token()
-    sha = head_sha(ctx, judged)  # control: the App itself can read the judged repository
+    write_control(Repo(ctx.client, ctx.config.ledger_repo), actor, ctx.random_hex() + "-6")
+    sha = head_sha(ctx, judged)
     rows: list[str] = []
     okays = [
         _denied(
             "write contents in the judged repo",
-            put_contents(judged, actor, "live-probe-6.txt"),
+            put_contents(judged, actor, f"live-probe-6-{ctx.random_hex()}.txt"),
             rows,
         ),
         _denied(
@@ -79,12 +87,12 @@ def check_07_verdict_token_scope(ctx: Ctx) -> CheckResult:
     okays = [
         _denied(
             "write contents in the judged repo",
-            put_contents(judged, actor, "live-probe-7.txt"),
+            put_contents(judged, actor, f"live-probe-7-{ctx.random_hex()}.txt"),
             rows,
         ),
         _denied(
             "write contents in the ledger repo",
-            put_contents(ledger, actor, "live-probe-7.txt"),
+            put_contents(ledger, actor, f"live-probe-7-{ctx.random_hex()}.txt"),
             rows,
         ),
     ]
@@ -100,7 +108,9 @@ def check_08_same_repo_protection(ctx: Ctx) -> CheckResult:
     repo = Repo(ctx.client, ctx.config.same_repo)
     app = ctx.minter.mint(ctx.config.same_repo)
     branch = repo.default_branch(app)
-    resp = put_contents(repo, app, "live-probe-8.txt", branch)
-    if resp.status in PROTECTED:
+    suffix = ctx.random_hex() + "-8"
+    write_control(repo, app, suffix)
+    resp = put_contents(repo, app, f"live-probe-{suffix}.txt", branch)
+    if protection_rejection(resp):
         return passed("8", "default-branch protection binds the App", [resp.meta()])
     return failed("8", "the App wrote to the protected default branch", [resp.meta()])

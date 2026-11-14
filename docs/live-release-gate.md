@@ -54,3 +54,25 @@ Repo names are `OWNER/NAME`. The suite never reads a secret value into output.
 
 `uv run --frozen pytest tests/unit/test_live_checks.py tests/unit/test_live_setup.py`
 prove the decision logic and the setup script against fakes, with no network.
+
+Setup records repository full names, numeric IDs and creation ownership in
+`.cheeseless-live-ownership.json` (override with `--ownership-manifest PATH`). Keep this
+non-secret file for teardown, and use the same owner, suffix and `--same-repo` setting.
+Existing repositories are recorded as unowned; rerunning setup preserves ownership only
+when the numeric ID still matches. Creation is recorded before later setup steps, so a
+partial setup can still be cleaned up. Missing ownership records authorize no deletion.
+Teardown requires `--apply`, deletes only configured canary repositories recorded as
+created by setup, and verifies their numeric IDs immediately before deletion. An ID
+change refuses teardown; an unconfigured `same` repository is never deleted. Protect the
+manifest from modification by other users: it is the local ownership record.
+
+The App manifest code is exchanged in-process over verified HTTPS with a timeout;
+it never enters subprocess arguments, environment variables or diagnostic output.
+
+Protection probes first prove that the same credential can write to an unprotected
+control branch, then remove that branch and its file. Authentication failures and
+unattributable conflicts are missing preconditions. Matrix cells use independent refs
+and require ruleset evidence. Secret isolation requires a successful runner control and
+successful secret-absence steps; cancellation or infrastructure failure cannot pass.
+Required-check spoofing verifies a successful GitHub Actions check on the exact SHA
+before measuring mergeability, and the required context/App ID pin uses exact equality.

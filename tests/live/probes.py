@@ -22,18 +22,32 @@ on: push
 permissions:
   checks: write
 jobs:
+  control:
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"
   with-env:
     runs-on: ubuntu-latest
     environment: {ENV}
     steps:
-      - name: read-secret
+      - name: secret-absent
+        env:
+          S: ${{{{ secrets.{secret} }}}}
+        run: test -z "$S"
+      - name: secret-present
+        if: failure()
         env:
           S: ${{{{ secrets.{secret} }}}}
         run: test -n "$S"
   no-env:
     runs-on: ubuntu-latest
     steps:
-      - name: read-secret
+      - name: secret-absent
+        env:
+          S: ${{{{ secrets.{secret} }}}}
+        run: test -z "$S"
+      - name: secret-present
+        if: failure()
         env:
           S: ${{{{ secrets.{secret} }}}}
         run: test -n "$S"
