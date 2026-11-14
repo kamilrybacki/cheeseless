@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from cheeseless import __version__
 from cheeseless.adapters.inbound.mapping import agent_view_to_dict, result_to_dict
@@ -29,6 +31,44 @@ class Context:
     runner: SuiteRunner
     sandbox: Sandbox
     store: Store
+
+
+def split_agent_argv(argv: Sequence[str]) -> tuple[list[str], list[str] | None]:
+    """Split ``argv`` at the first ``--``: (options, agent command or ``None``)."""
+    items = list(argv)
+    if "--" not in items:
+        return items, None
+    cut = items.index("--")
+    return items[:cut], items[cut + 1 :]
+
+
+def _add_session_parser(sub: Any) -> None:
+    ses = sub.add_parser(
+        "session",
+        help="Run a real coding-agent CLI in the sandbox: session [options] -- AGENT [ARGS...]",
+    )
+    ses.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)
+    ses.add_argument("--task", default=None)
+    ses.add_argument("--profile", choices=("local", "ci"), default="local")
+    ses.add_argument("--timeout", type=float, default=300.0)
+    ses.add_argument("--egress-policy", type=Path, default=None, metavar="FILE")
+    ses.add_argument("--ro", type=Path, action="append", default=[], metavar="PATH")
+    ses.add_argument("--home-seed", action="append", default=[], metavar="REL=SRC")
+    ses.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
+    ses.add_argument(
+        "--evidence-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="New directory outside the repo; HOME and the projection list are copied into it.",
+    )
+    ses.add_argument(
+        "--projection",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Empty or absent directory outside the repo; kept after the session for promote.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -68,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     uds = sub.add_parser("serve-uds", help="Run the verifier UDS server for one session.")
     uds.add_argument("--socket", type=Path, default=None)
-    uds.add_argument("--state-dir", type=Path, default=None)
+    uds.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)
     uds.add_argument("--task", default=None)
     uds.add_argument("--worktree", type=Path, default=None)
     uds.add_argument("--profile", choices=("local", "ci"), default="local")
@@ -96,6 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     cij.add_argument("--timeout", type=float, default=300.0)
     cij.add_argument("--json", action="store_true")
 
+    _add_session_parser(sub)
     return parser
 
 

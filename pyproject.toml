@@ -39,6 +39,10 @@ packages = ["src/cheeseless"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=cheeseless --cov-report=term-missing"
+markers = [
+    "slow: long-running test",
+    "e2e_agent: runs a real coding-agent CLI; skipped unless CHEESELESS_E2E_AGENT=1",
+]
 
 [tool.coverage.run]
 source = ["cheeseless"]

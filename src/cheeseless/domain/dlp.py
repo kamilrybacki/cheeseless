@@ -654,6 +654,7 @@ def _decompress_xz(data: bytes, budget: _ArchiveBudget) -> bytes:
         raise _ArchiveBlocked("compressed stream expands beyond the cap")
     return raw
 
+
 __all__ = [
     "ARCHIVE_INPUT_LIMIT",
     "ArchiveInspection",

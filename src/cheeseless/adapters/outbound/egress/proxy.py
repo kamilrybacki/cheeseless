@@ -79,9 +79,7 @@ class EgressProxy:
         )
         if self.config.upstream_trusted_ca is not None:
             opts.ssl_verify_upstream_trusted_ca = str(self.config.upstream_trusted_ca)
-        addon = EgressAddon(
-            self.config.policy, DlpScanner(self.fingerprints), self.on_hit
-        )
+        addon = EgressAddon(self.config.policy, DlpScanner(self.fingerprints), self.on_hit)
 
         def runner() -> None:
             async def main() -> None:

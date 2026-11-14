@@ -7,6 +7,7 @@ import os
 import secrets
 import select
 import shutil
+import signal
 import stat
 import subprocess  # noqa: S404 - the sandbox is a process boundary by design
 import sys
@@ -14,14 +15,19 @@ import sysconfig
 import tempfile
 import threading
 import time as _time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import cheeseless
-from cheeseless.adapters.inbound.cli.main import Context, build_parser, dispatch
+from cheeseless.adapters.inbound.cli.main import (
+    Context,
+    build_parser,
+    dispatch,
+    split_agent_argv,
+)
 from cheeseless.adapters.inbound.mcp.server import build_mcp_server, run_stdio
 from cheeseless.adapters.inbound.uds.client import UdsVerifierClient
 from cheeseless.adapters.inbound.uds.server import SessionConfig, UdsVerifierServer
@@ -42,7 +48,19 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.egress_supervisor import EgressBlock, EgressSupervisor
 from cheeseless.domain.budget import Pool
-from cheeseless.domain.egress_policy import EgressPolicy
+from cheeseless.domain.egress_policy import EgressPolicy, PolicyError
+from cheeseless.session_files import copy_evidence, seed_home, write_projection_list
+from cheeseless.session_options import (
+    SessionExtras,
+    SessionOptionError,
+    check_extra_env,
+    ensure_outside_all,
+    load_egress_policy,
+    parse_key_value,
+    parse_seed_spec,
+    prepare_extras,
+)
+from cheeseless.session_options import within as _within
 
 SESSION_START_TIMEOUT = 10.0
 MAX_INFO_BYTES = 1 << 20
@@ -87,15 +105,6 @@ def _private_dir(prefix: str) -> Path:
     return path
 
 
-def _within(path: Path, root: Path) -> bool:
-    real_path = os.path.realpath(path)
-    real_root = os.path.realpath(root)
-    try:
-        return os.path.commonpath((real_path, real_root)) == real_root
-    except ValueError:
-        return False
-
-
 def _forbidden_roots(repo: Any) -> tuple[Path, ...]:
     return (Path(repo.root), Path(repo.common_dir()))
 
@@ -104,6 +113,108 @@ def _ensure_outside(path: Path, repo: Any, what: str) -> None:
     for root in _forbidden_roots(repo):
         if _within(path, root):
             raise RuntimeError(f"{what} must live outside the trusted repository")
+
+
+_RESERVED_ENV = (*profiles.BASE_ENV, EGRESS_SOCKET_ENV, EGRESS_PORT_ENV, EGRESS_READY_ENV)
+
+
+def _protected_roots(
+    ctx: Context, state_dir: Path | None, *explicit: Path | None
+) -> tuple[Path, ...]:
+    """Locations that protect hidden tests and must never be mounted, seeded or written."""
+    repo: Any = ctx.repo
+    return (
+        *_forbidden_roots(repo),
+        *repo.object_dirs(),
+        store_root(repo.common_dir(), _state_home(state_dir)),
+        _state_home(state_dir),
+        *(path for path in explicit if path is not None),
+    )
+
+
+PROTECTED_WALK_ENTRIES = 2_000_000
+PROTECTED_WALK_SECONDS = 60.0
+
+
+def _regular_inodes(root: Path, found: set[tuple[int, int]]) -> None:
+    deadline = _time.monotonic() + PROTECTED_WALK_SECONDS
+    entries = 0
+
+    def onerror(error: OSError) -> None:
+        raise error
+
+    try:
+        for dirpath, dirs, names in os.walk(root, followlinks=False, onerror=onerror):
+            for name in (*dirs, *names):
+                entries += 1
+                if entries > PROTECTED_WALK_ENTRIES:
+                    raise SessionOptionError("protected inode scan entry cap reached")
+                if _time.monotonic() > deadline:
+                    raise SessionOptionError("protected inode scan time cap reached")
+                info = os.lstat(os.path.join(dirpath, name))
+                if stat.S_ISLNK(info.st_mode):
+                    info = os.stat(os.path.join(dirpath, name))
+                    if stat.S_ISDIR(info.st_mode):
+                        raise SessionOptionError(
+                            "protected directory symlinks are an unsupported layout"
+                        )
+                if stat.S_ISREG(info.st_mode):
+                    found.add((info.st_dev, info.st_ino))
+    except OSError as exc:
+        raise SessionOptionError("protected inode scan cannot be inspected") from exc
+
+
+def _hidden_inodes(ctx: Context, frozen: Any, state_dir: Path | None) -> frozenset[tuple[int, int]]:
+    """``(st_dev, st_ino)`` of every hidden file, git object and store file.
+
+    A hard link outside the repository carries the same inode, so checking the inode is
+    the only path-independent way to keep hidden material out of a mount or a seed. Git
+    objects are included because a loose object is only zlib-compressed hidden content.
+    """
+    repo: Any = ctx.repo
+    found: set[tuple[int, int]] = set()
+    for blob in frozen.hidden_blobs:
+        try:
+            info = os.lstat(Path(repo.root) / blob.path)
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode):
+            found.add((info.st_dev, info.st_ino))
+    for objects in repo.object_dirs():
+        _regular_inodes(objects, found)
+    _regular_inodes(Path(repo.common_dir()), found)
+    _regular_inodes(store_root(repo.common_dir(), _state_home(state_dir)), found)
+    return frozenset(found)
+
+
+def _validate_extras(
+    protected: tuple[Path, ...],
+    hidden_inodes: frozenset[tuple[int, int]],
+    extra_read_only: Sequence[Path] | None,
+    home_seed: Mapping[str, Path] | None,
+    extra_env: Mapping[str, str] | None,
+) -> SessionExtras:
+    """Validate the opt-in mounts, seeds and env before any server or agent starts."""
+    return prepare_extras(
+        protected=protected,
+        temp_bases=(Path(tempfile.gettempdir()),),
+        reserved_env=_RESERVED_ENV,
+        extra_read_only=extra_read_only,
+        home_seed=home_seed,
+        extra_env=extra_env,
+        hidden_inodes=hidden_inodes,
+        reserved_mounts=profiles.RESERVED_MOUNTS,
+        sandbox_tmp=profiles.SANDBOX_TMP,
+    )
+
+
+def _merge_env(*groups: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+    """Concatenate env groups; a duplicate key is a bug, never an override."""
+    merged = tuple(pair for group in groups for pair in group)
+    keys = [key for key, _ in merged]
+    if len(keys) != len(set(keys)):
+        raise RuntimeError("duplicate environment variable in the agent environment")
+    return merged
 
 
 def _wait_for_socket(path: Path, thread: threading.Thread) -> None:
@@ -165,14 +276,14 @@ def _launch_agent(
             stdout=subprocess.PIPE if stdio else None,
             text=stdio,
         )
-    except Exception:
+    except BaseException:
         os.close(read_fd)
         os.close(write_fd)
         raise
     os.close(write_fd)
     try:
         raw = _read_info(read_fd, _time.monotonic() + timeout)
-    except Exception:
+    except BaseException:
         _terminate(proc)
         raise
     finally:
@@ -395,9 +506,42 @@ def serve_mcp(
     return 0
 
 
+def _run_session_command(args: Any, agent: list[str] | None) -> int:
+    """Map ``session`` options to a host session; usage and validation errors exit 2."""
+    try:
+        if not agent:
+            raise SessionOptionError("an agent command is required after --")
+        env = dict(check_extra_env(dict(parse_key_value(i) for i in args.env), _RESERVED_ENV))
+        seeds = dict(parse_seed_spec(item) for item in args.home_seed)
+        policy = load_egress_policy(args.egress_policy) if args.egress_policy else None
+        return launch_host_session(
+            state_dir=args.state_dir,
+            task_id=args.task,
+            profile=args.profile,
+            timeout=args.timeout,
+            agent_command=agent,
+            agent_stdio=False,
+            egress_policy=policy,
+            extra_read_only=tuple(args.ro),
+            home_seed=seeds,
+            extra_env=env,
+            evidence_dir=args.evidence_dir,
+            projection_dir=args.projection,
+        )
+    except (SessionOptionError, PolicyError) as exc:
+        print(f"session: {exc}", file=sys.stderr)
+        return 2
+    except (ValueError, RuntimeError) as exc:
+        # Startup refusals (no active task, stray hidden material, sandbox checks)
+        # are operator errors, not crashes; teardown already ran in host_session.
+        print(f"session: {exc}", file=sys.stderr)
+        return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    head, agent = split_agent_argv(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(head)
     if args.command is None:
         parser.print_help()
         return 2
@@ -418,6 +562,8 @@ def main(argv: list[str] | None = None) -> int:
             task_id=getattr(args, "task", None),
             timeout=getattr(args, "timeout", 10.0),
         )
+    if args.command == "session":
+        return _run_session_command(args, agent)
     if args.command in ("ci-export", "ci-judge"):
         from cheeseless.bootstrap_ci import run as run_ci  # noqa: PLC0415 - avoids a cycle
 
@@ -442,6 +588,10 @@ def host_session(
     egress_policy: EgressPolicy | None = None,
     egress_upstream_trusted_ca: Path | None = None,
     egress_insecure_upstream: bool = False,
+    extra_read_only: Sequence[Path] | None = None,
+    home_seed: Mapping[str, Path] | None = None,
+    extra_env: Mapping[str, str] | None = None,
+    evidence_dir: Path | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Run one isolated agent session with authenticated verifier and DLP egress.
 
@@ -450,6 +600,10 @@ def host_session(
     read-only client runtime is mounted outside the projection. The sandbox PID
     namespace is pinned before the agent may connect and kept open until teardown.
     Egress is an empty netns plus one UDS, exposed to the agent only as loopback TCP.
+
+    ``extra_read_only``, ``home_seed`` and ``extra_env`` are opt-in and validated against
+    the protected locations (and their ancestors) before anything starts; ``extra_env``
+    is additive and can never override a variable the session sets.
     """
     ctx = build_context(state_dir, cwd)
     if task_id is None:
@@ -457,23 +611,11 @@ def host_session(
     if task_id is None:
         raise ValueError("no active task")
     frozen, _ = ctx.store.load_task(task_id)
-    sandbox = ctx.sandbox
-    if not isinstance(sandbox, BwrapSandbox):
-        raise RuntimeError("host sessions require the bubblewrap sandbox")
-    bwrap = sandbox.binary()
-    fingerprints = ctx.store.load_fingerprints(task_id)
-    if fingerprints is None:
-        raise RuntimeError("the frozen task has no DLP fingerprints; re-freeze it")
-    policy = egress_policy or EgressPolicy(allowed_hosts=frozenset())
-    identity_markers = {
-        marker
-        for marker in (frozen.contract.lineage_id, Path(ctx.repo.root).name.lower())
-        if marker
-    }
-    policy = replace(
-        policy,
-        denied_markers=tuple(sorted(set(policy.denied_markers) | identity_markers)),
-    )
+    protected = _protected_roots(ctx, state_dir, projection_dir, socket_dir)
+    hidden_inodes: frozenset[tuple[int, int]] = frozenset()
+    if extra_read_only or home_seed:
+        hidden_inodes = _hidden_inodes(ctx, frozen, state_dir)
+    extras = _validate_extras(protected, hidden_inodes, extra_read_only, home_seed, extra_env)
 
     projection_owned = projection_dir is None
     dir_owned = socket_dir is None
@@ -494,6 +636,28 @@ def host_session(
     blocked = threading.Event()
     holder: dict[str, subprocess.Popen[Any] | None] = {"proc": None}
     try:
+        if evidence_dir is not None:
+            ensure_outside_all(evidence_dir, protected, "evidence directory")
+            if os.path.lexists(evidence_dir):
+                raise SessionOptionError("evidence directory must not already exist")
+        sandbox = ctx.sandbox
+        if not isinstance(sandbox, BwrapSandbox):
+            raise RuntimeError("host sessions require the bubblewrap sandbox")
+        bwrap = sandbox.binary()
+        fingerprints = ctx.store.load_fingerprints(task_id)
+        if fingerprints is None:
+            raise RuntimeError("the frozen task has no DLP fingerprints; re-freeze it")
+        policy = egress_policy or EgressPolicy(allowed_hosts=frozenset())
+        identity_markers = {
+            marker
+            for marker in (frozen.contract.lineage_id, Path(ctx.repo.root).name.lower())
+            if marker
+        }
+        policy = replace(
+            policy,
+            denied_markers=tuple(sorted(set(policy.denied_markers) | identity_markers)),
+        )
+
         if projection_dir is None:
             projection_dir = Path(tempfile.mkdtemp(prefix="cheeseless-projection-"))
             os.rmdir(projection_dir)
@@ -507,6 +671,7 @@ def host_session(
         _ensure_outside(projection_dir, ctx.repo, "projection")
 
         home_dir = _private_dir("cheeseless-home-")
+        seed_home(home_dir, extras.seeds)
         if socket_dir is None:
             socket_dir_path = _private_dir("cheeseless-uds-")
         else:
@@ -614,7 +779,9 @@ def host_session(
         command = _bridge_command(python, ready_path, egress_ready, agent_args)
 
         seccomp_fd = seccomp.program_fd()
-        env = (*agent_env, *egress_ready_env)
+        env = _merge_env(agent_env, egress_ready_env, extras.env)
+
+        pinned_read_only = tuple((mount.fd, str(mount.path)) for mount in extras.read_only)
 
         def build_argv(info_fd: int) -> list[str]:
             return profiles.agent(
@@ -623,13 +790,15 @@ def host_session(
                 sockets=[socket_path, egress_socket],
                 home=home_dir,
                 read_only=[runtime.root, python_root, proxy.ca_cert_path],
+                pinned_read_only=pinned_read_only,
                 env=env,
                 command=command,
                 seccomp_fd=seccomp_fd,
                 info_fd=info_fd,
             )
 
-        proc, ns_fd = _launch_agent(build_argv, (seccomp_fd,), stdio=agent_stdio)
+        mount_fds = tuple(mount.fd for mount in extras.read_only)
+        proc, ns_fd = _launch_agent(build_argv, (*mount_fds, seccomp_fd), stdio=agent_stdio)
         holder["proc"] = proc
         os.close(seccomp_fd)
         seccomp_fd = None
@@ -648,6 +817,7 @@ def host_session(
             "agent_proc": proc,
             "server": server,
             "blocked": blocked,
+            "protected_roots": protected,
         }
     finally:
         for path in (ready_path, egress_ready):
@@ -683,22 +853,91 @@ def host_session(
             force_remove(socket_dir_path)
         if projection_owned and projection_dir is not None:
             force_remove(projection_dir)
+        for mount in extras.read_only:
+            try:
+                os.close(mount.fd)
+            except OSError:
+                pass
 
 
-def launch_host_session(*args: Any, **kwargs: Any) -> int:
+def _capture_evidence(info: Mapping[str, Any], dest: Path) -> None:
+    """Copy the sandbox HOME and list the projection while both still exist."""
+    try:
+        copy_evidence(
+            Path(info["home_dir"]),
+            dest,
+            protected=info["protected_roots"],
+        )
+        write_projection_list(Path(info["projection_dir"]), dest)
+    except (OSError, SessionOptionError) as exc:
+        print(f"evidence capture failed: {type(exc).__name__}", file=sys.stderr)
+
+
+TERMINATING_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
+class _Terminated(BaseException):
+    """Raised from a signal handler so ``host_session`` teardown still runs."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(signum)
+        self.signum = signum
+
+
+@contextmanager
+def _signals_raise(signums: Sequence[int] = TERMINATING_SIGNALS) -> Iterator[None]:
+    """Turn SIGTERM/SIGHUP into ``_Terminated`` once; later signals are ignored.
+
+    The default disposition kills the host without unwinding, which would leave
+    the throwaway HOME (seeded credentials), the egress CA key and the sockets
+    behind. Only the main thread may install handlers.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    fired = False
+
+    def handler(signum: int, _frame: object) -> None:
+        nonlocal fired
+        if fired:
+            return
+        fired = True
+        raise _Terminated(signum)
+
+    previous = {signum: signal.signal(signum, handler) for signum in signums}
+    try:
+        yield
+    finally:
+        for signum, old in previous.items():
+            signal.signal(signum, old)
+
+
+def launch_host_session(*args: Any, evidence_dir: Path | None = None, **kwargs: Any) -> int:
     """Run a host session until the agent exits or the operator interrupts."""
-    blocked = False
+    try:
+        with _signals_raise():
+            return _run_host_session(*args, evidence_dir=evidence_dir, **kwargs)
+    except _Terminated as exc:
+        print(f"session terminated by signal {exc.signum}; cleaned up", file=sys.stderr)
+        return 128 + exc.signum
+
+
+def _run_host_session(*args: Any, evidence_dir: Path | None, **kwargs: Any) -> int:
+    blocked = threading.Event()
     code = 0
-    with host_session(*args, **kwargs) as info:
+    with host_session(*args, evidence_dir=evidence_dir, **kwargs) as info:
         proc: subprocess.Popen[Any] = info["agent_proc"]
         blocked = info["blocked"]
         try:
             code = proc.wait()
         except KeyboardInterrupt:
             code = 0
+        if evidence_dir is not None:
+            _capture_evidence(info, evidence_dir)
     if blocked.is_set():
         return 1
     return 0 if code == 0 else (code if code > 0 else 1)
+
 
 serve_host_session = launch_host_session
 serve_session = launch_host_session

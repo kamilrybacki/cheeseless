@@ -51,6 +51,62 @@ class GitRepository:
     def common_dir(self) -> Path:
         return self._common
 
+    def object_dirs(self) -> tuple[Path, ...]:
+        """Effective object stores, including bounded recursive alternates.
+
+        Include the default store too: our hardened Git environment intentionally
+        ignores caller Git variables, but those paths must still stay protected.
+        """
+        raw = self._git.text("rev-parse", "--git-path", "objects")
+        default = Path(raw) if Path(raw).is_absolute() else self.root / raw
+        roots = [default]
+        if value := os.environ.get("GIT_OBJECT_DIRECTORY"):
+            effective = (
+                self._git.run(
+                    "rev-parse",
+                    "--git-path",
+                    "objects",
+                    extra_env={"GIT_OBJECT_DIRECTORY": value},
+                )
+                .decode()
+                .strip()
+            )
+            roots.append(Path(effective))
+        roots.extend(
+            Path(p)
+            for p in os.environ.get("GIT_ALTERNATE_OBJECT_DIRECTORIES", "").split(os.pathsep)
+            if p
+        )
+        found: set[Path] = set()
+
+        def visit(path: Path, depth: int) -> None:
+            real = path.resolve(strict=True)
+            if real in found:
+                return
+            if depth > 5:
+                raise RuntimeError("git object alternates exceed depth limit")
+            if not real.is_dir():
+                raise RuntimeError("git object storage is not a directory")
+            found.add(real)
+            alternates = real / "info" / "alternates"
+            try:
+                lines = alternates.read_text().splitlines()
+            except FileNotFoundError:
+                return
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                child = Path(line)
+                visit(child if child.is_absolute() else real / child, depth + 1)
+
+        try:
+            for root in roots:
+                visit(root if root.is_absolute() else self.root / root, 0)
+        except OSError as exc:
+            raise RuntimeError("git object storage cannot be inspected") from exc
+        return tuple(sorted(found))
+
     # -- reading ---------------------------------------------------------------------
 
     def _resolve(self, spec: str) -> str | None:

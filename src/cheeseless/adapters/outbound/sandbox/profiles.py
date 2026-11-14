@@ -24,6 +24,9 @@ ETC_ALLOW = ("/etc/ld.so.cache", "/etc/alternatives", "/etc/localtime")
 AGENT_ETC_ALLOW = ("/etc/ssl", "/etc/ca-certificates", "/etc/resolv.conf", "/etc/hosts")
 # The tmpfs mounted inside the sandbox; it never refers to the host /tmp.
 SANDBOX_TMP = "/tmp"  # noqa: S108
+# Host pseudo-filesystems the sandbox replaces with its own; mounting the host's
+# versions over them would leak the host kernel view.
+RESERVED_MOUNTS = ("/proc", "/dev", "/sys")
 BASE_ENV = {
     "PATH": "/usr/local/bin:/usr/bin:/bin",
     "HOME": SANDBOX_TMP,
@@ -176,6 +179,7 @@ def agent(
     read_only: Sequence[Path],
     env: Sequence[tuple[str, str]],
     command: Sequence[str],
+    pinned_read_only: Sequence[tuple[int, str]] = (),
     seccomp_fd: int | None = None,
     info_fd: int | None = None,
 ) -> list[str]:
@@ -186,6 +190,8 @@ def agent(
         args += ["--bind", str(path), str(path)]
     for path in read_only:
         args += ["--ro-bind", str(path), str(path)]
+    for fd, destination in pinned_read_only:
+        args += ["--ro-bind-fd", str(fd), destination]
     if info_fd is not None:
         args += ["--info-fd", str(info_fd)]
     if seccomp_fd is not None:
