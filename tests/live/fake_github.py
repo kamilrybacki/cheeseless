@@ -102,6 +102,8 @@ class FakeGitHub:
     def _route(self, method: str, path: str, label: str, body: object) -> Response:
         if path == "installation/token" and method == "DELETE":
             return Response(204)
+        if path.endswith("/"):  # live GitHub answers 404 for a trailing slash (found live)
+            return Response(404, {"message": "Not Found"})
         found = re.fullmatch(r"repos/([^/]+/[^/]+)(?:/(.*))?", path)
         if not found or found.group(1) not in self.repos:
             return Response(404, {"message": "Not Found"})
@@ -335,11 +337,32 @@ class FakeGitHub:
             )
             repo.checks.append((sha, "actions"))
         else:
+            # Live: the push runs the CI workflow; its completion starts the workflow_run judge,
+            # whose run carries the DEFAULT branch tip, never the probe commit (found live).
             ok = "success" if self.knobs.judge_succeeds else "failure"
-            self._run(repo, sha, "live-canary-judge.yml", "live-canary-judge", ok, {"judge": ok})
+            self._run(
+                repo, sha, "live-canary-ci.yml", "live-canary-ci", "success", {"noop": "success"}
+            )
+            tip = repo.refs[repo.default]
+            self._run(
+                repo,
+                tip,
+                "live-canary-judge.yml",
+                "live-canary-judge",
+                ok,
+                {"judge": ok},
+                event="workflow_run",
+            )
 
     def _run(
-        self, repo: RepoState, sha: str, wf: str, name: str, concl: str, jobs: dict[str, str]
+        self,
+        repo: RepoState,
+        sha: str,
+        wf: str,
+        name: str,
+        concl: str,
+        jobs: dict[str, str],
+        event: str = "push",
     ) -> None:
         rid = len(repo.runs) + 1
         repo.runs.append(
@@ -348,6 +371,7 @@ class FakeGitHub:
                 "head_sha": sha,
                 "workflow": wf,
                 "name": name,
+                "event": event,
                 "status": "completed",
                 "conclusion": concl,
             }
@@ -375,8 +399,14 @@ class FakeGitHub:
     def _list_runs(
         self, repo: RepoState, label: str, data: object, query: str, wf: str = ""
     ) -> Response:
-        sha = query.removeprefix("head_sha=")
-        runs = [r for r in repo.runs if r["head_sha"] == sha and (not wf or r["workflow"] == wf)]
+        params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+        runs = [
+            r
+            for r in repo.runs
+            if (not wf or r["workflow"] == wf)
+            and ("head_sha" not in params or r["head_sha"] == params["head_sha"])
+            and ("event" not in params or r["event"] == params["event"])
+        ]
         return Response(200, {"workflow_runs": runs})
 
     def _run_jobs(
