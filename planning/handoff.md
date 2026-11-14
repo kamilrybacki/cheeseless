@@ -1,13 +1,14 @@
 # Handoff — start here
 
-State on 2026-11-14: phases 0–11 are implemented and merged. PR #1 and PR #2 landed the
-core phases; PR #3 landed the cross-run CI budget counter; PR #4 landed
-`ci-budget-init`. Their heads are ancestors of `main` at `e93b8a3`. Branch
-`feat/phase-11-followups` closes the P11-11 items: the baked MCP shim, the per-request
-allow audit and the opt-in real-agent E2E harness. ADRs
-0001/0003/0005/0006/0007 were reworded to close H1–H4 and M2 and are `accepted` after
-cross-vendor review (ledger "ADR re-review, round 3"). Release (phase 12) is pending.
-This file is the entry point for a fresh session on this repository.
+State on 2026-11-14: phases 0–11 are implemented and merged. PR #1–#5 are merged and
+`main` is `924d953`; PR #1/#2 landed the core phases, PR #3 the cross-run CI budget
+counter, PR #4 `ci-budget-init`, and PR #5 the MCP identity and egress-audit follow-ups.
+Branch `feat/release-sanitizer` adds the phase 12 local release audit (tracked tree,
+local history including commit metadata, and built sdist/wheel) but is not merged yet.
+ADRs 0001/0003/0005/0006/0007 were reworded to close H1–H4 and M2 and are `accepted`
+after cross-vendor review (ledger "ADR re-review, round 3"). Release remains pending:
+a clean local audit is not a release-readiness claim. This file is the entry point for a
+fresh session on this repository.
 
 ## What cheeseless is
 
@@ -81,6 +82,23 @@ source of truth; changes land through `promote`, not hooks.
   per-criterion-only oracle for prompt authors; [`docs/egress-audit.md`](../docs/egress-audit.md)
   documents the audit schema.
 
+- Phase 12 local release audit (2026-11-14, ledger P12-1…P12-4): `scripts/release_audit.py`
+  scans the current tracked tree, every locally reachable git object plus commit
+  messages/authors/paths, and the real sdist/wheel built by `uv build`. The official
+  Gitleaks release is pinned to 8.30.1 with the published archive SHA-256
+  (`scripts/install_gitleaks.py`); missing, incompatible or failing scanners and
+  incomplete/capped/unsupported artifacts fail closed. Output is metadata only
+  (rule/path/commit/line/count), raw scanner reports are deleted unread, and the private
+  JSON report is `0600` outside the repository. The optional operator denylist also lives
+  outside the repo and reports rule/location only. Archive inspection refuses secret/auth
+  files, private state, `.env`, `acceptance/`, unsafe links/members, encryption and
+  expansion caps; package completeness is checked against `src/cheeseless`. The only
+  Gitleaks exception is `generic-api-key` for the synthetic fixture
+  `tests/fixtures/release_audit/synthetic-token.txt`. `docs/release-audit.md` is the
+  runbook and `.github/workflows/ci.yml` has a separate `release-audit` job. The local
+  run on this branch was CLEAN over 147 local refs and two built archives; nothing was
+  uploaded and no repository content was changed.
+
 ## Remaining
 
 - Phase 10 follow-ups: the cross-run CI budget counter and `ci-budget-init` are merged
@@ -95,7 +113,10 @@ source of truth; changes land through `promote`, not hooks.
   executed in this workspace. Run it with the manual command in
   [`docs/agent-prompting.md`](../docs/agent-prompting.md); it needs an operator-owned
   wrapper and credentials outside this repository.
-- Phase 12 sanitizer and publication.
+- Phase 12 sanitizer is implemented and the local audit is clean, but publication is
+  still blocked by the live GitHub P10-6 gate, the server-side `refs/pull/1`/`refs/pull/2`
+  history, explicit operator publication approval (Q34) and the opt-in real-agent check.
+  The local audit cannot see server-side refs and does not prove history is sanitized.
 - Residual phase 8 limits (P8-12): freeze requires two private sentinel markers per
   artifact class, but markers split across files or hidden behind other reversible
   encodings are not detected; 64-bit rolling-hash collisions are theoretical; bytes clean before a mid-stream
@@ -109,6 +130,26 @@ source of truth; changes land through `promote`, not hooks.
   allowed traffic (bounded per event and at most two events per request, but no global
   session cap), and a failed response-stage audit cannot retract response bytes already
   forwarded. Both are operator-visible residuals, not hidden-content paths.
+
+## Verification on 2026-11-14 (phase 12 release audit)
+
+```
+uv run --frozen pytest                 # 1181 passed, 2 skipped, 87.79% coverage
+uv run --frozen ruff check .           # clean
+uv run --frozen mypy                   # no issues in 82 source files
+uv run --frozen lint-imports           # 4 contracts kept
+uv run --frozen python scripts/gen_proto.py --check
+uv run --frozen python scripts/gen_errors_doc.py --check
+uv run --frozen cheeseless --version   # cheeseless 0.0.0
+uv run --frozen python scripts/release_audit.py \
+  --gitleaks /tmp/gitleaks --report-dir /tmp/cheeseless-release-audit-run2
+# CLEAN: 147 local refs, 2 built archives, Gitleaks 8.30.1
+```
+
+The audit run covered the current tree, full local history and the actual sdist/wheel.
+It did not contact a remote, upload a scan, inspect server-side pull refs, run the live
+GitHub `P10-6` checks or run the opt-in real-agent E2E. Two tests are skipped: the
+opt-in real-agent test and one environment-dependent test.
 
 ## Verification on 2026-11-13 (phase 10)
 

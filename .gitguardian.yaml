@@ -1,0 +1,6 @@
+version: 2
+secret:
+  ignored_paths:
+    # Intentional synthetic canary used to prove the release audit detects and
+    # allowlists exactly this value at exactly this path. Not a real credential.
+    - tests/fixtures/release_audit/synthetic-token.txt
