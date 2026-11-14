@@ -22,6 +22,7 @@ from cheeseless.adapters.outbound.ci.github_ledger import (
     LedgerSeeder,
     LedgerTransport,
     TransportError,
+    UrllibLedgerSeeder,
     UrllibLedgerTransport,
 )
 from cheeseless.adapters.outbound.ci.ledger_counter import LedgerCounter
@@ -209,7 +210,7 @@ def ci_judge(args: argparse.Namespace) -> int:
 
 
 def make_ledger_seeder(repo: str, token: str) -> LedgerSeeder:
-    return UrllibLedgerTransport(repo, token)
+    return UrllibLedgerSeeder(repo, token)
 
 
 def _seed(args: argparse.Namespace, token: str) -> int:
@@ -239,8 +240,8 @@ def _seed(args: argparse.Namespace, token: str) -> int:
     except LedgerMalformed:
         _err("ci-budget-init failed: the ledger returned a malformed response")
         return EXIT_USAGE
-    except TransportError:
-        _err("ci-budget-init failed: cannot reach the ledger")
+    except TransportError as exc:  # fixed messages: an HTTP status or an exception name
+        _err(f"ci-budget-init failed: cannot reach the ledger ({exc})")
         return EXIT_USAGE
     state = "seeded" if result.created else "already seeded"
     _err(f"{state} {branch_for(lineage)} in {repo_name}")
@@ -255,6 +256,9 @@ def ci_budget_init(args: argparse.Namespace) -> int:
     token = os.environ.pop(BUDGET_TOKEN_ENV, "")
     try:
         return _seed(args, token)
+    except Exception as exc:  # noqa: BLE001 - local setup (repository, store); never a trace
+        _err(f"ci-budget-init failed: {type(exc).__name__}")
+        return EXIT_USAGE
     finally:
         del token
 

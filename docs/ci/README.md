@@ -9,7 +9,9 @@ posts a check run with the aggregate status and visible-criterion statuses only.
 1. Create a dedicated **private ledger repository** under the same owner as the judged
    repository (for example `cheeseless-ledger`). It holds the cross-run CI budget counter,
    one branch `cheeseless/budget/<lineage>` per lineage. Pushers of the judged repository get
-   no access to it. See [CI budget ledger](#ci-budget-ledger) for the rulesets it needs.
+   no access to it. Initialize it with one commit (for example a README): GitHub's Git data
+   API refuses every write to an empty repository. See [CI budget ledger](#ci-budget-ledger)
+   for the rulesets it needs.
 2. Create a dedicated **judge GitHub App** with repository permissions *Checks: read and
    write* and *Contents: read and write*, install it on the judged repository and on the
    ledger repository only, and generate a private key. Each workflow token narrows these

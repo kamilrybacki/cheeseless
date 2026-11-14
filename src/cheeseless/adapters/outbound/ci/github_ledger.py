@@ -158,6 +158,9 @@ class UrllibLedgerTransport:
         self, method: str, path: str, ok: tuple[int, ...], what: str, body: object = None
     ) -> dict[str, object]:
         status, raw = self._call(method, path, body)
+        if status == 409 and method == "POST":
+            # GitHub's Git data API refuses every write to a repository with no commits.
+            raise TransportError(f"ledger {what} failed: the ledger repository is empty")
         if status not in ok:
             raise TransportError(f"ledger {what} failed: HTTP {status}")
         return _dict(_decode(raw, what), what)
@@ -251,7 +254,16 @@ class UrllibLedgerTransport:
             return UpdateResult.REJECTED
         raise TransportError(f"ledger ref update failed: HTTP {status}")
 
-    # -- LedgerSeeder -----------------------------------------------------------
+
+class UrllibLedgerSeeder(UrllibLedgerTransport):
+    """The operator's ``ci-budget-init`` transport: also writes roots and creates refs.
+
+    A separate class so the judge's transport object has no way to create a branch or a
+    parentless commit, even dynamically.
+    """
+
+    def __repr__(self) -> str:
+        return f"UrllibLedgerSeeder(repo={self._repo!r}, api_url={self._api!r})"
 
     def write_root(self, *, message: bytes, files: Mapping[str, bytes]) -> str:
         return self._write([], message, files)
@@ -261,7 +273,9 @@ class UrllibLedgerTransport:
         status, _ = self._call("POST", "git/refs", body)
         if status == 201:
             return UpdateResult.UPDATED
-        if status == 422:
+        # 422: ref exists or a ruleset refused it; 401/403: the token may not create it.
+        # Both are definite refusals; the seeder re-reads the ref to tell them apart.
+        if status in (401, 403, 422):
             return UpdateResult.REJECTED
         raise TransportError(f"ledger ref create failed: HTTP {status}")
 
@@ -283,6 +297,7 @@ __all__ = [
     "LedgerTransport",
     "TransportError",
     "UpdateResult",
+    "UrllibLedgerSeeder",
     "UrllibLedgerTransport",
     "default_send",
 ]

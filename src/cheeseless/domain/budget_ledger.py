@@ -95,7 +95,11 @@ def derive_key(store_key: bytes) -> bytes:
 
 
 def branch_for(lineage: str) -> str:
-    return BRANCH_PREFIX + lineage_id(lineage)
+    name = lineage_id(lineage)
+    # The lineage grammar allows names git refuses as a ref component.
+    if ".." in name or name.endswith((".", ".lock")):
+        raise LedgerInvalid("lineage id is not a valid git ref component")
+    return BRANCH_PREFIX + name
 
 
 def check_branch(branch: str, lineage: str) -> None:

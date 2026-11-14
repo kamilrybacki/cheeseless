@@ -71,10 +71,10 @@ source of truth; changes land through `promote`, not hooks.
 
 - Phase 10 follow-ups: the cross-run CI budget counter is implemented on
   `feat/release-blockers` (ledger P10-27, P10-28; retires P10-13 and P10-19). **P10-6 stays
-  open** until the operator release gate runs on real GitHub: P1 acceptance plus the eleven
+  open** until the operator release gate runs on real GitHub: P1 acceptance plus the thirteen
   live checks in section 6 of [`research/ci-budget-counter.md`](research/ci-budget-counter.md)
-  (P10-7). `cheeseless ci-budget-init` seeds the ledger root (P10-29); two more live checks
-  for it are listed there. The `ci.yml` bwrap step is verified (P10-8).
+  (P10-7); checks 12 and 13 cover `cheeseless ci-budget-init`, which seeds the ledger root
+  (P10-29, P10-30). The `ci.yml` bwrap step is verified (P10-8).
 - GitHub `refs/pull/1` and `refs/pull/2` still hold commits with the old author email;
   removing them needs GitHub Support or a fresh repository (operator decision).
 - Phase 11 follow-ups (ledger P11-11): bake socket/task into the MCP shim; per-request allow-log; an opt-in `e2e_agent` test that drives a real agent.

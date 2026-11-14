@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from cheeseless import bootstrap_ci
+from cheeseless.adapters.outbound.ci.github_ledger import TransportError
 from cheeseless.bootstrap import main
 from cheeseless.domain.budget_ledger import LedgerIdentity, branch_for, derive_key, run_record
 from cheeseless.domain.evaluation import SuiteRun, TestOutcome
@@ -243,3 +244,46 @@ def test_init_never_runs_the_judge_or_the_export(
     monkeypatch.setattr(bootstrap_ci, "ci_judge", boom)
     monkeypatch.setattr(bootstrap_ci, "ci_export", boom)
     assert _init(frozen) == 0
+
+
+def test_the_real_seeder_can_seed_but_the_judge_transport_cannot() -> None:
+    seeder = bootstrap_ci.make_ledger_seeder(LEDGER_REPO, FAKE_BUDGET_TOKEN)
+    judge = bootstrap_ci.make_ledger_transport(LEDGER_REPO, FAKE_BUDGET_TOKEN)
+    assert callable(seeder.create_ref) and callable(seeder.write_root)
+    assert not hasattr(judge, "create_ref") and not hasattr(judge, "write_root")
+
+
+def test_outside_a_repository_is_a_usage_error_without_a_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ledger: FakeLedgerTransport,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    assert _init(tmp_path / "state") == 2
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "ci-budget-init failed" in out.err
+    assert "Traceback" not in out.err
+    assert FAKE_BUDGET_TOKEN not in out.err
+    assert ledger.commits == {}
+
+
+def test_a_transport_refusal_reason_reaches_the_operator(
+    frozen: Path,
+    ledger: FakeLedgerTransport,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def empty(**kwargs: object) -> str:
+        raise TransportError("ledger blob write failed: the ledger repository is empty")
+
+    monkeypatch.setattr(ledger, "write_root", empty)
+    assert _init(frozen) == 2
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "repository is empty" in out.err
+    assert FAKE_BUDGET_TOKEN not in out.err
