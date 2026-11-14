@@ -75,9 +75,14 @@ reaches hidden execution appends one HMAC'd record to the lineage branch with a 
 fast-forward-only ref update, keyed by the workflow run id and attempt. A re-run is a new
 attempt and a new charge. Failures before the hidden run (protected path, drift, build,
 smoke) are never charged; once reserved, a charge is kept whatever happens. A missing,
-malformed, foreign or rewound ledger blocks the run (`blocked`, reason `infra_error`); an
-exhausted budget blocks it with reason `budget_exhausted`. The judge logs the observed
+malformed or foreign ledger blocks the run (`blocked`, reason `infra_error`), and so does a
+charge that disappears from the chain before the judge's final read, whatever the verdict;
+an exhausted budget blocks it with reason `budget_exhausted`. The judge logs the observed
 count on every run.
+
+The judge cannot detect a ledger rewound to an earlier valid commit: a replayed prefix of
+the chain looks like a shorter history. Only Ruleset A below prevents rewinds, so treat a
+drop in the logged count as an incident.
 
 In the ledger repository, create two rulesets targeting `cheeseless/budget/**`:
 

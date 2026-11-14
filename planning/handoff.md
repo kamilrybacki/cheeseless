@@ -69,10 +69,14 @@ source of truth; changes land through `promote`, not hooks.
 
 ## Remaining
 
-- Phase 10 follow-ups: implement the trusted cross-run CI budget counter designed in
-  [`research/ci-budget-counter.md`](research/ci-budget-counter.md) (P10-6, required before
-  release); then the operator release gate on real GitHub (section 6 of that doc, P10-7).
-  The `ci.yml` bwrap step is verified (P10-8).
+- Phase 10 follow-ups: the cross-run CI budget counter is implemented on
+  `feat/release-blockers` (ledger P10-27, P10-28; retires P10-13 and P10-19). **P10-6 stays
+  open** until the operator release gate runs on real GitHub: P1 acceptance plus the eleven
+  live checks in section 6 of [`research/ci-budget-counter.md`](research/ci-budget-counter.md)
+  (P10-7). There is no `cheeseless ci-budget-init` yet; the operator seeds the ledger root
+  commit by hand (`docs/ci/README.md`). The `ci.yml` bwrap step is verified (P10-8).
+- GitHub `refs/pull/1` and `refs/pull/2` still hold commits with the old author email;
+  removing them needs GitHub Support or a fresh repository (operator decision).
 - Phase 11 follow-ups (ledger P11-11): bake socket/task into the MCP shim; per-request allow-log; an opt-in `e2e_agent` test that drives a real agent.
 - Phase 12 sanitizer and publication.
 - Residual phase 8 limits (P8-12): freeze requires two private sentinel markers per
@@ -95,7 +99,7 @@ ruff check . / mypy / lint-imports (4 kept) / gen_proto --check / gen_errors_doc
 ## Verification on 2026-11-14
 
 ```
-uv run --frozen pytest                 # 781 passed, 1 skipped, 86.29% coverage
+uv run pytest --cov                    # 1037 passed, 1 skipped, 87.55% coverage (feat/release-blockers)
 uv run --frozen ruff check .
 uv run --frozen mypy                   # no issues
 uv run --frozen lint-imports           # 4 contracts kept
