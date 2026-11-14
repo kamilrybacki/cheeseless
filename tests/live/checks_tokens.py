@@ -111,6 +111,17 @@ def check_08_same_repo_protection(ctx: Ctx) -> CheckResult:
     suffix = ctx.random_hex() + "-8"
     write_control(repo, app, suffix)
     resp = put_contents(repo, app, f"live-probe-{suffix}.txt", branch)
-    if protection_rejection(resp):
+    # An explicit Contents conflict is a known malformed write, even on a protected branch.
+    if resp.status == 409 and resp.get("message") == "sha was not supplied":
+        raise Precondition("Contents conflict is not protection evidence")
+
+    def evidence() -> bool:
+        protection = repo.call("GET", f"branches/{branch}/protection", ctx.config.admin_token)
+        admins = protection.get("enforce_admins")
+        return (
+            protection.status == 200 and isinstance(admins, dict) and admins.get("enabled") is True
+        )
+
+    if protection_rejection(resp, evidence=evidence):
         return passed("8", "default-branch protection binds the App", [resp.meta()])
     return failed("8", "the App wrote to the protected default branch", [resp.meta()])

@@ -12,6 +12,8 @@ import re
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from urllib.parse import parse_qs
 
 from tests.live.config import LiveConfig
 from tests.live.github_client import ClientError, Response, Token
@@ -49,6 +51,7 @@ class Knobs:
     seed_ok: bool = True
     unreadable_orphan: bool = False
     stale_reads: bool = False
+    env_gate_blocks_branch: bool = False  # live: the environment gate fails with-env, no steps
 
 
 @dataclass
@@ -58,6 +61,7 @@ class RepoState:
     default: str = "main"
     commits: dict[str, tuple[str, tuple[str, ...]]] = field(default_factory=dict)
     refs: dict[str, str] = field(default_factory=dict)
+    suites: list[dict[str, object]] = field(default_factory=list)
     runs: list[dict[str, object]] = field(default_factory=list)
     jobs: dict[int, dict[str, str]] = field(default_factory=dict)
     pulls: dict[int, dict[str, object]] = field(default_factory=dict)
@@ -100,6 +104,8 @@ class FakeGitHub:
         return resp
 
     def _route(self, method: str, path: str, label: str, body: object) -> Response:
+        if path == "user" and method == "GET":
+            return Response(200, {"login": "pusher-login"})
         if path == "installation/token" and method == "DELETE":
             return Response(204)
         if path.endswith("/"):  # live GitHub answers 404 for a trailing slash (found live)
@@ -127,6 +133,8 @@ class FakeGitHub:
             (("POST", "git/refs"), self._post_ref),
             (("PATCH", r"git/refs/heads/(.+)"), self._patch_ref),
             (("DELETE", r"git/refs/heads/(.+)"), self._delete_ref),
+            (("GET", "rulesets/rule-suites"), self._rule_suites),
+            (("GET", r"branches/([^/]+)/protection"), self._protection),
             (("GET", "rulesets"), self._list_rulesets),
             (("GET", r"rulesets/(\d+)"), self._get_ruleset),
             (("PUT", r"contents/(.+)"), self._put_contents),
@@ -199,11 +207,10 @@ class FakeGitHub:
             and self.knobs.rulesets_enforced
             and not self._bypass(label)
         ):
-            return Response(
-                403, {"message": "Repository rule violations found: creations restricted"}
-            )
+            return self._rule_failure(repo, branch, label)
         if branch in repo.refs:
             return Response(422, {"message": "Reference already exists"})
+        self._record_bypass(repo, branch, label)
         repo.refs[branch] = str(data.get("sha"))
         return Response(201, {"ref": f"refs/heads/{branch}"})
 
@@ -227,23 +234,18 @@ class FakeGitHub:
             return Response(404, {"message": "Not Found"})
         if self._is_ledger(repo, branch) and self.knobs.rulesets_enforced:
             if not self._bypass(label):
-                return Response(
-                    403, {"message": "Repository rule violations found: update restricted"}
-                )
+                return self._rule_failure(repo, branch, label)
             if force and not self._descends(repo, sha, repo.refs[branch]):
-                return Response(
-                    403, {"message": "Repository rule violations found: non_fast_forward"}
-                )
+                return self._rule_failure(repo, branch, label)
             if force and self._descends(repo, repo.refs[branch], sha):
-                return Response(
-                    403, {"message": "Repository rule violations found: non_fast_forward"}
-                )
+                return self._rule_failure(repo, branch, label)
         if (
             not force
             and not self.knobs.lost_update
             and not self._descends(repo, sha, repo.refs[branch])
         ):
             return Response(422, {"message": "Update is not a fast forward"})
+        self._record_bypass(repo, branch, label)
         repo.refs[branch] = sha
         return Response(200, {"object": {"sha": sha}})
 
@@ -251,13 +253,56 @@ class FakeGitHub:
         self, repo: RepoState, label: str, data: object, query: str, branch: str
     ) -> Response:
         if self._is_ledger(repo, branch) and self.knobs.rulesets_enforced:
-            return Response(403, {"message": "Repository rule violations found: deletion"})
+            return self._rule_failure(repo, branch, label)
         if label == "verdict" or branch not in repo.refs:
             return Response(404, {"message": "Not Found"})
         del repo.refs[branch]
         return Response(204)
 
     # ----- rulesets and protection --------------------------------------------------------
+    def _record_suite(self, repo: RepoState, branch: str, label: str, result: str) -> None:
+        repo.suites.insert(
+            0,
+            {
+                "id": len(repo.suites) + 1,
+                "actor_name": "pusher-login" if label == "pusher" else "judge[bot]",
+                "ref": f"refs/heads/{branch}",
+                "result": result,
+                "before_sha": repo.refs.get(branch, "0" * 40),
+                "pushed_at": datetime.now(UTC).isoformat(),
+                "evaluation_result": None,
+            },
+        )
+
+    def _rule_failure(self, repo: RepoState, branch: str, label: str) -> Response:
+        self._record_suite(repo, branch, label, "fail")
+        return Response(422, {"message": "Reference update failed"})
+
+    def _record_bypass(self, repo: RepoState, branch: str, label: str) -> None:
+        if self._is_ledger(repo, branch) and self.knobs.rulesets_enforced and self._bypass(label):
+            self._record_suite(repo, branch, label, "bypass")
+
+    def _rule_suites(self, repo: RepoState, label: str, data: object, query: str) -> Response:
+        if label != "admin":
+            return Response(403, {"message": "Resource not accessible by personal access token"})
+        params = parse_qs(query)
+        ref = params.get("ref", [None])[0]
+        return Response(
+            200,
+            [suite for suite in repo.suites if ref is None or suite["ref"] == ref][
+                : int(params.get("per_page", ["100"])[0])
+            ],
+        )
+
+    def _protection(
+        self, repo: RepoState, label: str, data: object, query: str, branch: str
+    ) -> Response:
+        if label != "admin":
+            return Response(403)
+        if repo.full != SAME or branch != repo.default or not self.knobs.same_repo_protected:
+            return Response(404)
+        return Response(200, {"enforce_admins": {"enabled": True}})
+
     def _list_rulesets(self, repo: RepoState, label: str, *_: object) -> Response:
         if self.knobs.plan_blocks_rulesets:
             return Response(
@@ -399,6 +444,8 @@ class FakeGitHub:
     def _list_runs(
         self, repo: RepoState, label: str, data: object, query: str, wf: str = ""
     ) -> Response:
+        if label == "pusher":  # live: the pusher PAT has no Actions read scope (found live)
+            return Response(403, {"message": "Resource not accessible by personal access token"})
         params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
         runs = [
             r
@@ -412,7 +459,12 @@ class FakeGitHub:
     def _run_jobs(
         self, repo: RepoState, label: str, data: object, query: str, rid: str
     ) -> Response:
-        jobs = repo.jobs.get(int(rid), {})
+        if label == "pusher":
+            return Response(403, {"message": "Resource not accessible by personal access token"})
+        jobs = dict(repo.jobs.get(int(rid), {}))
+        gated = self.knobs.env_gate_blocks_branch and "with-env" in jobs
+        if gated:
+            jobs["with-env"] = "failure"
         return Response(
             200,
             {
@@ -420,7 +472,9 @@ class FakeGitHub:
                     {
                         "name": k,
                         "conclusion": v,
-                        "steps": [
+                        "steps": []
+                        if gated and k == "with-env"
+                        else [
                             {"name": "secret-absent", "conclusion": v},
                             {
                                 "name": "secret-present",
@@ -459,6 +513,8 @@ class FakeGitHub:
     def _open_pull(
         self, repo: RepoState, label: str, data: dict[str, object], query: str
     ) -> Response:
+        if label == "pusher":  # live: the pusher PAT has no pull request scope (found live)
+            return Response(403, {"message": "Resource not accessible by personal access token"})
         number = len(repo.pulls) + 1
         repo.pulls[number] = {"head": str(data.get("head")), "state": "open"}
         return Response(201, {"number": number})
@@ -466,6 +522,8 @@ class FakeGitHub:
     def _get_pull(
         self, repo: RepoState, label: str, data: object, query: str, number: str
     ) -> Response:
+        if label == "pusher":  # live: the pusher PAT has no pull request scope (found live)
+            return Response(403, {"message": "Resource not accessible by personal access token"})
         pull = repo.pulls.get(int(number))
         if pull is None:
             return Response(404, {"message": "Not Found"})
@@ -481,6 +539,8 @@ class FakeGitHub:
     def _close_pull(
         self, repo: RepoState, label: str, data: dict[str, object], query: str, number: str
     ) -> Response:
+        if label == "pusher":  # live: the pusher PAT has no pull request scope (found live)
+            return Response(403, {"message": "Resource not accessible by personal access token"})
         repo.pulls[int(number)]["state"] = "closed"
         return Response(200, {})
 
@@ -491,6 +551,9 @@ class FakeMinter:
     def __init__(self, *, unavailable: bool = False) -> None:
         self.unavailable = unavailable
         self.calls: list[tuple[str, dict[str, str] | None]] = []
+
+    def actor_name(self) -> str:
+        return "judge[bot]"
 
     def mint(
         self,

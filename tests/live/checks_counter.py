@@ -15,8 +15,10 @@ from tests.live.ref_ops import (
     REJECT,
     Precondition,
     Repo,
+    actor_name,
+    attempt_started,
     need,
-    protection_rejection,
+    ruleset_rejection,
     sha_of,
     write_control,
 )
@@ -124,14 +126,19 @@ def check_03_ruleset_matrix(ctx: Ctx) -> CheckResult:
     bad = 0
     for actor in ACTORS:
         token = tokens[actor]
+        identity = actor_name(ctx, actor, token)
         for op in OPS:
             branch, base = _probe(ctx, repo, f"matrix-{actor}-{op}")
             tip = repo.child(base, app, "independent operation base")
             need(repo.update_ref(branch, tip, app, force=False), {200}, "prepare matrix cell")
-            resp = _attempt(ctx, repo, branch, base, op, actor, token, app)
+            started = attempt_started()
+            resp, ref = _attempt(ctx, repo, branch, base, op, actor, token, app)
             codes, text = expectation(actor, op)
             ok = (
-                (protection_rejection(resp) and resp.status in codes)
+                (
+                    ruleset_rejection(ctx, repo, resp, ref=ref, actor=identity, started=started)
+                    and resp.status in codes
+                )
                 if codes == REJECT
                 else resp.status in codes
             )
@@ -146,20 +153,22 @@ def check_03_ruleset_matrix(ctx: Ctx) -> CheckResult:
 
 def _attempt(
     ctx: Ctx, repo: Repo, branch: str, base: str, op: str, actor: str, token: Token, app: Token
-) -> Response:
+) -> tuple[Response, str]:
     tag = f"live-{ctx.random_hex()}"
     tip = repo.get_ref(branch, app)
     if op == "creation":
-        return repo.create_ref(f"cheeseless/budget/{tag}-{actor}", base, token)
+        branch = f"cheeseless/budget/{tag}-{actor}"
+        return repo.create_ref(branch, base, token), f"refs/heads/{branch}"
+    ref = f"refs/heads/{branch}"
     if tip is None:
-        return Response(404)  # the scratch branch is gone: the cell cannot be a pass
+        return Response(404), ref  # the scratch branch is gone: the cell cannot be a pass
     if op == "fast_forward":
-        return repo.update_ref(branch, repo.child(tip, app, tag), token, force=False)
+        return repo.update_ref(branch, repo.child(tip, app, tag), token, force=False), ref
     if op == "force_update":
-        return repo.update_ref(branch, repo.orphan(tip, app, tag), token, force=True)
+        return repo.update_ref(branch, repo.orphan(tip, app, tag), token, force=True), ref
     if op == "rewind":
-        return repo.update_ref(branch, base, token, force=True)
-    return repo.delete_ref(branch, token)
+        return repo.update_ref(branch, base, token, force=True), ref
+    return repo.delete_ref(branch, token), ref
 
 
 @guarded("4")
@@ -219,9 +228,15 @@ def check_12_creation_rejected(ctx: Ctx) -> CheckResult:
         "object",
         "sha",
     )
-    resp = repo.create_ref(
-        f"cheeseless/budget/live-{ctx.random_hex()}-new", base, ctx.config.pusher_token
-    )
-    if protection_rejection(resp) and resp.status in REJECT:
+    branch = f"cheeseless/budget/live-{ctx.random_hex()}-new"
+    identity = actor_name(ctx, "pusher", ctx.config.pusher_token)
+    started = attempt_started()
+    resp = repo.create_ref(branch, base, ctx.config.pusher_token)
+    if (
+        ruleset_rejection(
+            ctx, repo, resp, ref=f"refs/heads/{branch}", actor=identity, started=started
+        )
+        and resp.status in REJECT
+    ):
         return passed("12", "branch creation is refused under Ruleset B", [resp.meta()])
     return failed("12", "creation was not refused by the ruleset", [resp.meta()])

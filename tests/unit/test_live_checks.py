@@ -94,6 +94,7 @@ BROKEN = [
     (8, Knobs(same_repo_protected=False), Outcome.FAIL),
     (9, Knobs(branch_reads_secret=True), Outcome.FAIL),
     (9, Knobs(actions_enabled=False), Outcome.PRECONDITION_MISSING),
+    (9, Knobs(env_gate_blocks_branch=True), Outcome.PASS),
     (10, Knobs(judge_succeeds=False), Outcome.FAIL),
     (10, Knobs(canary_workflows=False), Outcome.PRECONDITION_MISSING),
     (11, Knobs(pin_to_app=False), Outcome.PRECONDITION_MISSING),
@@ -530,3 +531,82 @@ def test_fake_models_existing_contents_conflict_separately() -> None:
     conflict = checks_tokens.put_contents(repo, actor, "fixture.txt")
     assert conflict.status == 409
     assert "sha" in str(conflict.get("message"))
+
+
+@pytest.mark.parametrize("number", [3, 8, 12])
+def test_protection_evidence_passes_without_message_wording(number: int, monkeypatch) -> None:
+    ctx = make_ctx()
+    original = ctx.client.request
+
+    def request(method, path, *, token=None, json=None):
+        resp = original(method, path, token=token, json=json)
+        if method in {"POST", "PATCH", "DELETE", "PUT"} and resp.status in {403, 409, 422}:
+            return Response(resp.status, {"message": "Reference update failed"})
+        return resp
+
+    monkeypatch.setattr(ctx.client, "request", request)
+    assert ALL[number](ctx).outcome is Outcome.PASS
+
+
+def test_rule_suite_poll_waits_for_admin_visible_evidence(monkeypatch) -> None:
+    ctx = make_ctx()
+    original = ctx.client.request
+    probes = 0
+    sleeps = []
+    ctx.sleep = sleeps.append
+
+    def request(method, path, *, token=None, json=None):
+        nonlocal probes
+        resp = original(method, path, token=token, json=json)
+        if "rulesets/rule-suites?" in path:
+            assert token is ctx.config.admin_token
+            assert "time_period=day" in path and "per_page=100" in path
+            probes += 1
+            if probes == 1:
+                return Response(200, [])
+        return resp
+
+    monkeypatch.setattr(ctx.client, "request", request)
+    assert ALL[12](ctx).outcome is Outcome.PASS
+    assert probes == 2 and sleeps == [5.0]
+
+
+def test_fake_rule_suites_restrict_reader_and_record_bypass() -> None:
+    from tests.live.ref_ops import Repo
+
+    ctx = make_ctx()
+    repo = Repo(ctx.client, LEDGER)
+    base = repo.get_ref("main", ctx.app_token())
+    assert base is not None
+    branch = "cheeseless/budget/suite-control"
+    assert repo.create_ref(branch, base, ctx.config.pusher_token).body == {
+        "message": "Reference update failed"
+    }
+    assert repo.create_ref(branch, base, ctx.app_token()).status == 201
+    path = "rulesets/rule-suites?ref=refs%2Fheads%2Fcheeseless%2Fbudget%2Fsuite-control"
+    assert repo.call("GET", path, ctx.config.pusher_token).status == 403
+    entries = repo.call("GET", path, ctx.config.admin_token).body
+    assert [(entry["actor_name"], entry["result"]) for entry in entries] == [
+        ("judge[bot]", "bypass"),
+        ("pusher-login", "fail"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "response", [Response(200, {"slug": "judge"}), Response(403), Response(200)]
+)
+def test_app_actor_identity_uses_authenticated_app(tmp_path, monkeypatch, response) -> None:
+    client = _MintClient()
+    minter = _minter(tmp_path, client)
+
+    def request(method, path, *, token=None, json=None):
+        assert (method, path) == ("GET", "app")
+        assert token.label == "app-jwt"
+        return response
+
+    monkeypatch.setattr(client, "request", request)
+    if response.get("slug"):
+        assert minter.actor_name() == "judge[bot]"
+    else:
+        with pytest.raises(ClientError, match="authenticated App identity"):
+            minter.actor_name()

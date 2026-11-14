@@ -72,7 +72,15 @@ it never enters subprocess arguments, environment variables or diagnostic output
 Protection probes first prove that the same credential can write to an unprotected
 control branch, then remove that branch and its file. Authentication failures and
 unattributable conflicts are missing preconditions. Matrix cells use independent refs
-and require ruleset evidence. Secret isolation requires a successful runner control and
+and require admin-readable rule-suite evidence: the same ref and authenticated actor,
+a `fail` result, and a timestamp at or after the attempt started (GitHub timestamps
+have second precision; probe refs are run-unique). Suites are polled within the check's
+budget because publication can lag. A `bypass` result cannot prove rejection.
+Git-data rejections can say only `422 Reference update failed`, so message wording
+does not establish protection. Check 8 instead requires an admin-readable classic
+branch-protection configuration with `enforce_admins`, a successful same-token control
+write, and a protected-write rejection in 403/409/422. Successful protected writes fail
+the check; missing evidence remains a missing precondition. Secret isolation requires a successful runner control and
 successful secret-absence steps; cancellation or infrastructure failure cannot pass.
 Required-check spoofing verifies a successful GitHub Actions check on the exact SHA
 before measuring mergeability, and the required context/App ID pin uses exact equality.
