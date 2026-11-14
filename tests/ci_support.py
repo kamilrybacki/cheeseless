@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import itertools
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -30,16 +32,47 @@ class CiWorld:
     state: Path
     bundle: Path
     base: str
+    ledger: FakeLedgerTransport
+    root: str
+    monkeypatch: pytest.MonkeyPatch
+
+
+PROBE_ROOT = "0" * 40
+_RUN_IDS = itertools.count(1000)
+
+
+def export_argv(state: Path, out: Path, root: str = PROBE_ROOT) -> list[str]:
+    return [
+        "--state-dir",
+        str(state),
+        "ci-export",
+        "--out",
+        str(out),
+        "--budget-repo",
+        LEDGER_REPO,
+        "--budget-root",
+        root,
+    ]
 
 
 def prepare_world(toy: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CiWorld:
+    """Freeze the toy, seed a fake ledger with the store key and export a bundle pinning it."""
     state = tmp_path / "state"
     monkeypatch.chdir(toy)
     assert main(["--state-dir", str(state), "freeze", "--yes"]) == 0
-    bundle = tmp_path / "secrets" / "bundle.json"
-    bundle.parent.mkdir(mode=0o700)
-    assert main(["--state-dir", str(state), "ci-export", "--out", str(bundle)]) == 0
-    return CiWorld(toy, state, bundle, git(toy, "rev-parse", "HEAD"))
+    secrets_dir = tmp_path / "secrets"
+    secrets_dir.mkdir(mode=0o700)
+    # The seed MAC needs the store key, which only the exported bundle reveals.
+    probe = secrets_dir / "probe.json"
+    assert main(export_argv(state, probe)) == 0
+    data = json.loads(probe.read_bytes())
+    probe.unlink()
+    ledger = FakeLedgerTransport()
+    ident = LedgerIdentity(repo_id=JUDGED_REPO_ID, lineage=data["lineage"])
+    root = ledger.seed(base64.b64decode(data["key"]), ident)
+    bundle = secrets_dir / "bundle.json"
+    assert main(export_argv(state, bundle, root)) == 0
+    return CiWorld(toy, state, bundle, git(toy, "rev-parse", "HEAD"), ledger, root, monkeypatch)
 
 
 def make_head(world: CiWorld, files: dict[str, str], branch: str = "pr") -> str:

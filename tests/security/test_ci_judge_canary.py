@@ -13,7 +13,15 @@ import pytest
 from cheeseless import bootstrap_ci
 from cheeseless.adapters.outbound.runner.pytest_runner import PytestRunner
 from cheeseless.bootstrap import main
-from tests.ci_support import CiWorld, holdout_ids, judge_cli, make_head, prepare_world
+from tests.ci_support import (
+    LEDGER_REPO,
+    CiWorld,
+    export_argv,
+    holdout_ids,
+    judge_cli,
+    make_head,
+    prepare_world,
+)
 from tests.requirements import needs
 from tests.toy import FIXED_MAIN, HIDDEN_NORMALIZE, HIDDEN_SCORE, commit_all, git, write_files
 
@@ -120,7 +128,7 @@ def test_export_refuses_paths_inside_repo_and_git_dir(world, capsys):
         world.toy / ".git" / "bundle.json",
         world.toy / "sub" / "bundle.json",
     ):
-        assert main(["--state-dir", str(world.state), "ci-export", "--out", str(target)]) == 2
+        assert main(export_argv(world.state, target)) == 2
         assert not target.exists()
     capsys.readouterr()
 
@@ -130,15 +138,42 @@ def test_export_file_is_private_never_printed_and_exclusive(world, tmp_path, cap
     assert mode == 0o600
     key = json.loads(world.bundle.read_bytes())["key"]
     assert key not in capsys.readouterr().out
-    again = main(["--state-dir", str(world.state), "ci-export", "--out", str(world.bundle)])
+    again = main(export_argv(world.state, world.bundle, world.root))
     assert again == 2
+
+
+@pytest.mark.parametrize(
+    ("repo", "root"),
+    [
+        ("not a repo", None),
+        ("../escape", None),
+        (LEDGER_REPO, "ROOT"),
+        (LEDGER_REPO, "a" * 39),
+    ],
+)
+def test_export_refuses_an_invalid_budget_ledger(world, tmp_path, repo, root, capsys):
+    target = tmp_path / "bad-ledger.json"
+    argv = export_argv(world.state, target, root or world.root)
+    argv[argv.index("--budget-repo") + 1] = repo
+    assert main(argv) == 2
+    assert not target.exists()
+    assert "budget ledger" in capsys.readouterr().err
+
+
+def test_export_pins_the_ledger_branch_of_the_lineage(world):
+    data = json.loads(world.bundle.read_bytes())
+    assert data["budget"] == {
+        "repo": LEDGER_REPO,
+        "branch": f"cheeseless/budget/{data['lineage']}",
+        "root": world.root,
+    }
 
 
 def test_export_refuses_symlink_into_repo(world, tmp_path):
     link = tmp_path / "link"
     link.symlink_to(world.toy)
     target = link / "b.json"
-    assert main(["--state-dir", str(world.state), "ci-export", "--out", str(target)]) == 2
+    assert main(export_argv(world.state, target)) == 2
 
 
 def _bad_bundle(world: CiWorld, tmp_path: Path, mutate) -> Path:

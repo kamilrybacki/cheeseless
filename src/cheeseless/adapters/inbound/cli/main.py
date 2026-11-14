@@ -128,6 +128,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     export = sub.add_parser("ci-export", help="Write the secret CI bundle (0600, never printed).")
     export.add_argument("--out", type=Path, required=True)
+    export.add_argument(
+        "--budget-repo",
+        required=True,
+        help="OWNER/NAME of the private CI budget ledger repository.",
+    )
+    export.add_argument(
+        "--budget-root",
+        required=True,
+        help="Commit SHA of the seed commit on cheeseless/budget/<lineage>.",
+    )
 
     cij = sub.add_parser("ci-judge", help="Judge a PR head in CI; prints only the public verdict.")
     cij.add_argument("--base", required=True)

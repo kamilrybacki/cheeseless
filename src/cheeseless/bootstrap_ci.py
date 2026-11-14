@@ -23,6 +23,7 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.ci_judge import FreezeDrift, judge
 from cheeseless.bootstrap import _ensure_outside, _private_dir, _state_home
 from cheeseless.ci_bundle import (
+    BudgetLedgerRef,
     Bundle,
     BundleError,
     decode_bundle,
@@ -30,6 +31,7 @@ from cheeseless.ci_bundle import (
     encode_bundle,
 )
 from cheeseless.domain.budget import Pool
+from cheeseless.domain.budget_ledger import branch_for
 from cheeseless.domain.status import Status
 
 BUNDLE_ENV = "CHEESELESS_CI_BUNDLE"
@@ -59,7 +61,14 @@ def ci_export(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     frozen, seed = store.load_task(task_id)
     limit = store.budget(frozen.task.lineage_id, Pool.CI).limit
-    raw = encode_bundle(frozen, seed, store.hmac_key(), ci_limit=limit)
+    ledger = BudgetLedgerRef(
+        repo=args.budget_repo, branch=branch_for(frozen.task.lineage_id), root=args.budget_root
+    )
+    try:
+        raw = encode_bundle(frozen, seed, store.hmac_key(), ci_limit=limit, budget=ledger)
+    except BundleError as exc:
+        _err(f"ci-export refused: {exc}")
+        return EXIT_USAGE
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
         fd = os.open(out, flags, 0o600)
