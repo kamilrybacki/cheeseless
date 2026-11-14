@@ -20,7 +20,7 @@ from pathlib import Path
 from mitmproxy import options as mitm_options
 from mitmproxy.tools.dump import DumpMaster
 
-from cheeseless.adapters.outbound.egress.addon import EgressAddon, HitCallback
+from cheeseless.adapters.outbound.egress.addon import AuditCallback, EgressAddon, HitCallback
 from cheeseless.adapters.outbound.egress.bridge import UnixToTcpBridge
 from cheeseless.domain.dlp import DlpScanner, Fingerprints
 from cheeseless.domain.egress_policy import EgressPolicy
@@ -47,6 +47,7 @@ class EgressProxy:
     config: ProxyConfig
     fingerprints: Fingerprints
     on_hit: HitCallback | None = None
+    on_audit: AuditCallback | None = None
     _master: DumpMaster | None = field(default=None, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
     _bridge: UnixToTcpBridge | None = field(default=None, init=False)
@@ -79,7 +80,12 @@ class EgressProxy:
         )
         if self.config.upstream_trusted_ca is not None:
             opts.ssl_verify_upstream_trusted_ca = str(self.config.upstream_trusted_ca)
-        addon = EgressAddon(self.config.policy, DlpScanner(self.fingerprints), self.on_hit)
+        addon = EgressAddon(
+            self.config.policy,
+            DlpScanner(self.fingerprints),
+            self.on_hit,
+            self.on_audit,
+        )
 
         def runner() -> None:
             async def main() -> None:

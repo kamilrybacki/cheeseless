@@ -157,7 +157,16 @@ def test_mcp_stdio_inside_bwrap_host_session(env, tmp_path):
         task_id=env.task_id,
         projection_dir=projection,
         socket_dir=socket_dir,
-        agent_command=["/bin/sh", "-c", 'exec "$CHEESELESS_MCP"'],
+        # The staged shim has the socket and task baked in. Strip the whole environment
+        # and point the old variables somewhere else: the shim must still authenticate
+        # to the real per-session UDS (P11-11).
+        agent_command=[
+            "/bin/sh",
+            "-c",
+            'exec /usr/bin/env -i PATH=/usr/bin:/bin '
+            'CHEESELESS_SOCKET=/nonexistent/attacker.sock '
+            'CHEESELESS_TASK=attacker-task "$CHEESELESS_MCP"',
+        ],
         agent_stdio=True,
     ) as info:
         client = _Client(info["agent_proc"])
