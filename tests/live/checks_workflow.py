@@ -167,9 +167,14 @@ def check_11_required_check_source(ctx: Ctx) -> CheckResult:
         post = post_check_run(repo, ctx.verdict_token(), sha, CHECK_NAME)
         rows.append(f"judge App check run: {post.meta()}")
         need(post, {201}, "the judge App could not post the check run")
+        # "unstable" counts as satisfied: the probe branch's with-env job fails at the environment
+        # gate (a non-required check), which makes a mergeable PR "unstable" rather than "clean".
         satisfied = poll(
-            lambda: _state(repo, number, ctx) == "clean", sleep=ctx.sleep, seconds=ctx.poll_seconds
+            lambda: _state(repo, number, ctx) in {"clean", "unstable"},
+            sleep=ctx.sleep,
+            seconds=ctx.poll_seconds,
         )
+        rows.append(f"after the judge App check run: mergeable_state={_state(repo, number, ctx)}")
     finally:
         if number:
             repo.call("PATCH", f"pulls/{number}", observer, {"state": "closed"})
