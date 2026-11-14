@@ -114,9 +114,26 @@ def test_every_action_is_pinned_by_commit_sha() -> None:
             assert PINNED.match(step["uses"]), step["uses"]
 
 
+def _mints() -> list[dict[str, Any]]:
+    return [s for s in _judge_steps() if str(s.get("uses", "")).startswith(APP_TOKEN_ACTION)]
+
+
+def _mint_index(permission: str) -> int:
+    return _step_index(
+        lambda s: (
+            str(s.get("uses", "")).startswith(APP_TOKEN_ACTION)
+            and permission in (s.get("with") or {})
+        )
+    )
+
+
+def _token_ref(step_id: str) -> str:
+    return "${{ steps." + step_id + ".outputs.token }}"
+
+
 def test_verdict_is_posted_with_the_judge_app_token_after_the_judge() -> None:
     steps = _judge_steps()
-    mint = _step_index(lambda s: str(s.get("uses", "")).startswith(APP_TOKEN_ACTION))
+    mint = _mint_index("permission-checks")
     judge = _step_index(lambda s: s.get("id") == "judge")
     post = _step_index(lambda s: "check-runs" in str(s.get("run", "")))
     app = steps[mint]
@@ -127,8 +144,60 @@ def test_verdict_is_posted_with_the_judge_app_token_after_the_judge() -> None:
     assert steps[post]["env"]["GH_TOKEN"] == expected
 
 
-def test_judge_step_never_sees_the_app_credentials() -> None:
-    judge = _judge_steps()[_step_index(lambda s: s.get("id") == "judge")]
+def test_exactly_two_app_tokens_are_minted() -> None:
+    # One for the budget ledger (before the judge), one for the check run (after it).
+    assert len(_mints()) == 2
+
+
+def test_budget_token_is_contents_write_on_the_ledger_repository_only() -> None:
+    steps = _judge_steps()
+    mint = _mint_index("permission-contents")
+    budget = steps[mint]["with"]
+    assert budget["permission-contents"] == "write"
+    assert {k for k in budget if k.startswith("permission-")} == {"permission-contents"}
+    # Scoped to the dedicated ledger repository, never the judged one.
+    assert budget["repositories"] == "${{ vars.CHEESELESS_BUDGET_REPO }}"
+    assert "," not in budget["repositories"]
+    assert mint < _step_index(lambda s: s.get("id") == "judge")
+
+
+def test_judge_step_sees_only_the_budget_token() -> None:
+    steps = _judge_steps()
+    budget_id = steps[_mint_index("permission-contents")]["id"]
+    checks_id = steps[_mint_index("permission-checks")]["id"]
+    judge = steps[_step_index(lambda s: s.get("id") == "judge")]
+    assert judge["env"]["CHEESELESS_BUDGET_TOKEN"] == _token_ref(budget_id)
     dumped = yaml.safe_dump(judge)
     assert "APP_KEY" not in dumped
-    assert "outputs.token" not in dumped
+    assert "private-key" not in dumped
+    assert f"steps.{checks_id}." not in dumped
+    assert dumped.count("outputs.token") == 1
+
+
+def test_budget_token_reaches_no_other_candidate_facing_place() -> None:
+    workflow = _workflow()
+    job = workflow["jobs"]["judge"]
+    budget_id = _judge_steps()[_mint_index("permission-contents")]["id"]
+    ref = f"steps.{budget_id}.outputs.token"
+    assert ref not in yaml.safe_dump(job.get("env") or {})
+    users = [s.get("id") or s.get("name") for s in _judge_steps() if ref in yaml.safe_dump(s)]
+    assert users == ["judge", "revoke-budget"]
+
+
+def test_budget_token_is_revoked_right_after_the_judge_whatever_happened() -> None:
+    steps = _judge_steps()
+    judge = _step_index(lambda s: s.get("id") == "judge")
+    revoke = _step_index(lambda s: s.get("id") == "revoke-budget")
+    assert revoke == judge + 1
+    step = steps[revoke]
+    budget_id = steps[_mint_index("permission-contents")]["id"]
+    assert step["if"] == "always()"
+    assert step["env"]["GH_TOKEN"] == _token_ref(budget_id)
+    assert "installation/token" in step["run"]
+    assert "DELETE" in step["run"]
+
+
+def test_both_tokens_are_also_revoked_when_the_job_ends() -> None:
+    # The action's post step revokes each token; nothing may opt out of it.
+    for mint in _mints():
+        assert "skip-token-revoke" not in (mint.get("with") or {})
