@@ -21,6 +21,7 @@ from tests.ci_support import (
     judge_cli,
     make_head,
     prepare_world,
+    set_judge_event,
 )
 from tests.requirements import needs
 from tests.toy import FIXED_MAIN, HIDDEN_NORMALIZE, HIDDEN_SCORE, commit_all, git, write_files
@@ -214,6 +215,7 @@ def test_freeze_drift_exits_3(world, monkeypatch):
     write_files(world.toy, {"acceptance/hidden/test_drift.py": "def test_d():\n    pass\n"})
     drift = commit_all(world.toy, "drift")
     monkeypatch.setattr(bootstrap_ci, "BwrapSandbox", Boom)
+    set_judge_event(world)
     argv = ["ci-judge", "--base", drift, "--head", drift, "--bundle-file", str(world.bundle)]
     assert main(argv) == 3
 

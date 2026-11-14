@@ -9,7 +9,10 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.ci_judge import FreezeDrift, JudgeReason, judge
 from cheeseless.app.freeze import commit, prepare
 from cheeseless.domain.budget import Pool
+from cheeseless.domain.evaluation import SuiteRun
 from cheeseless.domain.status import Status
+from cheeseless.ports.run_counter import CounterError
+from tests.ci_support import RED_SMOKE, FakeRunner, FakeSandbox
 from tests.requirements import needs
 from tests.toy import FIXED_MAIN, commit_all, git, write_files
 
@@ -56,7 +59,9 @@ def test_protected_path_fails_without_running_or_charging(world):
     repo, runner, sandbox, store, frozen, base, toy = world
     head = _head(toy, {"acceptance/hidden/test_extra.py": "def test_x():\n    pass\n"})
     r, s = Spy(runner), Spy(sandbox)
-    v = judge(repo, store, r, s, frozen, store.hmac_key(), base_commit=base, head_commit=head)
+    v = judge(
+        repo, r, s, frozen, store.hmac_key(), counter=store, base_commit=base, head_commit=head
+    )
     assert v.status is Status.FAIL and v.reason == JudgeReason.PROTECTED_PATH
     assert r.calls == 0 and s.calls == 0
     assert (
@@ -72,7 +77,14 @@ def test_workflow_change_is_protected(world):
     repo, runner, sandbox, store, frozen, base, toy = world
     head = _head(toy, {".github/workflows/x.yml": "on: push\n"})
     v = judge(
-        repo, store, runner, sandbox, frozen, store.hmac_key(), base_commit=base, head_commit=head
+        repo,
+        runner,
+        sandbox,
+        frozen,
+        store.hmac_key(),
+        counter=store,
+        base_commit=base,
+        head_commit=head,
     )
     assert v.reason == JudgeReason.PROTECTED_PATH
 
@@ -86,11 +98,11 @@ def test_freeze_drift_raises(world):
     with pytest.raises(FreezeDrift):
         judge(
             repo,
-            store,
             runner,
             sandbox,
             frozen,
             store.hmac_key(),
+            counter=store,
             base_commit=drifted,
             head_commit=head,
         )
@@ -109,11 +121,20 @@ def test_unfixed_fails_fixed_passes_and_public_form_is_minimal(world):
     repo, runner, sandbox, store, frozen, base, toy = world
     key = store.hmac_key()
     bad = judge(
-        repo, store, runner, sandbox, frozen, key, base_commit=base, head_commit=_head_noop(toy)
+        repo,
+        runner,
+        sandbox,
+        frozen,
+        key,
+        counter=store,
+        base_commit=base,
+        head_commit=_head_noop(toy),
     )
     assert bad.status is Status.FAIL
     good_head = _head(toy, {"src/toy/__main__.py": FIXED_MAIN})
-    good = judge(repo, store, runner, sandbox, frozen, key, base_commit=base, head_commit=good_head)
+    good = judge(
+        repo, runner, sandbox, frozen, key, counter=store, base_commit=base, head_commit=good_head
+    )
     assert good.status is Status.PASS
     assert good.result is not None and verify(good.result, key)
     assert good.result.tree_hash == repo.tree_of(good_head) == good.tree_hash
@@ -132,7 +153,14 @@ def test_budget_exhausted_blocks(world):
         pass
     head = _head(toy, {"src/toy/__main__.py": FIXED_MAIN})
     v = judge(
-        repo, store, runner, sandbox, frozen, store.hmac_key(), base_commit=base, head_commit=head
+        repo,
+        runner,
+        sandbox,
+        frozen,
+        store.hmac_key(),
+        counter=store,
+        base_commit=base,
+        head_commit=head,
     )
     assert v.status is Status.BLOCKED and v.reason == JudgeReason.BUDGET_EXHAUSTED
 
@@ -151,11 +179,11 @@ def test_protected_diff_uses_merge_base_not_default_tip(world):
     tip = commit_all(toy, "late workflow")
     v = judge(
         repo,
-        store,
         runner,
         _NoSandbox(),
         frozen,
         store.hmac_key(),
+        counter=store,
         base_commit=tip,
         head_commit=head,
     )
@@ -171,11 +199,11 @@ def test_protected_change_still_caught_when_pr_matches_default_tip(world):
     tip = commit_all(toy, "same workflow")
     v = judge(
         repo,
-        store,
         runner,
         _NoSandbox(),
         frozen,
         store.hmac_key(),
+        counter=store,
         base_commit=tip,
         head_commit=head,
     )
@@ -190,12 +218,152 @@ def test_protected_touch_reverted_within_the_pr_is_judged_on_the_net_tree(world)
     head = commit_all(toy, "revert")
     v = judge(
         repo,
-        store,
         runner,
         _NoSandbox(),
         frozen,
         store.hmac_key(),
+        counter=store,
         base_commit=base,
         head_commit=head,
     )
     assert v.reason == JudgeReason.INFRA_ERROR  # past the protected check, then fails closed
+
+
+# -- ordering: when the CI budget is charged (spec section 4) -------------------
+
+
+class RecordingCounter:
+    """``RunCounter`` that records every call; delegates to ``inner`` or raises ``error``."""
+
+    def __init__(self, inner, error: Exception | None = None):
+        self.inner = inner
+        self.error = error
+        self.calls: list[str] = []
+
+    def reserve_run(self, lineage_id, pool):
+        self.calls.append("reserve_run")
+        assert pool is Pool.CI
+        if self.error is not None:
+            raise self.error
+        return self.inner.reserve_run(lineage_id, pool)
+
+    def budget(self, lineage_id, pool):
+        self.calls.append("budget")
+        return self.inner.budget(lineage_id, pool)
+
+
+def _judge(world, runner, sandbox, counter, head):
+    repo, _r, _s, store, frozen, base, _toy = world
+    return judge(
+        repo,
+        runner,
+        sandbox,
+        frozen,
+        store.hmac_key(),
+        counter=counter,
+        base_commit=base,
+        head_commit=head,
+    )
+
+
+def _used(world) -> int:
+    _repo, _r, _s, store, frozen, _base, _toy = world
+    return store.budget(frozen.task.lineage_id, Pool.CI).used
+
+
+@pytest.mark.parametrize(
+    ("runner", "sandbox", "status", "reason"),
+    [
+        (FakeRunner(), FakeSandbox("raise"), Status.BLOCKED, JudgeReason.INFRA_ERROR),
+        (FakeRunner(), FakeSandbox("fail"), Status.FAIL, JudgeReason.BUILD_FAILED),
+        (
+            FakeRunner(smoke=RuntimeError("x")),
+            FakeSandbox(),
+            Status.BLOCKED,
+            JudgeReason.INFRA_ERROR,
+        ),
+        (FakeRunner(smoke=RED_SMOKE), FakeSandbox(), Status.FAIL, JudgeReason.SMOKE_FAILED),
+        (FakeRunner(smoke=SuiteRun()), FakeSandbox(), Status.FAIL, JudgeReason.SMOKE_FAILED),
+    ],
+    ids=["build-raises", "build-fails", "smoke-raises", "smoke-fails", "smoke-empty"],
+)
+def test_pre_hidden_failures_never_touch_the_counter(world, runner, sandbox, status, reason):
+    counter = RecordingCounter(world[3])
+    head = _head(world[6], {"src/toy/note.txt": "x\n"})
+    v = _judge(world, runner, sandbox, counter, head)
+    assert (v.status, v.reason) == (status, reason)
+    assert counter.calls == []
+    assert runner.hidden_calls == 0
+    assert _used(world) == 0
+
+
+def test_protected_path_never_touches_the_counter(world):
+    counter = RecordingCounter(world[3])
+    head = _head(world[6], {"acceptance/hidden/test_extra.py": "def test_x():\n    pass\n"})
+    runner = FakeRunner()
+    v = _judge(world, runner, FakeSandbox(), counter, head)
+    assert v.reason == JudgeReason.PROTECTED_PATH
+    assert counter.calls == []
+
+
+def test_exhausted_counter_blocks_before_hidden_execution(world):
+    _repo, _r, _s, store, frozen, _base, toy = world
+    while store.reserve_run(frozen.task.lineage_id, Pool.CI) is not None:
+        pass
+    counter = RecordingCounter(store)
+    runner = FakeRunner(hidden=AssertionError("hidden execution reached"))
+    v = _judge(world, runner, FakeSandbox(), counter, _head(toy, {"src/toy/note.txt": "x\n"}))
+    assert (v.status, v.reason) == (Status.BLOCKED, JudgeReason.BUDGET_EXHAUSTED)
+    assert counter.calls == ["reserve_run"]
+    assert runner.hidden_calls == 0
+
+
+def test_counter_error_at_reserve_blocks_before_hidden_execution(world):
+    counter = RecordingCounter(world[3], error=CounterError("ledger unreadable"))
+    runner = FakeRunner(hidden=AssertionError("hidden execution reached"))
+    head = _head(world[6], {"src/toy/note.txt": "x\n"})
+    v = _judge(world, runner, FakeSandbox(), counter, head)
+    assert (v.status, v.reason) == (Status.BLOCKED, JudgeReason.INFRA_ERROR)
+    assert counter.calls == ["reserve_run"]
+    assert runner.hidden_calls == 0
+
+
+@pytest.mark.parametrize(
+    "hidden",
+    [RuntimeError("hidden run broke"), SuiteRun(infra_cause="runner died")],
+    ids=["raises", "infra-cause"],
+)
+def test_failure_after_reserve_keeps_the_charge(world, hidden):
+    counter = RecordingCounter(world[3])
+    runner = FakeRunner(hidden=hidden)
+    head = _head(world[6], {"src/toy/note.txt": "x\n"})
+    v = _judge(world, runner, FakeSandbox(), counter, head)
+    assert v.status is not Status.PASS
+    assert counter.calls == ["reserve_run"]
+    assert runner.hidden_calls == 1
+    assert _used(world) == 1  # never refunded
+
+
+def test_hidden_execution_happens_at_most_once_per_judge_call(world):
+    counter = RecordingCounter(world[3])
+    runner = FakeRunner(hidden=SuiteRun())
+    head = _head(world[6], {"src/toy/note.txt": "x\n"})
+    _judge(world, runner, FakeSandbox(), counter, head)
+    assert counter.calls == ["reserve_run"]
+    assert runner.hidden_calls == 1
+    assert _used(world) == 1
+
+
+def test_judge_requires_the_counter_keyword(world):
+    repo, runner, sandbox, store, frozen, base, _toy = world
+    with pytest.raises(TypeError):
+        judge(
+            repo,
+            store,
+            runner,
+            sandbox,
+            frozen,
+            store.hmac_key(),
+            base_commit=base,
+            head_commit=base,
+        )  # type: ignore[call-arg]

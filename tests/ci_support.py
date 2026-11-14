@@ -6,7 +6,9 @@ import base64
 import hashlib
 import itertools
 import json
+import tempfile
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +25,9 @@ from cheeseless.domain.budget_ledger import (
     derive_key,
     seed_record,
 )
+from cheeseless.domain.evaluation import SuiteRun, TestOutcome
+from cheeseless.ports.runner import RunnerOutput
+from cheeseless.ports.sandbox import StepOutcome
 from tests.toy import commit_all, git, write_files
 
 
@@ -88,9 +93,23 @@ def judge_cli(
     bundle: Path | None = None,
     base: str | None = None,
 ) -> int:
+    """Run ci-judge as one workflow run attempt: a fresh run id, the fake ledger, a fake token."""
+    set_judge_event(world)
     argv = ["ci-judge", "--base", base or world.base, "--head", head, "--bundle-file"]
     argv.append(str(bundle or world.bundle))
     return main([*argv, *extra])
+
+
+def set_judge_event(world: CiWorld, *, run_id: str | None = None, attempt: str = "1") -> None:
+    """The judge step's env: event ids and the budget token; the transport is the fake."""
+    from cheeseless import bootstrap_ci
+
+    mp = world.monkeypatch
+    mp.setenv(bootstrap_ci.BUDGET_TOKEN_ENV, FAKE_BUDGET_TOKEN)
+    mp.setenv("GITHUB_REPOSITORY_ID", JUDGED_REPO_ID)
+    mp.setenv("GITHUB_RUN_ID", run_id or str(next(_RUN_IDS)))
+    mp.setenv("GITHUB_RUN_ATTEMPT", attempt)
+    mp.setattr(bootstrap_ci, "make_ledger_transport", lambda repo, token: world.ledger)
 
 
 def holdout_ids(world: CiWorld) -> list[str]:
@@ -102,6 +121,7 @@ def holdout_ids(world: CiWorld) -> list[str]:
 
 LEDGER_REPO = "example-owner/cheeseless-ledger"
 JUDGED_REPO_ID = "123456789"
+FAKE_BUDGET_TOKEN = "ghs_" + "FAKE0budget0token0for0tests"  # obviously fake
 
 
 class FakeLedgerTransport:
@@ -231,3 +251,56 @@ def ledger_counter(
         run_key=run_key,
         claim=claim,
     )
+
+
+# -- sandbox and runner fakes (ordering tests only; never run candidate code) ----
+
+
+class FakeSandbox:
+    """No isolation at all: only for ordering tests, which never execute candidate code."""
+
+    def __init__(self, build: str = "ok"):
+        self.build_mode = build
+
+    @contextmanager
+    def _tmp(self):
+        with tempfile.TemporaryDirectory(prefix="cheeseless-test-") as tmp:
+            yield Path(tmp)
+
+    def trusted_scratch(self):
+        return self._tmp()
+
+    def scratch(self):
+        return self._tmp()
+
+    def build(self, workdir, steps, env):
+        if self.build_mode == "raise":
+            raise RuntimeError("build sandbox broke")
+        return StepOutcome(
+            ok=self.build_mode == "ok", exit_code=0 if self.build_mode == "ok" else 1
+        )
+
+    def launcher(self, workdir, env, scratch):
+        return ("false",)
+
+
+GREEN_SMOKE = SuiteRun(outcomes={"contract/test_cli.py::test_runs": TestOutcome.PASSED})
+RED_SMOKE = SuiteRun(outcomes={"contract/test_cli.py::test_runs": TestOutcome.FAILED})
+
+
+class FakeRunner:
+    """Scripted smoke and hidden results; an ``Exception`` value is raised instead."""
+
+    def __init__(self, smoke=GREEN_SMOKE, hidden=None):
+        self.smoke, self.hidden = smoke, hidden
+        self.hidden_calls = 0
+
+    def run(self, root, paths, *, selected, launcher, run, timeout):
+        if list(paths) == ["hidden"]:
+            self.hidden_calls += 1
+            result = self.hidden
+        else:
+            result = self.smoke
+        if isinstance(result, Exception):
+            raise result
+        return RunnerOutput(suite=result)
