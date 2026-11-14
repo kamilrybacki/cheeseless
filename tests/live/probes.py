@@ -94,13 +94,15 @@ def drop_branch(repo: Repo, token: Token, branch: str) -> None:
     repo.delete_ref(branch, token)
 
 
+# Run data is observed with the admin token: the pusher PAT has no Actions read scope (found
+# live), and reading run data is not what the checks put under test.
+
+
 def runs_for(
     repo: Repo, token: Token, sha: str, workflow: str | None = None
 ) -> list[dict[str, object]]:
     path = f"actions/workflows/{workflow}/runs" if workflow else "actions/runs"
-    resp = repo.call("GET", f"{path}?head_sha={sha}", token)
-    if resp.status != 200:
-        return []
+    resp = need(repo.call("GET", f"{path}?head_sha={sha}", token), {200}, "list workflow runs")
     items = resp.get("workflow_runs")
     return [r for r in items if isinstance(r, dict)] if isinstance(items, list) else []
 
@@ -146,12 +148,16 @@ def triggered_judge_run(
     found: list[dict[str, object]] = []
 
     def probe() -> bool:
-        resp = repo.call(
-            "GET",
-            f"actions/workflows/{judge_workflow}/runs?event=workflow_run&per_page=100",
-            token,
+        resp = need(
+            repo.call(
+                "GET",
+                f"actions/workflows/{judge_workflow}/runs?event=workflow_run&per_page=100",
+                token,
+            ),
+            {200},
+            "list judge runs",
         )
-        items = resp.get("workflow_runs") if resp.status == 200 else None
+        items = resp.get("workflow_runs")
         later = [
             r
             for r in (items if isinstance(items, list) else [])
@@ -170,8 +176,8 @@ def job_conclusions(repo: Repo, token: Token, run: dict[str, object]) -> dict[st
     run_id = run.get("id")
     if not isinstance(run_id, int):
         raise Precondition("a workflow run has no id")
-    resp = repo.call("GET", f"actions/runs/{run_id}/jobs", token)
-    jobs = resp.get("jobs") if resp.status == 200 else None
+    resp = need(repo.call("GET", f"actions/runs/{run_id}/jobs", token), {200}, "list jobs")
+    jobs = resp.get("jobs")
     out: dict[str, str] = {}
     for job in jobs if isinstance(jobs, list) else []:
         if isinstance(job, dict):

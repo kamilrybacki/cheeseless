@@ -49,6 +49,7 @@ class Knobs:
     seed_ok: bool = True
     unreadable_orphan: bool = False
     stale_reads: bool = False
+    env_gate_blocks_branch: bool = False  # live: the environment gate fails with-env, no steps
 
 
 @dataclass
@@ -399,6 +400,8 @@ class FakeGitHub:
     def _list_runs(
         self, repo: RepoState, label: str, data: object, query: str, wf: str = ""
     ) -> Response:
+        if label == "pusher":  # live: the pusher PAT has no Actions read scope (found live)
+            return Response(403, {"message": "Resource not accessible by personal access token"})
         params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
         runs = [
             r
@@ -412,7 +415,12 @@ class FakeGitHub:
     def _run_jobs(
         self, repo: RepoState, label: str, data: object, query: str, rid: str
     ) -> Response:
-        jobs = repo.jobs.get(int(rid), {})
+        if label == "pusher":
+            return Response(403, {"message": "Resource not accessible by personal access token"})
+        jobs = dict(repo.jobs.get(int(rid), {}))
+        gated = self.knobs.env_gate_blocks_branch and "with-env" in jobs
+        if gated:
+            jobs["with-env"] = "failure"
         return Response(
             200,
             {
@@ -420,7 +428,9 @@ class FakeGitHub:
                     {
                         "name": k,
                         "conclusion": v,
-                        "steps": [
+                        "steps": []
+                        if gated and k == "with-env"
+                        else [
                             {"name": "secret-absent", "conclusion": v},
                             {
                                 "name": "secret-present",

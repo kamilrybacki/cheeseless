@@ -94,6 +94,7 @@ BROKEN = [
     (8, Knobs(same_repo_protected=False), Outcome.FAIL),
     (9, Knobs(branch_reads_secret=True), Outcome.FAIL),
     (9, Knobs(actions_enabled=False), Outcome.PRECONDITION_MISSING),
+    (9, Knobs(env_gate_blocks_branch=True), Outcome.PASS),
     (10, Knobs(judge_succeeds=False), Outcome.FAIL),
     (10, Knobs(canary_workflows=False), Outcome.PRECONDITION_MISSING),
     (11, Knobs(pin_to_app=False), Outcome.PRECONDITION_MISSING),

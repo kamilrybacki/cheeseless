@@ -30,18 +30,19 @@ def _probe_branch(ctx: Ctx, repo: Repo, suffix: str) -> tuple[str, str]:
 def check_09_branch_workflow_blind(ctx: Ctx) -> CheckResult:
     repo = Repo(ctx.client, ctx.config.judged_repo)
     pusher = ctx.config.pusher_token
+    observer = ctx.config.admin_token
     branch, sha = _probe_branch(ctx, repo, "9")
     try:
-        run = completed_run(ctx, repo, pusher, sha, "live-probe.yml", "live-probe")
+        run = completed_run(ctx, repo, observer, sha, "live-probe.yml", "live-probe")
         if run is None:
             raise Precondition("the branch workflow never completed (are Actions enabled?)")
-        jobs = job_conclusions(repo, pusher, run)
+        jobs = job_conclusions(repo, observer, run)
     finally:
         drop_branch(repo, pusher, branch)
     rows = [f"job {name}: {state}" for name, state in sorted(jobs.items())]
     if jobs.get("control") != "success":
         raise Precondition("workflow execution control did not succeed")
-    details = need(repo.call("GET", f"actions/runs/{run['id']}/jobs", pusher), {200}, "jobs")
+    details = need(repo.call("GET", f"actions/runs/{run['id']}/jobs", observer), {200}, "jobs")
     items = details.get("jobs")
     probes = (
         {j.get("name"): j for j in items if isinstance(j, dict)} if isinstance(items, list) else {}
@@ -49,6 +50,11 @@ def check_09_branch_workflow_blind(ctx: Ctx) -> CheckResult:
     for name in ("with-env", "no-env"):
         job = probes.get(name, {})
         steps = {s.get("name"): s.get("conclusion") for s in job.get("steps", [])}
+        if name == "with-env" and job.get("conclusion") == "failure" and not steps:
+            # Live: the environment gate refuses a branch run before any step starts, so the
+            # secret was never reachable. A job that ran steps is judged by them as before.
+            rows.append("job with-env: blocked by the environment gate before any step ran")
+            continue
         if steps.get("secret-present") == "success":
             return failed("9", "a branch workflow read the canary environment secret", rows)
         if job.get("conclusion") != "success" or steps.get("secret-absent") != "success":
@@ -72,7 +78,7 @@ def check_10_judge_reads_secret(ctx: Ctx) -> CheckResult:
     try:
         sha = put_file(repo, pusher, "live-probe-10.txt", "trigger\n", branch)
         run = triggered_judge_run(
-            ctx, repo, pusher, sha, "live-canary-ci.yml", "live-canary-judge.yml"
+            ctx, repo, ctx.config.admin_token, sha, "live-canary-ci.yml", "live-canary-judge.yml"
         )
     finally:
         drop_branch(repo, pusher, branch)
@@ -117,6 +123,7 @@ def check_11_required_check_source(ctx: Ctx) -> CheckResult:
 
     repo = Repo(ctx.client, ctx.config.judged_repo)
     pusher = ctx.config.pusher_token
+    observer = ctx.config.admin_token
     default = repo.default_branch(ctx.minter.mint(ctx.config.judged_repo))
     rows = [f"required check pinned: {p}" for p in _pin(ctx, repo, default)]
     branch, sha = _probe_branch(ctx, repo, "11")
@@ -127,10 +134,10 @@ def check_11_required_check_source(ctx: Ctx) -> CheckResult:
         )
         made = need(pr, {201}, "pusher cannot open a pull request").get("number")
         number = made if isinstance(made, int) else 0
-        run = completed_run(ctx, repo, pusher, sha, "live-probe.yml", "live-probe")
+        run = completed_run(ctx, repo, observer, sha, "live-probe.yml", "live-probe")
         if run is None:
             raise Precondition("the branch workflow never completed")
-        jobs = job_conclusions(repo, pusher, run)
+        jobs = job_conclusions(repo, observer, run)
         if jobs.get("fake-check") != "success":
             raise Precondition("the forged-check job did not succeed")
         checks = need(repo.call("GET", f"commits/{sha}/check-runs", pusher), {200}, "check runs")
