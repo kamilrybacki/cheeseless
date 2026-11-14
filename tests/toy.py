@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 CANARY = "CHEESELESS-CANARY-7f3a9c"
+SENTINEL = "CHEESELESS-SENTINEL-3c9d1e"
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "Toy Author",
@@ -98,6 +99,7 @@ def test_keeps_lines(candidate):
 
 HIDDEN_SCORE = f"""\
 # {CANARY}
+# {SENTINEL}
 import pytest
 
 pytestmark = pytest.mark.criterion("score")

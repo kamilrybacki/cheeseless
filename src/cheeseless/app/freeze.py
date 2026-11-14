@@ -14,7 +14,12 @@ from cheeseless.domain.contract import (
     canonical_contract_bytes,
     parse_contract,
 )
-from cheeseless.domain.dlp import Fingerprints, build_fingerprints
+from cheeseless.domain.dlp import (
+    Fingerprints,
+    build_fingerprints,
+    redact_sentinels,
+    sentinel_problems,
+)
 from cheeseless.domain.evaluation import SuiteRun, criterion_by_test, freeze_problems
 from cheeseless.domain.freeze import FrozenTask, HiddenBlob, freeze_digest
 from cheeseless.domain.holdout import split as holdout_split
@@ -51,8 +56,9 @@ class FreezeError(Exception):
     """Raised when the freeze preconditions are not met."""
 
     def __init__(self, problems: list[str]) -> None:
-        super().__init__("; ".join(problems))
-        self.problems = tuple(problems)
+        redacted = tuple(redact_sentinels(problem) for problem in problems)
+        super().__init__("; ".join(redacted))
+        self.problems = redacted
 
 
 def _read_contract(repo: Repository, commit: str) -> Contract:
@@ -76,8 +82,17 @@ def _hidden_contents(
     return [(blob.path, repo.show(commit, blob.path)) for blob in blobs]
 
 
-def _public_contents(repo: Repository, commit: str, projection_tree: str) -> list[bytes]:
-    return [repo.show(commit, blob.path) for blob in repo.blobs_under(projection_tree, "")]
+def _public_contents(
+    repo: Repository, commit: str, projection_tree: str
+) -> list[tuple[bytes, bytes]]:
+    """Agent-visible projection blobs as ``(path, content)`` pairs.
+
+    A file name is as visible as its content, so callers scan the path bytes too.
+    """
+    return [
+        (blob.path.encode(), repo.show(commit, blob.path))
+        for blob in repo.blobs_under(projection_tree, "")
+    ]
 
 
 def prepare(
@@ -100,6 +115,16 @@ def prepare(
         for b in repo.blobs_under(acceptance_tree, "")
         if not b.path.startswith("contract/")
     )
+
+    hidden_contents = _hidden_contents(repo, baseline_commit, hidden_blobs)
+    projection_blobs = _public_contents(repo, baseline_commit, projection_tree)
+    public_contents = [content for _, content in projection_blobs]
+    public_surfaces = [content for _, content in projection_blobs] + [
+        path for path, _ in projection_blobs
+    ]
+    problems = sentinel_problems(hidden_contents, public_surfaces)
+    if problems:
+        raise FreezeError(problems)
 
     env = list(contract.env)
     with sandbox.trusted_scratch() as hidden_scratch:
@@ -141,11 +166,7 @@ def prepare(
     if not tests:
         raise FreezeError(["the hidden suite collected no usable tests"])
     task_id = freeze_digest(baseline_commit, acceptance_tree, canonical_contract_bytes(contract))
-    fingerprints = build_fingerprints(
-        task_id,
-        _hidden_contents(repo, baseline_commit, hidden_blobs),
-        _public_contents(repo, baseline_commit, projection_tree),
-    )
+    fingerprints = build_fingerprints(task_id, hidden_contents, public_contents)
     return PreparedFreeze(
         baseline_commit=baseline_commit,
         contract=contract,
