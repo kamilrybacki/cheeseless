@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+from urllib.parse import urlencode
+
+if TYPE_CHECKING:
+    from tests.live.model import Ctx
 
 from tests.live.github_client import GitHubClient, Response, Token
 
@@ -93,27 +99,64 @@ def poll(
         waited += every
 
 
-def protection_rejection(resp: Response) -> bool:
+def protection_rejection(resp: Response, *, evidence: Callable[[], bool]) -> bool:
     if resp.status == 401:
         raise Precondition("credential authentication failed")
-    message = str(resp.get("message") or "").lower()
-    evidence = any(
-        word in message
-        for word in (
-            "rule violation",
-            "ruleset",
-            "protected branch",
-            "branch protection",
-            "repository rule",
-            "gh006",
-            "gh013",
-        )
-    )
-    if resp.status in {403, 409, 422} and evidence:
+    if 200 <= resp.status < 300:
+        return False
+    if resp.status in {403, 409, 422} and evidence():
         return True
-    if resp.status not in {200, 201, 204}:
-        raise Precondition("rejection has no attributable protection evidence")
-    return False
+    raise Precondition("rejection has no attributable protection evidence")
+
+
+def actor_name(ctx: Ctx, actor: str, token: Token) -> str:
+    if actor != "pusher":
+        return ctx.minter.actor_name()
+    resp = need(ctx.client.request("GET", "user", token=token), {200}, "read pusher identity")
+    login = resp.get("login")
+    if not isinstance(login, str) or not login:
+        raise Precondition("pusher identity is unavailable")
+    return login
+
+
+def attempt_started() -> datetime:
+    # GitHub timestamps have second precision; run-unique refs isolate attempts in that second.
+    return datetime.now(UTC).replace(microsecond=0)
+
+
+def ruleset_rejection(
+    ctx: Ctx, repo: Repo, resp: Response, *, ref: str, actor: str, started: datetime
+) -> bool:
+    def evidence() -> bool:
+        query = urlencode({"ref": ref, "time_period": "day", "per_page": 100})
+        suites = need(
+            repo.call("GET", f"rulesets/rule-suites?{query}", ctx.config.admin_token),
+            {200},
+            "read rule suites with admin credential",
+        )
+        if not isinstance(suites.body, list):
+            return False
+        # The API returns newest first. Bypass and other actors/refs cannot prove rejection.
+        for suite in suites.body:
+            if not isinstance(suite, dict):
+                continue
+            if (suite.get("ref"), suite.get("result"), suite.get("actor_name")) != (
+                ref,
+                "fail",
+                actor,
+            ):
+                continue
+            try:
+                pushed = datetime.fromisoformat(str(suite.get("pushed_at")))
+                if pushed.tzinfo is not None and pushed >= started:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    return protection_rejection(
+        resp, evidence=lambda: poll(evidence, sleep=ctx.sleep, seconds=ctx.poll_seconds)
+    )
 
 
 def write_control(repo: Repo, actor: Token, suffix: str) -> None:

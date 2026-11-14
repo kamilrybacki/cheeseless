@@ -16,6 +16,8 @@ from tests.live.github_client import ClientError, GitHubClient, Token
 
 
 class TokenMinter(Protocol):
+    def actor_name(self) -> str: ...
+
     def mint(
         self,
         repo: str,
@@ -68,6 +70,13 @@ class AppTokenMinter:
             return Token(build_jwt(self._app_id, pem, now=int(self._clock())), "app-jwt")
         except ValueError:
             raise ClientError("the App key file is not a PEM private key") from None
+
+    def actor_name(self) -> str:
+        resp = self._client.request("GET", "app", token=self._jwt())
+        slug = resp.get("slug")
+        if resp.status != 200 or not isinstance(slug, str) or not slug:
+            raise ClientError("cannot read authenticated App identity")
+        return f"{slug}[bot]"
 
     def _installation_id(self, repo: str, jwt: Token) -> int:
         if repo in self._installations:
