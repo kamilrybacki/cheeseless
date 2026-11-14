@@ -36,7 +36,9 @@ class Repo:
     full: str
 
     def call(self, method: str, path: str, token: Token, body: object = None) -> Response:
-        return self.client.request(method, f"repos/{self.full}/{path}", token=token, json=body)
+        # GitHub answers 404 for a trailing slash, so the repo root has no "/" suffix.
+        url = f"repos/{self.full}/{path}" if path else f"repos/{self.full}"
+        return self.client.request(method, url, token=token, json=body)
 
     def default_branch(self, token: Token) -> str:
         resp = need(self.call("GET", "", token), {200}, f"read {self.full}")

@@ -13,6 +13,7 @@ from tests.live.probes import (
     job_conclusions,
     pusher_branch,
     put_file,
+    triggered_judge_run,
 )
 from tests.live.ref_ops import Precondition, Repo, need
 
@@ -70,11 +71,13 @@ def check_10_judge_reads_secret(ctx: Ctx) -> CheckResult:
     branch = pusher_branch(ctx, repo, "10")
     try:
         sha = put_file(repo, pusher, "live-probe-10.txt", "trigger\n", branch)
-        run = completed_run(ctx, repo, pusher, sha, "live-canary-judge.yml", None)
+        run = triggered_judge_run(
+            ctx, repo, pusher, sha, "live-canary-ci.yml", "live-canary-judge.yml"
+        )
     finally:
         drop_branch(repo, pusher, branch)
     if run is None:
-        raise Precondition("the workflow_run judge never completed for the probe commit")
+        raise Precondition("the workflow_run judge never completed after the probe commit's CI run")
     row = f"workflow_run judge conclusion: {run.get('conclusion')}"
     if run.get("conclusion") == "success":
         return passed("10", "the default-branch judge reads the environment secret", [row])

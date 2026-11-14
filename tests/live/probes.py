@@ -122,6 +122,50 @@ def completed_run(
     return found[0] if poll(probe, sleep=ctx.sleep, seconds=ctx.poll_seconds) else None
 
 
+def _run_id(run: dict[str, object]) -> int:
+    rid = run.get("id")
+    if not isinstance(rid, int):
+        raise Precondition("a workflow run has no id")
+    return rid
+
+
+def triggered_judge_run(
+    ctx: Ctx, repo: Repo, token: Token, sha: str, ci_workflow: str, judge_workflow: str
+) -> dict[str, object] | None:
+    """The completed ``workflow_run`` judge run that the probe commit's CI run triggered.
+
+    Live GitHub stamps a ``workflow_run`` run with the default branch tip, never the probe
+    commit, so it cannot be found by ``head_sha``. It is attributed by order instead: it is a
+    completed ``workflow_run`` run of the judge workflow whose id is above the probe's own
+    completed CI run (run ids only grow, and the judge starts after that run completes).
+    """
+    ci = completed_run(ctx, repo, token, sha, ci_workflow, None)
+    if ci is None:
+        return None
+    floor = _run_id(ci)
+    found: list[dict[str, object]] = []
+
+    def probe() -> bool:
+        resp = repo.call(
+            "GET",
+            f"actions/workflows/{judge_workflow}/runs?event=workflow_run&per_page=100",
+            token,
+        )
+        items = resp.get("workflow_runs") if resp.status == 200 else None
+        later = [
+            r
+            for r in (items if isinstance(items, list) else [])
+            if isinstance(r, dict)
+            and r.get("event") == "workflow_run"
+            and r.get("status") == "completed"
+            and _run_id(r) > floor
+        ]
+        found[:] = sorted(later, key=_run_id)[:1]
+        return bool(found)
+
+    return found[0] if poll(probe, sleep=ctx.sleep, seconds=ctx.poll_seconds) else None
+
+
 def job_conclusions(repo: Repo, token: Token, run: dict[str, object]) -> dict[str, str]:
     run_id = run.get("id")
     if not isinstance(run_id, int):
