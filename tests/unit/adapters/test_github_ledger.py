@@ -15,6 +15,7 @@ from cheeseless.adapters.outbound.ci.github_ledger import (
     LedgerMalformed,
     TransportError,
     UpdateResult,
+    UrllibLedgerSeeder,
     UrllibLedgerTransport,
     default_send,
 )
@@ -49,6 +50,10 @@ class FakeSend:
 
 def _transport(send: FakeSend) -> UrllibLedgerTransport:
     return UrllibLedgerTransport(REPO, TOKEN, api_url=API, send=send)
+
+
+def _seeder(send: FakeSend) -> UrllibLedgerSeeder:
+    return UrllibLedgerSeeder(REPO, TOKEN, api_url=API, send=send)
 
 
 def _commit_routes(*, message: str = "msg", tree: object = None, blob: object = None) -> dict:
@@ -330,3 +335,60 @@ def test_default_send_caps_the_response(server: str) -> None:
 def test_default_send_maps_connection_failures() -> None:
     with pytest.raises(TransportError):
         default_send(urllib.request.Request("http://127.0.0.1:1/"), 2.0)
+
+
+# -- seeding: write_root and create_ref -------------------------------------------
+
+
+def test_write_root_creates_a_parentless_commit() -> None:
+    send = FakeSend(
+        {
+            ("POST", "git/blobs"): (201, {"sha": BLOB}),
+            ("POST", "git/trees"): (201, {"sha": TREE}),
+            ("POST", "git/commits"): (201, {"sha": C1}),
+        }
+    )
+    sha = _seeder(send).write_root(message=b"seed", files={RECORD_FILE: b"seed"})
+    assert sha == C1
+    assert send.body(2) == {"message": "seed", "tree": TREE, "parents": []}
+
+
+@pytest.mark.parametrize(
+    ("status", "result"),
+    [
+        (201, UpdateResult.UPDATED),
+        (422, UpdateResult.REJECTED),
+        (401, UpdateResult.REJECTED),
+        (403, UpdateResult.REJECTED),
+    ],
+)
+def test_create_ref_posts_a_new_branch(status: int, result: UpdateResult) -> None:
+    send = FakeSend({("POST", "git/refs"): (status, {})})
+    assert _seeder(send).create_ref(BRANCH, C1) is result
+    assert send.body(0) == {"ref": f"refs/heads/{BRANCH}", "sha": C1}
+
+
+@pytest.mark.parametrize("status", [404, 409, 500])
+def test_create_ref_other_statuses_are_transport_errors(status: int) -> None:
+    send = FakeSend({("POST", "git/refs"): (status, {})})
+    with pytest.raises(TransportError):
+        _seeder(send).create_ref(BRANCH, C1)
+
+
+def test_create_ref_refuses_a_bad_sha_before_any_request() -> None:
+    send = FakeSend({})
+    with pytest.raises(LedgerMalformed):
+        _seeder(send).create_ref(BRANCH, "nope")
+    assert send.requests == []
+
+
+def test_the_judge_transport_cannot_create_refs_or_roots() -> None:
+    judge = _transport(FakeSend({}))
+    assert not hasattr(judge, "write_root")
+    assert not hasattr(judge, "create_ref")
+
+
+def test_writing_to_an_empty_repository_says_so() -> None:
+    send = FakeSend({("POST", "git/blobs"): (409, {"message": "Git Repository is empty."})})
+    with pytest.raises(TransportError, match="empty"):
+        _seeder(send).write_root(message=b"seed", files={RECORD_FILE: b"seed"})

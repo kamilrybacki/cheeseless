@@ -17,8 +17,16 @@ import secrets
 import sys
 from pathlib import Path
 
-from cheeseless.adapters.outbound.ci.github_ledger import LedgerTransport, UrllibLedgerTransport
+from cheeseless.adapters.outbound.ci.github_ledger import (
+    LedgerMalformed,
+    LedgerSeeder,
+    LedgerTransport,
+    TransportError,
+    UrllibLedgerSeeder,
+    UrllibLedgerTransport,
+)
 from cheeseless.adapters.outbound.ci.ledger_counter import LedgerCounter
+from cheeseless.adapters.outbound.ci.ledger_seed import SeedError, seed_ledger
 from cheeseless.adapters.outbound.git.repository import GitRepository
 from cheeseless.adapters.outbound.runner.pytest_runner import PytestRunner
 from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
@@ -34,7 +42,13 @@ from cheeseless.ci_bundle import (
     encode_bundle,
 )
 from cheeseless.domain.budget import Pool
-from cheeseless.domain.budget_ledger import LedgerIdentity, branch_for, new_claim, run_key
+from cheeseless.domain.budget_ledger import (
+    LedgerIdentity,
+    branch_for,
+    ledger_repo,
+    new_claim,
+    run_key,
+)
 from cheeseless.domain.status import Status
 
 BUNDLE_ENV = "CHEESELESS_CI_BUNDLE"
@@ -195,15 +209,72 @@ def ci_judge(args: argparse.Namespace) -> int:
     return EXIT_PASS if verdict.status is Status.PASS else EXIT_FAIL
 
 
+def make_ledger_seeder(repo: str, token: str) -> LedgerSeeder:
+    return UrllibLedgerSeeder(repo, token)
+
+
+def _seed(args: argparse.Namespace, token: str) -> int:
+    if not token:
+        _err(f"ci-budget-init failed: set {BUDGET_TOKEN_ENV} to a token for the ledger repo")
+        return EXIT_USAGE
+    repo = GitRepository.discover(Path.cwd())
+    store = FileStore(store_root(repo.common_dir(), _state_home(args.state_dir)))
+    task_id = store.active_task_id()
+    if task_id is None:
+        _err("ci-budget-init failed: no frozen task")
+        return EXIT_USAGE
+    lineage = store.load_task(task_id)[0].task.lineage_id
+    try:
+        # Both identifiers are checked here, before the seeder sends any request.
+        repo_name = ledger_repo(args.budget_repo)
+        identity = LedgerIdentity(repo_id=args.repo_id, lineage=lineage)
+        result = seed_ledger(
+            make_ledger_seeder(repo_name, token),
+            store_key=store.hmac_key(),
+            identity=identity,
+            branch=branch_for(lineage),
+        )
+    except (SeedError, ValueError) as exc:  # messages never include the key or token
+        _err(f"ci-budget-init refused: {exc}")
+        return EXIT_USAGE
+    except LedgerMalformed:
+        _err("ci-budget-init failed: the ledger returned a malformed response")
+        return EXIT_USAGE
+    except TransportError as exc:  # fixed messages: an HTTP status or an exception name
+        _err(f"ci-budget-init failed: cannot reach the ledger ({exc})")
+        return EXIT_USAGE
+    state = "seeded" if result.created else "already seeded"
+    _err(f"{state} {branch_for(lineage)} in {repo_name}")
+    _err(f"next: cheeseless ci-export --budget-repo {repo_name} --budget-root {result.root} ...")
+    print(result.root)
+    return EXIT_PASS
+
+
+def ci_budget_init(args: argparse.Namespace) -> int:
+    """Seed the CI budget ledger for the frozen task; prints only the root commit SHA."""
+    # The budget token leaves the environment first, before anything can spawn a process.
+    token = os.environ.pop(BUDGET_TOKEN_ENV, "")
+    try:
+        return _seed(args, token)
+    except Exception as exc:  # noqa: BLE001 - local setup (repository, store); never a trace
+        _err(f"ci-budget-init failed: {type(exc).__name__}")
+        return EXIT_USAGE
+    finally:
+        del token
+
+
 def run(args: argparse.Namespace) -> int:
-    return ci_export(args) if args.command == "ci-export" else ci_judge(args)
+    commands = {"ci-export": ci_export, "ci-judge": ci_judge, "ci-budget-init": ci_budget_init}
+    return commands[args.command](args)
 
 
 __all__ = [
     "BUDGET_TOKEN_ENV",
     "BUNDLE_ENV",
+    "ci_budget_init",
     "ci_export",
     "ci_judge",
+    "make_ledger_seeder",
     "make_ledger_transport",
     "run",
 ]

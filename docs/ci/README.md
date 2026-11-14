@@ -9,17 +9,25 @@ posts a check run with the aggregate status and visible-criterion statuses only.
 1. Create a dedicated **private ledger repository** under the same owner as the judged
    repository (for example `cheeseless-ledger`). It holds the cross-run CI budget counter,
    one branch `cheeseless/budget/<lineage>` per lineage. Pushers of the judged repository get
-   no access to it. See [CI budget ledger](#ci-budget-ledger) for the rulesets it needs.
+   no access to it. Initialize it with one commit (for example a README): GitHub's Git data
+   API refuses every write to an empty repository. See [CI budget ledger](#ci-budget-ledger)
+   for the rulesets it needs.
 2. Create a dedicated **judge GitHub App** with repository permissions *Checks: read and
    write* and *Contents: read and write*, install it on the judged repository and on the
    ledger repository only, and generate a private key. Each workflow token narrows these
    permissions further (see [How it behaves](#how-it-behaves)).
-3. Seed the ledger branch of the lineage: one root commit with no parent whose tree holds
-   only `record.json` and whose commit message equals that file. The content is the seed
-   record from `planning/research/ci-budget-counter.md` section 3, MAC'd with the budget key
-   derived from the store key. A `cheeseless ci-budget-init` command is planned but not yet
-   shipped. Note the root commit SHA.
-4. On a trusted workstation, after `cheeseless freeze`, run
+3. On a trusted workstation, after `cheeseless freeze`, seed the ledger branch of the
+   lineage **before enabling Ruleset B** (it blocks branch creation):
+   `CHEESELESS_BUDGET_TOKEN=... cheeseless ci-budget-init --budget-repo OWNER/LEDGER
+   --repo-id ID`, where `ID` is the numeric id of the judged repository
+   (`GITHUB_REPOSITORY_ID`, also shown by `gh api repos/OWNER/NAME --jq .id`). The token
+   needs *Contents: read and write* on the ledger repository only; the command removes it
+   from its environment first and never prints it. It writes one parentless commit whose
+   tree holds only `record.json`, MAC'd with the budget key derived from the store key,
+   reads it back, and only then creates the branch. Stdout is the root commit SHA alone.
+   Re-running is safe: a valid seed of this repository, lineage and store key is returned
+   as is, and a branch that already has runs or belongs to anything else is refused.
+4. On the same workstation, run
    `cheeseless ci-export --out PATH --budget-repo OWNER/LEDGER --budget-root ROOT_SHA`.
    The path must be outside the repository. The bundle is written with mode 0600 and never
    printed. It pins the ledger repository, the lineage branch and the root commit; a bundle

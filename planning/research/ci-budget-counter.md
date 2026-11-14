@@ -257,6 +257,12 @@ canary secrets, never the real bundle.
 11. A check run with the required check's name, posted by `github-actions` (a branch workflow with
     `checks: write`), does not satisfy the required check. One posted by the judge App does.
 
+*Seeding (P10-29):*
+12. With Ruleset B active, `POST git/refs` for a new `cheeseless/budget/**` branch is rejected (negative).
+    Record the HTTP status and body; `ci-budget-init` treats 401, 403 and 422 as a refusal.
+13. `GET git/commits/{sha}` returns a commit that no ref points at yet, right after it is written, and
+    `ci-budget-init` on a fresh ledger repository initialized with one commit succeeds (positive).
+
 The YAML unit tests in `tests/unit/test_judge_workflow.py` only pin the template. They cannot establish
 environment rules, ruleset enforcement or required-check source pinning; checks 3 and 9–11 do. If any check fails, use option (e) or keep CI
 unbudgeted and blocked.

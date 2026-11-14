@@ -61,6 +61,18 @@ class LedgerTransport(Protocol):
         ...
 
 
+class LedgerSeeder(LedgerTransport, Protocol):
+    """The operator's transport: it may also create a ledger branch. The judge never gets one."""
+
+    def write_root(self, *, message: bytes, files: Mapping[str, bytes]) -> str:
+        """Create a parentless commit (no ref change). Returns the commit SHA."""
+        ...
+
+    def create_ref(self, branch: str, sha: str) -> UpdateResult:
+        """Create ``branch`` at ``sha``. ``REJECTED`` when refused (exists, or a ruleset)."""
+        ...
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args: object, **kwargs: object) -> None:
         return None
@@ -146,6 +158,9 @@ class UrllibLedgerTransport:
         self, method: str, path: str, ok: tuple[int, ...], what: str, body: object = None
     ) -> dict[str, object]:
         status, raw = self._call(method, path, body)
+        if status == 409 and method == "POST":
+            # GitHub's Git data API refuses every write to a repository with no commits.
+            raise TransportError(f"ledger {what} failed: the ledger repository is empty")
         if status not in ok:
             raise TransportError(f"ledger {what} failed: HTTP {status}")
         return _dict(_decode(raw, what), what)
@@ -206,7 +221,9 @@ class UrllibLedgerTransport:
             raise LedgerMalformed("ledger blob is not valid base64") from None
 
     def write_commit(self, *, parent: str, message: bytes, files: Mapping[str, bytes]) -> str:
-        _oid(parent, "parent")
+        return self._write([_oid(parent, "parent")], message, files)
+
+    def _write(self, parents: list[str], message: bytes, files: Mapping[str, bytes]) -> str:
         entries = []
         for path, content in sorted(files.items()):
             body = {"content": base64.b64encode(content).decode(), "encoding": "base64"}
@@ -223,7 +240,7 @@ class UrllibLedgerTransport:
         commit_body = {
             "message": message.decode(),
             "tree": _oid(tree.get("sha"), "tree"),
-            "parents": [parent],
+            "parents": parents,
         }
         commit = self._json("POST", "git/commits", (201,), "commit write", commit_body)
         return _oid(commit.get("sha"), "commit")
@@ -236,6 +253,31 @@ class UrllibLedgerTransport:
         if status == 422:
             return UpdateResult.REJECTED
         raise TransportError(f"ledger ref update failed: HTTP {status}")
+
+
+class UrllibLedgerSeeder(UrllibLedgerTransport):
+    """The operator's ``ci-budget-init`` transport: also writes roots and creates refs.
+
+    A separate class so the judge's transport object has no way to create a branch or a
+    parentless commit, even dynamically.
+    """
+
+    def __repr__(self) -> str:
+        return f"UrllibLedgerSeeder(repo={self._repo!r}, api_url={self._api!r})"
+
+    def write_root(self, *, message: bytes, files: Mapping[str, bytes]) -> str:
+        return self._write([], message, files)
+
+    def create_ref(self, branch: str, sha: str) -> UpdateResult:
+        body = {"ref": f"refs/heads/{branch}", "sha": _oid(sha, "commit")}
+        status, _ = self._call("POST", "git/refs", body)
+        if status == 201:
+            return UpdateResult.UPDATED
+        # 422: ref exists or a ruleset refused it; 401/403: the token may not create it.
+        # Both are definite refusals; the seeder re-reads the ref to tell them apart.
+        if status in (401, 403, 422):
+            return UpdateResult.REJECTED
+        raise TransportError(f"ledger ref create failed: HTTP {status}")
 
 
 def _quote(branch: str) -> str:
@@ -251,9 +293,11 @@ def _decode(raw: bytes, what: str) -> object:
 
 __all__ = [
     "LedgerMalformed",
+    "LedgerSeeder",
     "LedgerTransport",
     "TransportError",
     "UpdateResult",
+    "UrllibLedgerSeeder",
     "UrllibLedgerTransport",
     "default_send",
 ]

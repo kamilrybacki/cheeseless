@@ -132,6 +132,11 @@ class FakeLedgerTransport:
     ``"drop"`` (not applied, 5xx), ``"race"`` (pops a callable from ``racers`` and runs it
     first, typically another judge's reserve, so ours is no longer a fast-forward).
     ``fail_writes`` makes the next N ``write_commit`` calls raise.
+
+    Seeding: ``create_script`` pops one action per ``create_ref`` call: ``"ok"``, ``"lost"``
+    (created, then the response is lost), ``"drop"`` (not created, 5xx), ``"ruleset"``
+    (refused by a ruleset, nothing created) or ``"race"`` (runs a racer first).
+    ``rewrite_message`` lets a test model a server that normalises commit messages.
     """
 
     def __init__(self) -> None:
@@ -142,6 +147,9 @@ class FakeLedgerTransport:
         self.update_script: list[str] = []
         self.racers: list[Callable[[], object]] = []
         self.updates_sent = 0
+        self.create_script: list[str] = []
+        self.creates_sent = 0
+        self.rewrite_message: Callable[[bytes], bytes] | None = None
         self.reads = 0
         self._serial = 0
 
@@ -215,6 +223,31 @@ class FakeLedgerTransport:
         self.refs[branch] = sha
         if action == "lost":
             raise TransportError("ledger update timed out")
+        return UpdateResult.UPDATED
+
+    # -- LedgerSeeder --------------------------------------------------------
+
+    def write_root(self, *, message: bytes, files: Mapping[str, bytes]) -> str:
+        if self.rewrite_message is not None:
+            message = self.rewrite_message(message)
+        return self.add_commit((), message, files)
+
+    def create_ref(self, branch: str, sha: str) -> UpdateResult:
+        self.creates_sent += 1
+        action = self.create_script.pop(0) if self.create_script else "ok"
+        if action == "drop":
+            raise TransportError("ledger ref create failed: HTTP 503")
+        if action == "ruleset":
+            return UpdateResult.REJECTED
+        if action == "race":
+            self.racers.pop(0)()
+        if sha not in self.commits:
+            raise TransportError("ledger ref create failed: HTTP 422")
+        if branch in self.refs:
+            return UpdateResult.REJECTED
+        self.refs[branch] = sha
+        if action == "lost":
+            raise TransportError("ledger ref create timed out")
         return UpdateResult.UPDATED
 
     def _descends(self, sha: str, ancestor: str) -> bool:

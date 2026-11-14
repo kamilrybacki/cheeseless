@@ -174,6 +174,12 @@ def test_branch_is_bound_to_the_lineage() -> None:
             bl.check_branch(bad, "toy-task")
 
 
+@pytest.mark.parametrize("lineage", ["toy..task", "toy-task.", "toy-task.lock", "toy.lock"])
+def test_a_lineage_that_is_not_a_valid_git_ref_has_no_branch(lineage: str) -> None:
+    with pytest.raises(LedgerInvalid, match="git ref"):
+        bl.branch_for(lineage)
+
+
 @pytest.mark.parametrize("repo", ["example-owner/cheeseless-ledger", "a/b", "Owner.1/repo_name.x"])
 def test_ledger_repo_accepts_owner_slash_name(repo: str) -> None:
     assert bl.ledger_repo(repo) == repo
