@@ -274,6 +274,13 @@ Reviewer: gpt-6.1-sol (Codex, read-only). Verdicts: 0001, 0003, 0007 accept; 000
 | R3-3 | LOW | 0005 | Sentinel minimum should apply per class that has hidden files and name the exposure checks. | **Fixed.** Names raw, reversed, hex and base64; other encodings point to ADR 0007. |
 | R3-4 | LOW | 0007 | 64-bit rolling-hash collisions are an unlisted residual. | **Fixed.** Listed: a collision can block clean text or drop a hidden k-gram as public. |
 
+Re-check of 0005/0006 by gpt-6-luna (Codex, read-only): 0006 accept; R3-1…R3-3 confirmed fixed in 0005, two new LOW findings, both fixed inline. All five ADRs are now `accepted`.
+
+| # | Sev | ADR | Finding | Disposition |
+|---|---|---|---|---|
+| R3-5 | LOW | 0005 | "Rotates after 3 failures or on a DLP hit" merged two different mechanisms: Q54 is an operator re-freeze (new split, seed and digest), P8-6 rotates in place. | **Fixed.** The bullet now names the operator re-freeze for Q54 and the in-place rotation for a DLP hit. |
+| R3-6 | LOW | 0005 | "Seed drawn after approval" did not say which approval. | **Fixed.** It now says the seed is drawn after the user approves the freeze (Q9, Q44). |
+
 ## 2026-11-13 — MVP implementation
 
 The operator asked for continuous implementation until the MVP works and accepted that the

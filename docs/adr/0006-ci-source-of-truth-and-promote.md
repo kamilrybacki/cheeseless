@@ -1,7 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-11-13
-reviewers: [gpt-6.1-terra]
+reviewers: [gpt-6.1-terra, gpt-6.1-sol, gpt-6-luna]
 ---
 # 0006. CI is authoritative; promote filters paths; hooks are not a boundary
 

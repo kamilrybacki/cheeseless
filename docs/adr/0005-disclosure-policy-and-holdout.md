@@ -1,7 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-11-13
-reviewers: [gpt-6.1-terra]
+reviewers: [gpt-6.1-terra, gpt-6.1-sol, gpt-6-luna]
 ---
 # 0005. Disclose per-criterion pass/fail only and budget the runs
 
@@ -21,16 +21,16 @@ Minimal feedback.
   both configurable per repo (Q38). The bound holds only with that counter, which release
   requires (P10-6). A run reserves budget atomically before any hidden input (D7); pre-hidden
   failures are free (Q52), later infra errors are charged (D2).
-- Freeze identity is the digest of the frozen task, assigned at freeze by the operator; results
-  bind to it. Budget identity is the lineage fixed at first freeze (D14, I5): a re-freeze gets a
-  new digest, a holdout rotation keeps the digest and changes only seed and split (P8-6); both
-  carry the remaining counts.
-- Exhausted budget ends the task `BLOCKED`; only the operator grants more runs. The holdout
-  rotates after 3 failed CI holdout attempts (Q54) or on a DLP hit (ADR 0007).
+- Results bind to the freeze digest, set by the operator at freeze. Budget identity is the
+  lineage fixed at first freeze (D14, I5): a re-freeze gets a new digest, an in-place rotation
+  keeps it and changes only seed and split (P8-6); both keep the remaining counts.
+- Exhausted budget ends the task `BLOCKED`; only the operator grants more runs. After 3 failed
+  CI holdout attempts the operator re-freezes with a new split and seed (Q54); a DLP hit rotates
+  the holdout in place (P8-6, ADR 0007).
 - Freeze preconditions (Q44, Q9): suite RED on baseline; skip/xfail/empty collection is an
   error; at least one visible and one holdout test per criterion (stratified); seed drawn after
-  approval; static check that tests read no candidate paths/env; no nodeids in `criteria.yaml`.
-  User approval and cross-vendor review of test strength.
+  the user approves the freeze; static check that tests read no candidate paths/env; no nodeids
+  in `criteria.yaml`; cross-vendor review of test strength.
 - Each artifact class that has hidden files (tests, fixtures, expected outputs, seed, author
   notes) needs two distinct private sentinels; a marker the projection shows raw, reversed, hex
   or base64 does not count and freeze refuses (Q46, P8-12; other encodings: ADR 0007).
