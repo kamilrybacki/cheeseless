@@ -4,9 +4,11 @@ A git-native black-box quality gate for coding agents: frozen acceptance tests t
 cannot see, a sandboxed verifier it can only ask "does my tree pass?", a shared run
 budget, egress DLP, and CI as the source of truth.
 
-**Status:** host-side core, authenticated UDS/MCP, isolated host sessions and the
-phase 8 egress DLP proxy are implemented. CI, the toy-repo E2E and release hardening
-remain (see `planning/handoff.md`).
+**Status:** host-side core, authenticated UDS/MCP, isolated host sessions, the egress
+DLP proxy, the CI judge and the cross-run CI budget counter are implemented, including
+the phase 11 follow-ups (baked MCP shim, per-request allow audit, opt-in real-agent E2E).
+The live GitHub release gate, the phase 12 sanitizer and publication remain (see
+`planning/handoff.md`).
 
 Usage:
 ```
@@ -17,6 +19,8 @@ cheeseless promote [--worktree PATH] [--approve PATH ...]
 cheeseless doctor
 cheeseless serve-uds --socket PATH --pidns-fd N
 cheeseless serve-mcp --uds-socket PATH --task TASK
+cheeseless session [--task TASK] [--ro PATH] [--home-seed REL=SRC] [--env K=V] \
+    [--evidence-dir NEW_DIR] -- AGENT [ARGS...]
 ```
 
 ## Egress DLP guarantees (phase 8)
@@ -40,6 +44,11 @@ cheeseless serve-mcp --uds-socket PATH --task TASK
   id or lineage budget, kills the whole agent process tree and alerts with host, rule and
   fingerprint id only. Public proxy errors are `cheeseless.v1.Error` JSON with
   `X-Cheeseless-Code`.
+- Every admitted request is also audited with bounded, non-secret metadata: a stable
+  request id, stage (`request_admitted` / `response_clean`), normalised host, method,
+  allow decision and rule. Paths, queries, headers, bodies, tokens and exception text
+  have no field. An audit write failure fails the request (or session, once response
+  bytes are already out) closed. See [`docs/egress-audit.md`](docs/egress-audit.md).
 
 Residual limits (ADR 0001/0007 and ledger P8-9): paraphrase/transform leaks below the
 k-gram or marker length, theoretical 64-bit rolling-hash collisions, bytes already
@@ -49,11 +58,18 @@ hidden artifacts, and freeze requires at least two distinct markers per artifact
 that has hidden files. A marker that also appears in the agent-visible projection does
 not count and makes freeze refuse.
 
+The staged `cheeseless-mcp` shim has the session's verifier socket and task id baked in
+as quoted literals. MCP clients that filter or override `CHEESELESS_SOCKET` and
+`CHEESELESS_TASK` still reach the authenticated per-session UDS; the environment cannot
+redirect it.
+
 Requires Python >=3.12 and `mitmproxy>=12.3.1,<13` (pinned in `pyproject.toml`).
 
 - Start here: [`planning/handoff.md`](planning/handoff.md)
 - Plan: [`planning/implementation-plan.md`](planning/implementation-plan.md)
 - Decisions: [`planning/ledger.md`](planning/ledger.md), [`docs/adr/`](docs/adr/README.md)
+- Prompt authors: [`docs/agent-prompting.md`](docs/agent-prompting.md)
+- Egress audit: [`docs/egress-audit.md`](docs/egress-audit.md)
 - Agent rules: [`AGENTS.md`](AGENTS.md)
 
 Licensed under Apache-2.0.

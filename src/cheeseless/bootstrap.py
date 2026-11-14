@@ -45,6 +45,7 @@ from cheeseless.adapters.outbound.sandbox import profiles, seccomp
 from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
 from cheeseless.adapters.outbound.sandbox.launch import force_remove
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
+from cheeseless.app.audit import StoreAuditSink
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.egress_supervisor import EgressBlock, EgressSupervisor
 from cheeseless.domain.budget import Pool
@@ -65,13 +66,6 @@ from cheeseless.session_options import within as _within
 SESSION_START_TIMEOUT = 10.0
 MAX_INFO_BYTES = 1 << 20
 _DEFAULT_AGENT = ("sleep", "infinity")
-AGENT_BOOT = (
-    "import os,sys;"
-    "sys.path.insert(0, os.environ['CHEESELESS_RUNTIME']);"
-    "from cheeseless.bootstrap import serve_mcp;"
-    "raise SystemExit(serve_mcp(os.environ['CHEESELESS_SOCKET'],"
-    " task_id=os.environ.get('CHEESELESS_TASK')))"
-)
 BRIDGE_BOOT = (
     "import os,sys;"
     "sys.path.insert(0, os.environ['CHEESELESS_RUNTIME']);"
@@ -355,11 +349,29 @@ def _link_or_copy(source: str, destination: str) -> str:
     return destination
 
 
-def _stage_runtime() -> TrustedRuntime:
+def _mcp_shim_source(python: str, site: Path, socket_path: Path, task_id: str) -> str:
+    """The staged MCP stdio shim; socket and task are quoted literals, never env.
+
+    A client that filters ``CHEESELESS_SOCKET``/``CHEESELESS_TASK`` out of the MCP
+    server environment, or that sets conflicting values, still reaches the one verifier
+    UDS this session created for the one frozen task. Nothing mutable (the projection or
+    the environment) can redirect it.
+    """
+    return (
+        f"#!{python}\n"
+        "import sys\n"
+        f"sys.path.insert(0, {str(site)!r})\n"
+        "from cheeseless.bootstrap import serve_mcp\n"
+        f"raise SystemExit(serve_mcp({str(socket_path)!r}, task_id={task_id!r}))\n"
+    )
+
+
+def _stage_runtime(socket_path: Path, task_id: str) -> TrustedRuntime:
     """Stage the agent client runtime outside the repo; the sandbox mounts it read-only.
 
     The sandbox mounts only this staging directory, never the repository, the venv
-    path inside the repository or the trusted store.
+    path inside the repository or the trusted store. The MCP shim carries the session's
+    socket and task id as literals (P11-11).
     """
     root = _private_dir("cheeseless-runtime-")
     site = root / "site"
@@ -393,12 +405,7 @@ def _stage_runtime() -> TrustedRuntime:
     mcp = bin_dir / "cheeseless-mcp"
     python = os.path.realpath(sys.executable)
     mcp.write_text(
-        f"#!{python}\n"
-        "import os, sys\n"
-        f"sys.path.insert(0, {str(site)!r})\n"
-        "from cheeseless.bootstrap import serve_mcp\n"
-        "raise SystemExit(serve_mcp(os.environ['CHEESELESS_SOCKET'],\n"
-        "    task_id=os.environ.get('CHEESELESS_TASK')))\n",
+        _mcp_shim_source(python, site, socket_path, task_id),
         encoding="utf-8",
     )
     os.chmod(mcp, 0o500)
@@ -686,7 +693,7 @@ def host_session(
         if _within(egress_dir, projection_dir) or _within(egress_dir, socket_dir_path):
             raise RuntimeError("egress directory must be separate from the session paths")
         egress_socket = egress_dir / "egress.sock"
-        runtime = _stage_runtime()
+        runtime = _stage_runtime(socket_path, task_id)
 
         ctx.repo.create_projection(frozen.projection_tree, projection_dir)
         strays = ctx.repo.stray_hidden(projection_dir, frozen.hidden_blobs)
@@ -743,6 +750,7 @@ def host_session(
             ),
             fingerprints,
             on_hit=on_hit,
+            on_audit=StoreAuditSink(ctx.store, task_id).record,
         )
         proxy.start()
         ca_cert = str(proxy.ca_cert_path)

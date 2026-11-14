@@ -38,6 +38,10 @@ SERVER_TOOL_KEYS = frozenset(
     }
 )
 UNINSPECTABLE_REQUEST_HEADERS = ("content-encoding", "transfer-encoding")
+ALLOWLISTED_RULE = "allowlisted-host"
+MODEL_RULE = "model-request"
+REGISTRY_RULE = "registry-get"
+ALLOW_RULES = frozenset({ALLOWLISTED_RULE, MODEL_RULE, REGISTRY_RULE})
 
 
 class PolicyError(ValueError):
@@ -99,6 +103,14 @@ class EgressPolicy:
             if marker in normalized:
                 return Decision(ErrorCode.EGRESS_DOMAIN_DENIED, "own-identity")
         return None
+
+    def allow_rule(self, host: str) -> str:
+        """The policy branch that admits an already-normalised host (audit rule)."""
+        if host in self.model_hosts:
+            return MODEL_RULE
+        if host in self.registry_hosts:
+            return REGISTRY_RULE
+        return ALLOWLISTED_RULE
 
     def check_request(
         self, method: str, host: str, url: str, headers: Mapping[str, str], body: bytes
@@ -218,6 +230,10 @@ def check_model_request(body: bytes) -> Decision | None:
 
 
 __all__ = [
+    "ALLOWLISTED_RULE",
+    "ALLOW_RULES",
+    "MODEL_RULE",
+    "REGISTRY_RULE",
     "Decision",
     "EgressPolicy",
     "PolicyError",

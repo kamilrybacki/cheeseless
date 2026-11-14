@@ -7,17 +7,26 @@ body, header or hidden match. Every response it generates itself is a catalogue
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable
 from typing import Any
 
 from mitmproxy import http
 
+from cheeseless.domain.audit import (
+    KNOWN_METHODS,
+    OTHER_METHOD,
+    REQUEST_ADMITTED,
+    RESPONSE_CLEAN,
+    AuditEvent,
+)
 from cheeseless.domain.dlp import BodyScanner, DlpScanner, ScanHit, inspect_archive
-from cheeseless.domain.egress_policy import Decision, EgressPolicy
+from cheeseless.domain.egress_policy import Decision, EgressPolicy, normalize_host
 from cheeseless.domain.errors import CATALOGUE, ErrorCode, ErrorDetails, docs_anchor
 
 HitCallback = Callable[[str, str, str], None]
+AuditCallback = Callable[[AuditEvent], None]
 
 
 def _wire_code(code: ErrorCode) -> str:
@@ -55,11 +64,16 @@ def error_response(code: ErrorCode, host: str) -> http.Response:
 
 class EgressAddon:
     def __init__(
-        self, policy: EgressPolicy, scanner: DlpScanner, on_hit: HitCallback | None = None
+        self,
+        policy: EgressPolicy,
+        scanner: DlpScanner,
+        on_hit: HitCallback | None = None,
+        on_audit: AuditCallback | None = None,
     ) -> None:
         self._policy = policy
         self._scanner = scanner
         self._on_hit = on_hit or (lambda host, rule, fingerprint: None)
+        self._on_audit = on_audit or (lambda event: None)
         self._states: dict[str, BodyScanner] = {}
 
     # -- request side ---------------------------------------------------------
@@ -115,6 +129,7 @@ class EgressAddon:
                 return
         request.headers.pop("accept-encoding", None)
         request.headers["accept-encoding"] = "identity"
+        self._admit(flow, host, request.method)
 
     # -- response side --------------------------------------------------------
 
@@ -156,6 +171,8 @@ class EgressAddon:
         self._states.pop(flow.id, None)
         pending = flow.metadata.pop("cheeseless_pending", None)
         if pending is None:
+            if not self._already_blocked(flow):
+                self._audit_clean_response(flow)
             return
         code, rule = pending
         host = flow.request.pretty_host
@@ -163,6 +180,80 @@ class EgressAddon:
             self._set_error(flow, code, host)
             self._on_hit(host, "encoded", rule)
         except Exception:  # noqa: BLE001 - never forward a pending block
+            flow.kill()  # type: ignore[no-untyped-call]
+
+    # -- allow audit (P11-11) -------------------------------------------------
+
+    def _request_id(self, flow: http.HTTPFlow) -> str:
+        known = flow.metadata.get("cheeseless_request_id")
+        if isinstance(known, str):
+            return known
+        value = hashlib.sha256(flow.id.encode("utf-8", "replace")).hexdigest()[:32]
+        flow.metadata["cheeseless_request_id"] = value
+        return value
+
+    @staticmethod
+    def _safe_method(raw: object) -> str:
+        """Map the wire method to the closed canonical set; never copy its text."""
+        if not isinstance(raw, str) or len(raw) > 7:
+            return OTHER_METHOD
+        upper = raw.upper()
+        return upper if upper in KNOWN_METHODS else OTHER_METHOD
+
+    def _admit(self, flow: http.HTTPFlow, host: str, method: object) -> None:
+        """Record the admitted request, after policy and request DLP inspection."""
+        if flow.metadata.get("cheeseless_admitted"):
+            return
+        try:
+            normalized = normalize_host(host)
+            if normalized not in self._policy.allowed_hosts:
+                raise ValueError("audit host is not on the allowlist")
+            event = AuditEvent(
+                request_id=self._request_id(flow),
+                stage=REQUEST_ADMITTED,
+                host=normalized,
+                method=self._safe_method(method),
+                rule=self._policy.allow_rule(normalized),
+            )
+            self._on_audit(event)
+        except Exception:  # noqa: BLE001 - an unaudited request is not allowed
+            self._audit_failure(flow, host, request_stage=True)
+            return
+        flow.metadata["cheeseless_admitted"] = (
+            event.request_id,
+            event.host,
+            event.method,
+            event.rule,
+        )
+
+    def _audit_clean_response(self, flow: http.HTTPFlow) -> None:
+        """Record a fully clean response once the stream has completed."""
+        admitted = flow.metadata.get("cheeseless_admitted")
+        if not isinstance(admitted, tuple) or flow.metadata.get("cheeseless_audited_response"):
+            return
+        flow.metadata["cheeseless_audited_response"] = True
+        request_id, host, method, rule = admitted
+        try:
+            self._on_audit(
+                AuditEvent(
+                    request_id=request_id,
+                    stage=RESPONSE_CLEAN,
+                    host=host,
+                    method=method,
+                    rule=rule,
+                )
+            )
+        except Exception:  # noqa: BLE001 - fail the session closed on a lost audit
+            # The response bytes have necessarily left the proxy by now (P11-11).
+            self._audit_failure(flow, host, request_stage=False)
+
+    def _audit_failure(self, flow: http.HTTPFlow, host: str, *, request_stage: bool) -> None:
+        self._mark(flow)
+        if request_stage:
+            self._set_error(flow, ErrorCode.INFRA_ERROR, host)
+        try:
+            self._on_hit(host, "audit", "audit-unavailable")
+        except Exception:  # noqa: BLE001
             flow.kill()  # type: ignore[no-untyped-call]
 
     # -- helpers --------------------------------------------------------------
@@ -232,4 +323,4 @@ class EgressAddon:
         flow.metadata["cheeseless_blocked"] = True
 
 
-__all__ = ["EgressAddon", "error_body", "error_response"]
+__all__ = ["AuditCallback", "EgressAddon", "error_body", "error_response"]

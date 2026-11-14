@@ -5,6 +5,7 @@ import json
 import pytest
 
 from cheeseless.domain.egress_policy import (
+    ALLOW_RULES,
     Decision,
     EgressPolicy,
     PolicyError,
@@ -112,3 +113,24 @@ def test_invalid_configuration_is_refused():
         EgressPolicy(allowed_hosts=frozenset({"a.test"}), model_hosts=frozenset({"b.test"}))
     with pytest.raises(PolicyError):
         EgressPolicy.from_config({"allowed_hosts": "a.test"})
+
+
+def test_allow_rule_names_the_policy_branch_that_allowed_the_host():
+    assert POLICY.allow_rule("api.example.test") == "model-request"
+    registry = EgressPolicy(
+        allowed_hosts=frozenset({"pypi.example.test"}),
+        registry_hosts=frozenset({"pypi.example.test"}),
+    )
+    assert registry.allow_rule("pypi.example.test") == "registry-get"
+    plain = EgressPolicy(allowed_hosts=frozenset({"cdn.example.test"}))
+    assert plain.allow_rule("cdn.example.test") == "allowlisted-host"
+
+
+def test_every_allow_rule_is_in_the_closed_audit_set():
+    registry = EgressPolicy(
+        allowed_hosts=frozenset({"api.example.test", "pypi.example.test", "cdn.example.test"}),
+        model_hosts=frozenset({"api.example.test"}),
+        registry_hosts=frozenset({"pypi.example.test"}),
+    )
+    for host in ("api.example.test", "pypi.example.test", "cdn.example.test"):
+        assert registry.allow_rule(host) in ALLOW_RULES

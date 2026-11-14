@@ -1,11 +1,12 @@
 # Handoff — start here
 
-State on 2026-11-14: phases 0–11 are implemented and merged (PR #1, PR #2). Branch
-`feat/release-blockers` closes release blockers: judge secret isolation (P10-22), the CI
-budget counter design (P10-23…P10-26) and the per-class sentinel minimum (P8-12, P8-13).
-ADRs 0001/0003/0005/0006/0007 were reworded to close H1–H4 and M2 and are `accepted` after
-cross-vendor review (ledger "ADR re-review, round 3").
-Release (phase 12) is pending.
+State on 2026-11-14: phases 0–11 are implemented and merged. PR #1 and PR #2 landed the
+core phases; PR #3 landed the cross-run CI budget counter; PR #4 landed
+`ci-budget-init`. Their heads are ancestors of `main` at `e93b8a3`. Branch
+`feat/phase-11-followups` closes the P11-11 items: the baked MCP shim, the per-request
+allow audit and the opt-in real-agent E2E harness. ADRs
+0001/0003/0005/0006/0007 were reworded to close H1–H4 and M2 and are `accepted` after
+cross-vendor review (ledger "ADR re-review, round 3"). Release (phase 12) is pending.
 This file is the entry point for a fresh session on this repository.
 
 ## What cheeseless is
@@ -66,18 +67,34 @@ source of truth; changes land through `promote`, not hooks.
   `cheeseless session` via MCP `gate_run`, the canary stayed out of the projection, and
   `promote` + `ci-judge` passed. Signalled sessions now tear down (P11-7). Timings and Codex
   operator requirements are in ledger P11-9 and P11-10.
+- Phase 11 follow-ups (2026-11-14, ledger P11-26…P11-33): the staged MCP shim bakes the
+  verifier socket and task id as quoted literals and ignores the session environment;
+  every admitted egress request gets bounded allow-audit metadata in the trusted store and
+  an audit failure fails closed; `tests/e2e/test_e2e_agent.py` is a real, operator-opt-in
+  agent test with a deterministic harness suite. Cross-model review fixes (P11-32) closed
+  both raised gaps: the audit method and rule are closed canonical sets (an unknown method
+  is `OTHER`, never copied text), and the evidence scan is bounded, fd-relative,
+  non-following and fail-closed, so a sparse file, FIFO, symlink or truncated capture is
+  refused before any unbounded read. The harness also refuses a blocked or non-zero agent
+  and requires the agent's own stored gate result. No paid agent request was made here.
+  [`docs/agent-prompting.md`](../docs/agent-prompting.md) documents the
+  per-criterion-only oracle for prompt authors; [`docs/egress-audit.md`](../docs/egress-audit.md)
+  documents the audit schema.
 
 ## Remaining
 
-- Phase 10 follow-ups: the cross-run CI budget counter is implemented on
-  `feat/release-blockers` (ledger P10-27, P10-28; retires P10-13 and P10-19). **P10-6 stays
+- Phase 10 follow-ups: the cross-run CI budget counter and `ci-budget-init` are merged
+  (PR #3, PR #4; ledger P10-27…P10-30; retires P10-13 and P10-19). **P10-6 stays
   open** until the operator release gate runs on real GitHub: P1 acceptance plus the thirteen
   live checks in section 6 of [`research/ci-budget-counter.md`](research/ci-budget-counter.md)
   (P10-7); checks 12 and 13 cover `cheeseless ci-budget-init`, which seeds the ledger root
   (P10-29, P10-30). The `ci.yml` bwrap step is verified (P10-8).
 - GitHub `refs/pull/1` and `refs/pull/2` still hold commits with the old author email;
   removing them needs GitHub Support or a fresh repository (operator decision).
-- Phase 11 follow-ups (ledger P11-11): bake socket/task into the MCP shim; per-request allow-log; an opt-in `e2e_agent` test that drives a real agent.
+- The P11-11 follow-ups are implemented but the real-agent E2E stays opt-in and was not
+  executed in this workspace. Run it with the manual command in
+  [`docs/agent-prompting.md`](../docs/agent-prompting.md); it needs an operator-owned
+  wrapper and credentials outside this repository.
 - Phase 12 sanitizer and publication.
 - Residual phase 8 limits (P8-12): freeze requires two private sentinel markers per
   artifact class, but markers split across files or hidden behind other reversible
@@ -88,6 +105,10 @@ source of truth; changes land through `promote`, not hooks.
 - `serve-uds` accepts `--pidns-fd` for an inherited namespace FD and fails closed without
   one; the normal path is `host_session`, which obtains and pins the sandbox FD itself.
 - Real-bwrap egress bridge tests skip when bubblewrap is unavailable.
+- The allow audit is one line per admitted stage. Total log growth is proportional to
+  allowed traffic (bounded per event and at most two events per request, but no global
+  session cap), and a failed response-stage audit cannot retract response bytes already
+  forwarded. Both are operator-visible residuals, not hidden-content paths.
 
 ## Verification on 2026-11-13 (phase 10)
 
@@ -96,10 +117,26 @@ uv run --frozen pytest                 # 497 passed, 85.65% coverage
 ruff check . / mypy / lint-imports (4 kept) / gen_proto --check / gen_errors_doc --check: clean
 ```
 
+## Verification on 2026-11-14 (P11-11 follow-ups, after cross-model review fixes)
+
+```
+uv run --frozen pytest                 # 1166 passed, 2 skipped, 87.79% coverage
+uv run --frozen ruff check .           # clean
+uv run --frozen mypy                   # no issues in 80 source files
+uv run --frozen lint-imports           # 4 contracts kept
+uv run --frozen python scripts/gen_proto.py --check
+uv run --frozen python scripts/gen_errors_doc.py --check
+uv run --frozen cheeseless --version   # 0.0.0
+```
+
+The earlier 1133/87.79% run (ledger P11-31) predates the review fixes; P11-33 records this
+run. No live GitHub workflow, real CI budget ledger, opt-in real-agent E2E or real model
+request was run for this change.
+
 ## Verification on 2026-11-14
 
 ```
-uv run pytest --cov                    # 1037 passed, 1 skipped, 87.55% coverage (feat/release-blockers)
+uv run pytest --cov                    # 1037 passed, 1 skipped, 87.55% coverage (pre-PR #3/#4)
 uv run --frozen ruff check .
 uv run --frozen mypy                   # no issues
 uv run --frozen lint-imports           # 4 contracts kept
