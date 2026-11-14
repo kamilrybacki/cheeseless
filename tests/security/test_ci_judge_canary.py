@@ -14,6 +14,7 @@ from cheeseless import bootstrap_ci
 from cheeseless.adapters.outbound.runner.pytest_runner import PytestRunner
 from cheeseless.bootstrap import main
 from tests.ci_support import (
+    FAKE_BUDGET_TOKEN,
     LEDGER_REPO,
     CiWorld,
     export_argv,
@@ -24,7 +25,15 @@ from tests.ci_support import (
     set_judge_event,
 )
 from tests.requirements import needs
-from tests.toy import FIXED_MAIN, HIDDEN_NORMALIZE, HIDDEN_SCORE, commit_all, git, write_files
+from tests.toy import (
+    CRITERIA_YAML,
+    FIXED_MAIN,
+    HIDDEN_NORMALIZE,
+    HIDDEN_SCORE,
+    commit_all,
+    git,
+    write_files,
+)
 
 NEEDLE = "CHEESELESS-" + "CANARY-" + "c1d2e3"  # built at run time, never a literal
 BWRAP = os.access("/usr/bin/bwrap", os.X_OK)
@@ -121,6 +130,63 @@ def test_output_has_no_holdout_ids_or_canary(loud_world, monkeypatch, capsys):
         assert test_id not in text
         assert test_id.split("::")[-1] not in text
     assert set(json.loads(out.out)) == {"status", "criteria"}
+
+
+LEAK = "BUDGET-" + "LEAK"
+# Scans its own env and every /proc/<pid>/environ it can read for the budget token.
+ENV_PROBE = f"""\
+import os as _os
+
+
+def _budget_leaks():
+    needles = ({bootstrap_ci.BUDGET_TOKEN_ENV!r}, {FAKE_BUDGET_TOKEN!r})
+    blobs = ["\\n".join(f"{{k}}={{v}}" for k, v in _os.environ.items())]
+    for entry in _os.listdir("/proc"):
+        if entry.isdigit():
+            try:
+                with open(f"/proc/{{entry}}/environ", "rb") as handle:
+                    blobs.append(handle.read().decode("utf-8", "replace"))
+            except OSError:
+                pass
+    return [n for n in needles if any(n in b for b in blobs)]
+
+
+if _budget_leaks():
+    print({LEAK!r})
+    raise SystemExit(1)
+"""
+
+
+def test_the_env_probe_detects_the_token(monkeypatch, capsys):
+    # Negative control: the probe is not vacuous.
+    monkeypatch.setenv(bootstrap_ci.BUDGET_TOKEN_ENV, FAKE_BUDGET_TOKEN)
+    with pytest.raises(SystemExit):
+        exec(compile(ENV_PROBE, "probe", "exec"), {})  # noqa: S102 - test-owned source
+    assert LEAK in capsys.readouterr().out
+
+
+@pytest.fixture
+def probe_world(toy_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CiWorld:
+    """The contract's build step runs the probe; a leak fails the build."""
+    criteria = CRITERIA_YAML.replace("run:", "build:\n  - [python3, tools/env_probe.py]\nrun:", 1)
+    write_files(
+        toy_repo,
+        {"acceptance/contract/criteria.yaml": criteria, "tools/env_probe.py": ENV_PROBE},
+    )
+    commit_all(toy_repo, "build probes the env")
+    return prepare_world(toy_repo, tmp_path, monkeypatch)
+
+
+@needs(BWRAP, "bubblewrap is required")
+def test_the_budget_token_never_reaches_build_or_candidate(probe_world, capsys):
+    # The token is in the judge's env when it starts; build and run both probe for it.
+    head = make_head(probe_world, {"src/toy/__main__.py": ENV_PROBE + FIXED_MAIN})
+    assert judge_cli(probe_world, head, "--json") == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out)["status"] == "pass"
+    text = out.out + out.err
+    assert LEAK not in text
+    assert FAKE_BUDGET_TOKEN not in text
 
 
 def test_export_refuses_paths_inside_repo_and_git_dir(world, capsys):
