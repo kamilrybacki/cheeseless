@@ -1,7 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-11-13
-reviewers: [gpt-6.1-terra]
+reviewers: [gpt-6.1-terra, gpt-6.1-sol]
 ---
 # 0001. Trust the host side only and treat the gated agent and its code as hostile
 
@@ -17,7 +17,7 @@ be enforced outside the agent, not by its cooperation.
 ## Decision
 Explicit trust boundary.
 - **Trusted:** the operator, the host CLI (freeze, promote, disable; Q43), the verifier,
-  and CI running on the base branch (Q21, Q36).
+  and the CI judge running from the default branch (Q21, Q36, ADR 0006).
 - **Not trusted:** the gated agent and every line of candidate code it writes (Q8, Q11).
 - **Assets:** hidden tests, fixtures and expected outputs, the holdout and its seed,
   author notes and author transcripts (Q27, Q41, Q46).
@@ -26,8 +26,9 @@ Explicit trust boundary.
   boundary: listed attacks are tested with sentinels (Q46, Q29 and its additions). BLOCKED
   with a report is a valid terminal outcome, as is an honest failure report.
 - **Accepted residual risks** (documented, not solved): training-data memorisation of
-  public tests (stronger since tests are public, ledger D3), correlated blind spots of models, page-cache and timing side channels
-  below the run budget. Mitigation: holdout rotation and cross-vendor review.
+  public tests (stronger since tests are public, ledger D3), correlated blind spots of
+  models, page-cache and timing side channels below the run budget, and an escape from a
+  same-UID sandbox (ADR 0003). Mitigation: holdout rotation and cross-vendor review.
 
 ## Consequences
 - ✅ Every later decision (ADR 0002-0008) answers one named threat.

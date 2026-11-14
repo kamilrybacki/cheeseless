@@ -3,6 +3,8 @@
 State on 2026-11-14: phases 0–11 are implemented and merged (PR #1, PR #2). Branch
 `feat/release-blockers` closes release blockers: judge secret isolation (P10-22), the CI
 budget counter design (P10-23…P10-26) and the per-class sentinel minimum (P8-12, P8-13).
+ADRs 0001/0003/0005/0006/0007 were reworded to close H1–H4 and M2 (ledger "ADR re-review,
+round 3"); they stay `proposed` until that cross-vendor review is triaged.
 Release (phase 12) is pending.
 This file is the entry point for a fresh session on this repository.
 

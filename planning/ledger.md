@@ -229,7 +229,7 @@ F11 and F12 were confirmed closed; the rows below were partly closed or new. All
 | D11 | Session start runs the stray check fail closed, before projection and before the agent launches: a materialised hidden path, or any file whose blob hash equals a hidden blob or that contains a sentinel, means no session (`BLOCKED`, host CLI message, never agent-facing). `doctor` runs the same check. Security test with canary. | D5 |
 | D12 | **Proposed default.** The runner (host side, trusted venv) starts each candidate in its own bwrap; runner, its tmpfs and hidden inputs are outside the candidate's PID and mount namespaces, so `/proc/<runner>` is not visible. Runner sets `PR_SET_DUMPABLE=0`; candidate seccomp denies `ptrace`, `process_vm_readv`, `process_vm_writev`. The candidate only receives the inputs of the test invoking it. `tests/security/` proves ptrace attach, `/proc/<runner>/mem` and `process_vm_readv` fail and the canary stays absent. A separate host UID for the runner is not promised (residual, ADR 0001). | D4 |
 | D13 | Session membership on the verifier UDS: the peer's pidfd comes from `SO_PEERPIDFD` and its PID namespace (`PIDFD_GET_PID_NAMESPACE` ioctl) must equal the session sandbox's; no ancestry walk. Both are hard requirements, probed separately; if either is unavailable the call is refused (fail closed). Socket dir 0700, socket 0600. | D6 |
-| D14 | **Proposed default.** Budget is keyed by the task lineage fixed at the first freeze; a re-freeze or holdout rotation creates a new freeze digest (results bind to it) but carries the remaining count. More runs only via the existing operator grant (Q54, host CLI, logged). | D7 |
+| D14 | **Proposed default.** Budget is keyed by the task lineage fixed at the first freeze; a re-freeze creates a new freeze digest (results bind to it) but carries the remaining count; a holdout rotation keeps the digest and task id and changes only seed and split (P8-6; amended 2026-11-14, R3-2). More runs only via the existing operator grant (Q54, host CLI, logged). | D7 |
 | D15 | **Proposed default.** The CI verdict comes from a judge workflow defined on the base branch (`workflow_run`), never from a workflow the PR can edit (`pull_request` runs the PR's own workflow file). The judge fetches the PR head SHA named in the GitHub event as git data (no checkout hooks), binds the result to its tree hash, takes `acceptance/` and the runner closure from the base branch and fails on protected-path changes. Dependencies are fetched outside the sandbox as wheels only; build and tests run only in the candidate sandbox with no network; seed and HMAC key stay in the runner process and never enter the sandbox env. Logs and check summaries never show per-criterion holdout results. PR-defined jobs (lint, visible tests) get no secrets and a read-only token and are advisory. No `pull_request_target` with a PR checkout. A prebuilt artifact from a PR-defined job was rejected: it is not bound to the PR tree, so a passing artifact could vouch for a different tree. Where the judge keeps the CI budget counter is a phase 10 decision; caches writable by PR workflows do not count. | D8 |
 | D16 | Archives are detected by magic bytes, not `Content-Type`, buffered whole up to the D9 cap and forwarded only after a clean recursive scan; a hit or scan failure blocks. Non-archive streams hold back max(longest literal pattern including encoded forms, w + k − 1), because winnowing only guarantees detection of matches of at least w + k − 1 that may straddle a chunk boundary. | D9, R2 |
 | D17 | Internal status and cause are separate from the agent view. After the first hidden input an infra failure is stored as `INFRA_ERROR` for the operator, charged (D2), and the agent sees FAIL of the unfinished criteria with `CRITERION_FAILED`; `INFRA_ERROR` is agent-visible only before hidden input. Never PASS. | D2 |
@@ -250,6 +250,29 @@ review before 0003/0005/0006/0007 can be accepted. ADR text is unchanged by this
 | M1 | 0004 (ledger) | MEDIUM | Linux 6.5 support for `SO_PEERPIDFD` does not establish `PIDFD_GET_PID_NAMESPACE`. | **Fixed in D13:** both are separate hard requirements, refused if either is missing; the unverified kernel-version claim was dropped. ADR 0004 text already says "refused otherwise" and was not changed. |
 | M2 | 0005 | MEDIUM | Line 22 calls task identity the freeze digest, while D14 keys the budget to a lineage that survives digest changes. | **Open, wording fix with 0005:** separate freeze identity (digest, results bind to it) from budget identity (lineage). |
 
+
+## 2026-11-14 — ADR re-review, round 3
+
+ADR wording brought in line with the implemented defaults (operator accepted H1–H4 and M2 on
+the proposed fixes; see MVP implementation I3–I7, I15, P10-22). Author: claude-opus-5-5.
+
+| # | ADR | Change |
+|---|-----|--------|
+| H1 | 0003, 0006 | Execution boundary stated (I3): hidden tests stay in the runner outside every sandbox; only the candidate build and processes run in the candidate sandbox, driven black-box. |
+| H2 | 0006 | "Base" corrected to "default" branch; judge refuses a non-default base, resolves the PR from the head SHA, re-checks it before posting; no trigger means no check (I6). Judge App and environment (P10-22). |
+| H3 | 0005, 0006 | Separate pools (option a, I4): local 30 in the host store, CI 5 in a trusted CI counter, at most 35 per lineage; missing or inconsistent counter blocks the merge. |
+| H4 | 0007 | No winnowing on the protected side: every stream k-gram (k = 24) is matched against all hidden k-gram digests minus public ones; hold-back max(longest pattern, k − 1) (I7). |
+| M2 | 0005 | Freeze identity (digest, results bind to it) separated from budget identity (lineage, D14, I5). |
+| — | 0001, 0003, 0005, 0007 | Residuals: same-UID sandbox escape; x86_64 only (I2); seccomp adds `pidfd_getfd` (I15); per-class sentinel minimum (P8-12); split/encoded markers and HTTP upgrades/QUIC (P8-12, P8-13). |
+
+Reviewer: gpt-6.1-sol (Codex, read-only). Verdicts: 0001, 0003, 0007 accept; 0005, 0006 needed change.
+
+| # | Sev | ADR | Finding | Disposition |
+|---|---|---|---|---|
+| R3-1 | HIGH | 0005, 0006 | The 35-run bound and "missing counter blocks merge" are not enforced yet: `bootstrap_ci.py` builds a fresh store per run (P10-6 pending). | **Fixed.** Both ADRs state the bound holds only with the trusted CI counter and that release requires it (P10-6, P10-25/26). Implementation is a release blocker. |
+| R3-2 | MEDIUM | 0005 | "rotation gets a new digest" contradicts `app/holdout.py` and P8-6. | **Fixed.** 0005 separates re-freeze (new digest) from holdout rotation (same digest, task id and lineage; only seed and split change). D14 amended; I5 unchanged (it only carries the lineage). |
+| R3-3 | LOW | 0005 | Sentinel minimum should apply per class that has hidden files and name the exposure checks. | **Fixed.** Names raw, reversed, hex and base64; other encodings point to ADR 0007. |
+| R3-4 | LOW | 0007 | 64-bit rolling-hash collisions are an unlisted residual. | **Fixed.** Listed: a collision can block clean text or drop a hidden k-gram as public. |
 
 ## 2026-11-13 — MVP implementation
 
