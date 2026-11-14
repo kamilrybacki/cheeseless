@@ -1,0 +1,4 @@
+# Synthetic only: shaped like a generic API key so Gitleaks has a known positive
+# control. The release-audit config allowlists generic-api-key for this exact path
+# only; every other rule and path stays enabled.
+api_key = "Q7f3k9Lm2Pz8Vx4Nc6Rt1Wy5Bd0Hg2"

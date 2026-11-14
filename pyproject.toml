@@ -36,6 +36,25 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cheeseless"]
 
+[tool.hatch.build.targets.sdist]
+# Keep local caches and the CLAUDE.md convenience symlink out of release archives.
+exclude = [
+    ".coverage",
+    ".import_linter_cache",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "CLAUDE.md",
+    "__pycache__",
+    "build",
+    "dist",
+    "graft",
+    "tests/fixtures/release_audit/synthetic-token.txt",
+    "*.egg-info",
+    "*.pyc",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=cheeseless --cov-report=term-missing"

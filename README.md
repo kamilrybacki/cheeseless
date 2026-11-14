@@ -5,10 +5,12 @@ cannot see, a sandboxed verifier it can only ask "does my tree pass?", a shared 
 budget, egress DLP, and CI as the source of truth.
 
 **Status:** host-side core, authenticated UDS/MCP, isolated host sessions, the egress
-DLP proxy, the CI judge and the cross-run CI budget counter are implemented, including
-the phase 11 follow-ups (baked MCP shim, per-request allow audit, opt-in real-agent E2E).
-The live GitHub release gate, the phase 12 sanitizer and publication remain (see
-`planning/handoff.md`).
+DLP proxy, the CI judge, the cross-run CI budget counter and the phase 12 local release
+audit are implemented (PR #1–#5 merged at `924d953`), including the phase 11 follow-ups
+(baked MCP shim, per-request allow audit, opt-in real-agent E2E). The live GitHub
+`P10-6` release gate, the known server-side pull refs, explicit publication approval and
+the opt-in real-agent E2E remain open; see `planning/handoff.md`. A clean local audit is
+not a release-readiness claim.
 
 Usage:
 ```
@@ -70,6 +72,7 @@ Requires Python >=3.12 and `mitmproxy>=12.3.1,<13` (pinned in `pyproject.toml`).
 - Decisions: [`planning/ledger.md`](planning/ledger.md), [`docs/adr/`](docs/adr/README.md)
 - Prompt authors: [`docs/agent-prompting.md`](docs/agent-prompting.md)
 - Egress audit: [`docs/egress-audit.md`](docs/egress-audit.md)
+- Release audit: [`docs/release-audit.md`](docs/release-audit.md)
 - Agent rules: [`AGENTS.md`](AGENTS.md)
 
 Licensed under Apache-2.0.
