@@ -403,6 +403,40 @@ def test_an_overwrite_before_the_post_hidden_read_withholds_the_pass(world, caps
     assert ALERT_PREFIX in err
 
 
+def test_an_overwrite_during_a_failing_hidden_run_blocks_and_alerts(world, capsys):
+    # A lost charge is an incident whatever the verdict: a FAIL must not hide it.
+    head = make_head(world, {"src/toy/note.txt": "x"})
+    _charge_others(world, 4)
+    failing = SuiteRun(outcomes={})
+    runner = _fakes(world, HookedRunner(failing, lambda: _force_overwrite(world)))
+    code, verdict, err = _judge(world, head, capsys)
+    assert runner.hidden_calls == 1
+    _blocked(code, verdict, err, "infra_error")
+    assert ALERT_PREFIX in err
+
+
+def test_a_failing_run_whose_charge_stays_keeps_its_fail(world, capsys):
+    head = make_head(world, {"src/toy/note.txt": "x"})
+    _fakes(world, FakeRunner(hidden=SuiteRun(outcomes={})))
+    code, verdict, err = _judge(world, head, capsys)
+    assert (code, verdict["status"]) == (1, "fail")
+    assert ALERT_PREFIX not in err
+
+
+def test_a_rewind_to_a_valid_prefix_is_not_detected(world, capsys):
+    # The documented limit (docs/ci/README.md): replaying a valid prefix of the chain is
+    # indistinguishable from a shorter history. Only the ruleset against force pushes and
+    # deletions stops it; the validator cannot.
+    head = make_head(world, {"src/toy/note.txt": "x"})
+    seed = _tip(world)
+    _charge_others(world, _limit(world))
+    world.ledger.refs[_branch(world)] = seed
+    _fakes(world, FakeRunner(hidden=_passing_suite(world)))
+    code, verdict, err = _judge(world, head, capsys)
+    assert (code, verdict["status"]) == (0, "pass")
+    assert f"budget used 1 of {_limit(world)}" in err
+
+
 def test_an_overwrite_after_the_post_hidden_read_loses_the_charge(world, capsys):
     # The documented limit (spec section 5): a store that is not compare-and-swap can drop a
     # charge after the judge last looked. The required ruleset forbids force pushes.

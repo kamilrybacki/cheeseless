@@ -106,6 +106,11 @@ class LedgerCounter:
 
     # -- after hidden execution -------------------------------------------------
 
+    @property
+    def charged(self) -> bool:
+        """True once this judge's charge was confirmed on the chain."""
+        return self._reserved is not None
+
     def confirm_still_on_chain(self) -> bool:
         """True only if our charge is still on a valid chain. Any doubt returns False."""
         if self._reserved is None:

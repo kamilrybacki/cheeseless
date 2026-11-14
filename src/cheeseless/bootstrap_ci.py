@@ -136,8 +136,13 @@ def _make_counter(bundle: Bundle, token: str) -> LedgerCounter:
 
 
 def _confirmed(verdict: CiVerdict, counter: LedgerCounter) -> CiVerdict:
-    """A PASS stands only while its charge is still on the ledger chain (fail closed)."""
-    if verdict.status is not Status.PASS or counter.confirm_still_on_chain():
+    """Every charged verdict stands only while its charge is still on the chain (fail closed).
+
+    A lost charge is an incident whatever the outcome, so a FAIL is re-checked too.
+    """
+    if not counter.charged and verdict.status is not Status.PASS:
+        return verdict
+    if counter.confirm_still_on_chain():
         return verdict
     return dataclasses.replace(verdict, status=Status.BLOCKED, reason=JudgeReason.INFRA_ERROR)
 
