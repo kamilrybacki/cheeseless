@@ -80,5 +80,27 @@ uv run --frozen pytest tests/e2e/test_e2e_agent.py -m e2e_agent -s
 - The test fails on a wall-clock timeout, proves the session HOME was removed, scans the
   captured evidence for canaries, then promotes the tree and runs the real CI judge.
 
+### Example wrapper (Claude Code)
+
+A minimal operator wrapper, kept outside the repository. The agent binary directory and the
+wrapper directory are passed as `CHEESELESS_E2E_AGENT_RO`; credentials and a minimal
+`.claude.json` are passed as seeds. Prefer a sanitized credentials copy (access token only,
+empty refresh token) so a refresh inside the throwaway session cannot rotate your real login.
+
+```sh
+#!/bin/bash
+set -eu
+cfg="${TMPDIR:-/tmp}/cheeseless-mcp.json"
+printf '{"mcpServers":{"cheeseless":{"command":"%s","args":[]}}}' "$CHEESELESS_MCP" > "$cfg"
+export DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+exec /path/to/claude -p "$1" --mcp-config "$cfg" --strict-mcp-config \
+  --permission-mode acceptEdits \
+  --allowedTools mcp__cheeseless__gate_run Read Edit Write Glob Grep Bash
+```
+
+The egress policy then needs only the model host, for example
+`{"allowed_hosts": ["api.example.com"], "model_hosts": ["api.example.com"]}`. Delete the
+captured evidence afterwards: it contains the seeded files.
+
 Deterministic tests for the harness itself run in the normal suite and make no network or
 paid calls (`tests/e2e/test_agent_harness.py`).
