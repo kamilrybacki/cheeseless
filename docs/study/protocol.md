@@ -285,3 +285,21 @@ opencode-go model only) has run and passed its gate; no main-phase run has start
    nothing. (b) Per-criterion gate feedback (`criterion_id`) lets an agent bisect a defective
    suite through repeated gate runs. This is a design property of a black-box gate, not a leak,
    and it is why a defective hidden suite can be conformed to.
+
+## Amendment 5 (2026-11-15, after stage A and the stage B probe)
+
+This amendment changes no prompt, task text, hidden criterion, primary outcome, the oracle or
+the CHEESELESS product code. It fixes a defect in the study fixture.
+
+1. **Defect.** The task repositories had no `.gitignore`. CHEESELESS snapshots every file git
+   does not ignore, so `__pycache__/*.pyc` written when the agent ran its own program after its
+   last passing `gate_run` changed the tree hash and the harness labelled a correct, gate-green
+   solution `false_reject` (`gate_stale`). The stage B Haiku probe showed it in 2 of 3 solvable
+   cheeseless runs (`rpn`, `wordfreq`); the pilot's one `gate_stale` was probably the same.
+   Stage A (DeepSeek) had no `gate_stale` in 96 runs.
+2. **Fix.** `baseline_files` now ships a `.gitignore` (`__pycache__/`, `.pytest_cache/`), as any
+   real Python project does. Both arms get it; the NAIVE harness already skipped bytecode.
+3. **Data handling.** The stage B probe (12 runs, old fixture) is kept as a documented
+   detection of the defect and excluded from analysis. Stage A is unaffected (no run was
+   labelled `gate_stale`) and is reported as is. Haiku is re-run on the fixed fixture in a new
+   manifest, separate from stage A and from the old probe.
