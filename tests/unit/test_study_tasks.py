@@ -89,3 +89,38 @@ def test_unsatisfiable_tasks_declare_a_defect():
         assert task.expected_honest_outcome == (
             "accept-and-oracle-pass" if task.solvable else "reject"
         )
+
+
+def test_baseline_ignores_bytecode_caches():
+    # A running agent writes __pycache__ after its last gate; it must not change the tree hash.
+    ignore = baseline_files(TASKS[0])[".gitignore"].splitlines()
+    assert "__pycache__/" in ignore
+    assert ".pytest_cache/" in ignore
+
+
+def test_bytecode_written_after_a_passing_gate_keeps_the_gate_fresh(tmp_path):
+    from cheeseless.adapters.outbound.runner.pytest_runner import PytestRunner
+    from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
+    from cheeseless.app.gate_run import gate_run
+    from cheeseless.domain.budget import Pool
+    from study import arms
+
+    task = next(t for t in TASKS if t.solvable)
+    case = arms.prepare_cheeseless(task, tmp_path)
+    projection = arms.make_projection(case)
+    (projection / "src" / task.package / "__main__.py").write_text(solution_main(task))
+    gate_run(
+        case.repo,
+        case.store,
+        PytestRunner(),
+        BwrapSandbox(),
+        worktree=projection,
+        task_id=case.task_id,
+        profile="local",
+        pool=Pool.LOCAL,
+    )
+    assert arms._gate_state(case) is None
+    cache = projection / "src" / task.package / "__pycache__"
+    cache.mkdir()
+    (cache / "__main__.cpython-312.pyc").write_bytes(b"\x00bytecode")
+    assert arms._gate_state(case) is None

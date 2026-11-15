@@ -134,6 +134,7 @@ def oracle_files(task: Task) -> dict[str, str]:
 def baseline_files(task: Task) -> dict[str, str]:
     """The task repository the agent starts from (hidden suite included, as authored)."""
     files: dict[str, str] = {
+        ".gitignore": "__pycache__/\n.pytest_cache/\n",
         "README.md": f"# {task.task_id}\n\n{task.spec}\n",
         f"src/{task.package}/__init__.py": "",
         f"src/{task.package}/__main__.py": baseline_main(task.package),

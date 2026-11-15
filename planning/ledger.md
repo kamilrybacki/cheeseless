@@ -558,3 +558,12 @@ amendment needed.
 - Decision: do not hide the staged runtime from the agent. The MCP shim must execute from it
   and it holds no hidden tests; documented as a limitation. Per-criterion feedback bisection
   documented as a design property of a black-box gate.
+
+## 2026-11-15: study Amendment 5 (bytecode made gate results stale)
+
+Stage B probe: 2 of 3 solvable cheeseless Haiku runs were `false_reject` / `gate_stale` with a
+passing gate and a passing oracle. Cause: no `.gitignore` in the task fixture, so `.pyc` files
+written after the last gate changed the snapshot hash. Decision: fix the fixture (ship a
+`.gitignore`), not the product, because `snapshot` honouring `.gitignore` is correct and any
+real repository ignores bytecode. Rejected: `PYTHONDONTWRITEBYTECODE` in the wrapper (hides the
+defect, differs per agent). Old 12-run probe excluded from analysis, kept as a detection.
