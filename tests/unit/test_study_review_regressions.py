@@ -17,6 +17,22 @@ def test_study_malformed_complete_line_is_never_repaired(tmp_path):
     assert not path.with_suffix(".jsonl.corrupt-tail").exists()
 
 
+def test_study_repair_archive_is_private_even_with_permissive_umask(tmp_path):
+    import os
+    import stat
+
+    path = tmp_path / "m.jsonl"
+    path.write_bytes(b'{"phase":"pilot"}\n{"partial":')
+    old = os.umask(0o022)
+    try:
+        manifest.validate_resume(path, "pilot", repair_tail=True)
+    finally:
+        os.umask(old)
+    archive = path.with_suffix(".jsonl.corrupt-tail")
+    assert archive.read_bytes() == b'{"partial":'
+    assert stat.S_IMODE(archive.stat().st_mode) == 0o600
+
+
 def test_study_naive_rejects_host_only_command(tmp_path):
     env = _env(tmp_path, "#!/bin/sh\nexit 0\n")
     env[agent_config.NAIVE_COMMAND_ENV] = env[agent_config.COMMAND_ENV]

@@ -118,7 +118,8 @@ def validate_resume(path: Path, phase: str, *, repair_tail: bool = False) -> Non
             complete = data[: data.rfind(b"\n") + 1]
             list(_records(complete))
             backup = path.with_suffix(path.suffix + ".corrupt-tail")
-            with backup.open("xb") as fh:
+            fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+            with os.fdopen(fd, "wb") as fh:
                 fh.write(data[data.rfind(b"\n") + 1 :])
             with path.open("r+b") as fh:
                 fh.truncate(data.rfind(b"\n") + 1)
