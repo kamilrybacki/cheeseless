@@ -96,6 +96,10 @@ def read_all(path: Path) -> Iterator[dict[str, Any]]:
     data = path.read_bytes()
     if data and not data.endswith(b"\n"):
         raise CorruptManifest("truncated trailing manifest record; explicit repair required")
+    yield from _records(data)
+
+
+def _records(data: bytes) -> Iterator[dict[str, Any]]:
     for n, raw in enumerate(data.splitlines(), 1):
         try:
             rec = json.loads(raw)
@@ -110,6 +114,9 @@ def validate_resume(path: Path, phase: str, *, repair_tail: bool = False) -> Non
     if repair_tail and path.exists():
         data = path.read_bytes()
         if data and not data.endswith(b"\n"):
+            # Validate complete records before creating an archive or mutating the manifest.
+            complete = data[: data.rfind(b"\n") + 1]
+            list(_records(complete))
             backup = path.with_suffix(path.suffix + ".corrupt-tail")
             with backup.open("xb") as fh:
                 fh.write(data[data.rfind(b"\n") + 1 :])

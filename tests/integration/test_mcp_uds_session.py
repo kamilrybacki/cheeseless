@@ -163,8 +163,8 @@ def test_mcp_stdio_inside_bwrap_host_session(env, tmp_path):
         agent_command=[
             "/bin/sh",
             "-c",
-            'exec /usr/bin/env -i PATH=/usr/bin:/bin '
-            'CHEESELESS_SOCKET=/nonexistent/attacker.sock '
+            "exec /usr/bin/env -i PATH=/usr/bin:/bin "
+            "CHEESELESS_SOCKET=/nonexistent/attacker.sock "
             'CHEESELESS_TASK=attacker-task "$CHEESELESS_MCP"',
         ],
         agent_stdio=True,

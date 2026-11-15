@@ -25,7 +25,7 @@ def test_study_probe_hides_oracle_scorer_manifest_evidence_and_canary(tmp_path):
         "probe",
         str(protected[0]),
     ]
-    result = subprocess.run(real.sandbox_argv(work, home, command), capture_output=True)  # noqa: S603 - fixed sandbox probe
+    result = subprocess.run(real.sandbox_argv(work, home, command), capture_output=True, timeout=20)  # noqa: S603 - fixed sandbox probe
     assert result.returncode != 0
     assert CANARY.encode() not in result.stdout + result.stderr
     assert (work / "ok").exists()
@@ -108,3 +108,88 @@ def test_naive_can_run_prompt_pytest_command_inside_sandbox(tmp_path):
     )
     result = real.run_naive_real(TASKS_BY_ID["slug"], tmp_path / "run", agent)
     assert result.status == "valid" and result.judge_in_tree == "accept"
+
+
+@pytest.mark.skipif(not os.access("/usr/bin/bwrap", os.X_OK), reason="bubblewrap required")
+def test_naive_closes_inheritable_host_file_and_socket(tmp_path):
+    import socket
+
+    work, home = tmp_path / "work", tmp_path / "home"
+    work.mkdir()
+    home.mkdir()
+    real.isolation_check(work, home, ())
+    secret = tmp_path / "protected-canary"
+    secret.write_text(CANARY)
+    left, right = socket.socketpair()
+    with secret.open("rb") as canary, left as sock, right:
+        os.set_inheritable(canary.fileno(), True)
+        os.set_inheritable(sock.fileno(), True)
+        script = r"""
+import os, sys
+for fd in map(int, sys.argv[1:]):
+    try:
+        os.fstat(fd)
+    except OSError:
+        pass
+    else:
+        raise SystemExit(41)
+for name in os.listdir('/proc/self/fd'):
+    if int(name) > 2:
+        try:
+            os.fstat(int(name))
+        except OSError:
+            continue
+        raise SystemExit(42)
+open('/work/fd-check-passed', 'w').close()
+"""
+        argv = real.sandbox_argv(
+            work, home, ["/usr/bin/python3", "-c", script, str(canary.fileno()), str(sock.fileno())]
+        )
+        assert real._run_process(argv, work, {}, 10) == 0
+        assert (work / "fd-check-passed").exists()
+        assert canary.read().decode() == CANARY
+
+
+@pytest.mark.skipif(not os.access("/usr/bin/bwrap", os.X_OK), reason="bubblewrap required")
+def test_study_approved_seeded_wrapper_executes_and_records_digest(tmp_path, monkeypatch):
+    import hashlib
+    import json
+
+    from study import manifest, run
+    from tests.unit.test_study_run_report import _env
+
+    env = _env(tmp_path, "#!/bin/sh\nread ignored\nexit 0\n")
+    env["CHEESELESS_STUDY_AGENT_CMD_NAIVE"] = json.dumps(["/agent-home/agent.sh"])
+    env["CHEESELESS_STUDY_AGENT_TIMEOUT"] = "5"
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    path = tmp_path / "m.jsonl"
+    assert (
+        run.main(
+            [
+                "--phase",
+                "pilot",
+                "--manifest",
+                str(path),
+                "--workdir",
+                str(tmp_path / "w"),
+                "--evidence-dir",
+                str(tmp_path / "e"),
+                "--arms",
+                "naive",
+                "--tasks",
+                "slug",
+                "--reps",
+                "1",
+                "--yes",
+            ],
+            out=lambda _: None,
+        )
+        == 0
+    )
+    record = list(manifest.read_all(path))[0]
+    assert record["status"] == "valid"
+    assert (
+        record["naive_wrapper_sha256"]
+        == hashlib.sha256((tmp_path / "agent.sh").read_bytes()).hexdigest()
+    )

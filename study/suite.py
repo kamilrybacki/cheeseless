@@ -114,6 +114,9 @@ def _run_pytest(cwd: Path, target: str, env: Mapping[str, str], extra: list[str]
             capture_output=True,
             timeout=SUITE_TIMEOUT,
             check=False,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+            pass_fds=(),
         )
     except subprocess.TimeoutExpired:
         return INFRA
@@ -207,7 +210,14 @@ def in_tree_verdict(task: Task, workdir: Path) -> str:
         ]
         try:
             done = subprocess.run(  # noqa: S603 - isolated untrusted test collection
-                argv, env=_pytest_env({}), capture_output=True, timeout=SUITE_TIMEOUT, check=False
+                argv,
+                env=_pytest_env({}),
+                capture_output=True,
+                timeout=SUITE_TIMEOUT,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                close_fds=True,
+                pass_fds=(),
             )
         except (OSError, subprocess.TimeoutExpired):
             return INFRA

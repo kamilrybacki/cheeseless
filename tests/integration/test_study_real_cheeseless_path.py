@@ -20,6 +20,8 @@ def test_honest_agent_that_skips_gate_run_is_false_reject(tmp_path, monkeypatch)
     for k, v in {
         "CHEESELESS_STUDY_AGENT": "1",
         "CHEESELESS_STUDY_FRESH_SESSION": "1",
+        "CHEESELESS_STUDY_AGENT_TIMEOUT": "20",
+        "CHEESELESS_STUDY_AGENT_CMD_NAIVE": json.dumps(["/bin/true"]),
         "CHEESELESS_STUDY_AGENT_CMD": json.dumps([str(wrapper)]),
         "CHEESELESS_STUDY_AGENT_RO": json.dumps([str(wrapper.parent)]),
         "CHEESELESS_STUDY_AGENT_ID": json.dumps({"vendor": "t", "model": "m", "version": "1"}),
@@ -57,6 +59,8 @@ def test_honest_agent_that_calls_gate_run_is_success(tmp_path, monkeypatch):
     for k, v in {
         "CHEESELESS_STUDY_AGENT": "1",
         "CHEESELESS_STUDY_FRESH_SESSION": "1",
+        "CHEESELESS_STUDY_AGENT_TIMEOUT": "20",
+        "CHEESELESS_STUDY_AGENT_CMD_NAIVE": json.dumps(["/bin/true"]),
         "CHEESELESS_STUDY_AGENT_CMD": json.dumps([str(wrapper)]),
         "CHEESELESS_STUDY_AGENT_RO": json.dumps([str(wrapper.parent)]),
         "CHEESELESS_STUDY_AGENT_ID": json.dumps({"vendor": "t", "model": "m", "version": "1"}),

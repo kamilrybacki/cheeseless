@@ -240,6 +240,7 @@ def test_a_sparse_huge_evidence_file_is_refused_before_any_read(tmp_path, monkey
     evidence.mkdir()
     with (evidence / "huge.bin").open("wb") as handle:
         handle.truncate(1 << 40)
+
     def refuse_read(*_args, **_kwargs):
         raise AssertionError("read past the cap")
 
@@ -262,6 +263,7 @@ def test_a_symlink_is_refused_and_its_canary_target_is_not_read(tmp_path, monkey
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     (evidence / "link").symlink_to(target)
+
     def refuse_read(*_args, **_kwargs):
         raise AssertionError("read via a symlink")
 

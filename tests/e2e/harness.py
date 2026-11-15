@@ -129,8 +129,10 @@ def parse_agent_command(value: str) -> tuple[str, ...]:
         parsed = json.loads(value)
     except ValueError:
         parsed = shlex.split(value)
-    if not isinstance(parsed, list) or not parsed or not all(
-        isinstance(item, str) and item for item in parsed
+    if (
+        not isinstance(parsed, list)
+        or not parsed
+        or not all(isinstance(item, str) and item for item in parsed)
     ):
         raise AgentUnavailable(f"{COMMAND_ENV} must be a non-empty argv list")
     return tuple(parsed)

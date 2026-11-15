@@ -7,6 +7,7 @@ owns, and only the validated host loader opens them.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -53,6 +54,7 @@ class StudyAgent:
     read_only: tuple[Path, ...]
     timeout: float
     egress_policy: EgressPolicy | None = None
+    wrapper_sha256: str | None = None
 
 
 def _json_env(env: Mapping[str, str], name: str, default: object) -> object:
@@ -82,6 +84,44 @@ def parse_command(name: str, value: str) -> tuple[str, ...]:
 def _executable(command: tuple[str, ...], name: str) -> None:
     if shutil.which(command[0]) is None and not Path(command[0]).is_file():
         raise AgentUnavailable(f"{name} is not an executable command")
+
+
+def _naive_executable(
+    command: tuple[str, ...], seeds: Mapping[str, Path]
+) -> tuple[tuple[str, ...], str | None]:
+    """Resolve only executables available in the NAIVE mount namespace."""
+    program = command[0]
+    path = Path(program)
+    if not path.is_absolute() and "/" not in program:
+        found = shutil.which(program, path="/usr/bin:/bin:/usr/sbin:/sbin")
+        path = Path(found) if found else path
+    if path.is_absolute() and ".." not in path.parts:
+        if path.is_relative_to("/agent-home"):
+            rel = str(path.relative_to("/agent-home"))
+            source = seeds.get(rel)
+            if (
+                source is not None
+                and source.is_file()
+                and not source.is_symlink()
+                and source.stat().st_size <= 1 << 20
+                and os.access(source, os.X_OK)
+            ):
+                return command, hashlib.sha256(source.read_bytes()).hexdigest()
+        elif any(path.is_relative_to(top) for top in ("/usr", "/bin", "/sbin", "/lib", "/lib64")):
+            resolved = path.resolve()
+            if (
+                any(
+                    resolved.is_relative_to(top)
+                    for top in ("/usr", "/bin", "/sbin", "/lib", "/lib64")
+                )
+                and path.is_file()
+                and os.access(path, os.X_OK)
+            ):
+                return (str(path), *command[1:]), None
+    raise AgentUnavailable(
+        f"{NAIVE_COMMAND_ENV} executable is outside the sandbox namespace; "
+        "use a system executable or an executable file seed at /agent-home/<seed>"
+    )
 
 
 def _agent_id(env: Mapping[str, str]) -> AgentId:
@@ -125,7 +165,6 @@ def load_study_agent(env: Mapping[str, str] | None = None) -> StudyAgent:
     _executable(command, COMMAND_ENV)
     raw_naive = values.get(NAIVE_COMMAND_ENV, "").strip()
     naive = parse_command(NAIVE_COMMAND_ENV, raw_naive) if raw_naive else command
-    _executable(naive, NAIVE_COMMAND_ENV)
 
     raw_seeds = _json_env(values, SEED_ENV, {})
     if not isinstance(raw_seeds, dict) or not all(
@@ -135,11 +174,14 @@ def load_study_agent(env: Mapping[str, str] | None = None) -> StudyAgent:
     raw_ro = _json_env(values, READ_ONLY_ENV, [])
     if not isinstance(raw_ro, list) or not all(isinstance(v, str) and v for v in raw_ro):
         raise AgentUnavailable(f"{READ_ONLY_ENV} must be a JSON list of paths")
+    seeds = {rel: Path(src) for rel, src in raw_seeds.items()}
+    naive, wrapper_sha256 = _naive_executable(naive, seeds)
     return StudyAgent(
         agent=_agent_id(values),
         command=command,
         naive_command=naive,
-        seeds={rel: Path(src) for rel, src in raw_seeds.items()},
+        seeds=seeds,
+        wrapper_sha256=wrapper_sha256,
         read_only=tuple(Path(p) for p in raw_ro),
         timeout=_timeout(values),
         egress_policy=_egress(values),

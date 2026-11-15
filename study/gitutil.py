@@ -23,6 +23,8 @@ def git(root: Path, *args: str) -> str:
         env=env,
         capture_output=True,
         check=True,
+        stdin=subprocess.DEVNULL,
+        timeout=30,
     )
     return out.stdout.decode().strip()
 

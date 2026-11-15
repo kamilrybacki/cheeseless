@@ -280,6 +280,7 @@ def _real_loop(
             usage=read_usage(usage_dir, f"{run_id}-a{attempt}"),
             phase=phase,
         )
+        rec["naive_wrapper_sha256"] = agent.wrapper_sha256
         _append_safe(path, rec)
         ran += 1
         print(f"[{n + 1}/{len(jobs)}] {job.arm} {job.task.task_id} rep={job.rep} {res.status}")

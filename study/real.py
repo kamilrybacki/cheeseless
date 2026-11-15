@@ -101,7 +101,15 @@ def isolation_check(
         allow_network=allow_network,
     )
     try:
-        result = subprocess.run(argv, capture_output=True, timeout=20, check=False)  # noqa: S603
+        result = subprocess.run(  # noqa: S603
+            argv,
+            capture_output=True,
+            timeout=20,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+            pass_fds=(),
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise IsolationError("bubblewrap isolation self-check could not execute") from exc
     if result.returncode:
@@ -135,6 +143,7 @@ def _copy_seed(src: Path, dest: Path) -> None:
     elif src.is_file() and src.stat().st_size <= SEED_FILE_LIMIT:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dest)
+        dest.chmod(0o700 if os.access(src, os.X_OK) else 0o600)
 
 
 def _scrubbed_env(home: Path) -> dict[str, str]:
@@ -147,7 +156,13 @@ def _scrubbed_env(home: Path) -> dict[str, str]:
 
 def _run_process(argv: list[str], cwd: Path, env: Mapping[str, str], timeout: float) -> int:
     proc = subprocess.Popen(  # noqa: S603 - operator-supplied argv, scrubbed env
-        argv, cwd=cwd, env=dict(env), start_new_session=True, stdin=subprocess.DEVNULL
+        argv,
+        cwd=cwd,
+        env=dict(env),
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+        pass_fds=(),
     )
     try:
         return proc.wait(timeout=timeout)
