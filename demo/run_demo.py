@@ -1379,19 +1379,20 @@ def build_report(results: dict) -> str:
     with_mode = modes.get(WITH)
     if with_mode is not None:
         counts = with_mode["counts"]
-        if counts["gamed"] == 0:
-            sentence = (
-                f"0 of {counts['conclusive']} scripted tactics succeeded with cheeseless in "
-                "this version and configuration"
-            )
-        else:
-            sentence = (
-                f"{counts['gamed']} of {counts['conclusive']} scripted tactics succeeded with "
-                "cheeseless in this version and configuration"
-            )
+        succeeded = counts["gamed"]
+        sentence = (
+            f"{succeeded} of {counts['total']} scripted tactics succeeded with cheeseless in "
+            "this version and configuration"
+        )
+        caveat = (
+            "; success cannot be ruled out for inconclusive probes"
+            if counts["inconclusive"]
+            else ""
+        )
         lines += [
             "",
-            f"{sentence}; {counts['inconclusive']} inconclusive.",
+            f"{sentence} ({counts['conclusive']} conclusive, {counts['inconclusive']} "
+            f"inconclusive{caveat}).",
             "",
             "This is the result of these scripted probes in this version and configuration,",
             "not a defence rate and not an estimate of how often the gate blocks an agent.",

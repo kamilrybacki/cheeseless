@@ -42,7 +42,7 @@ everything is not counted as a defence.
 - **without cheeseless**: 8 GAMED, 0 BLOCKED, 0 INCONCLUSIVE (8 probes); control passed.
 - **with cheeseless**: 0 GAMED, 8 BLOCKED, 0 INCONCLUSIVE (8 probes); control passed.
 
-0 of 8 scripted tactics succeeded with cheeseless in this version and configuration; 0 inconclusive.
+0 of 8 scripted tactics succeeded with cheeseless in this version and configuration (8 conclusive, 0 inconclusive).
 
 This is the result of these scripted probes in this version and configuration,
 not a defence rate and not an estimate of how often the gate blocks an agent.

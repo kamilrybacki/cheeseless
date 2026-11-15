@@ -63,10 +63,10 @@ def test_report_uses_the_mandated_wording_and_no_defence_rate() -> None:
     assert "not a defence rate" in text
     assert "not an estimate of how often the gate blocks an agent" in text
     assert (
-        "0 of 6 scripted tactics succeeded with cheeseless in this version and configuration"
+        "0 of 8 scripted tactics succeeded with cheeseless in this version and configuration"
         in text
     )
-    assert "2 inconclusive" in text
+    assert "(6 conclusive, 2 inconclusive; success cannot be ruled out" in text
     assert "INVALID" in text
     assert "Limits of this evidence" in text
     assert "decoy host witness path" in text
