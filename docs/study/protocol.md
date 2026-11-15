@@ -228,3 +228,28 @@ uv run --frozen python -m study.report --manifest M
 
 M, W, E and U must be outside this checkout; W must be separate from protected paths.
 Do not add the network flag for local scripted validation.
+
+## Amendment 3 (2026-11-15, before any real study run)
+
+This amendment changes no prompt, task, outcome or analysis rule. No real agent has run in
+this study. It records an operational deviation from Amendment 2, item 1 (disposable
+credentials) and two measurement decisions.
+
+1. **Credential deviation.** The operator runs the real agents with their own subscription
+   credentials instead of disposable ones. The first agent is an opencode-go model
+   (`deepseek-v4.1-flash`); the second is a Claude Haiku model through an Anthropic
+   subscription. Mitigations: the Claude seed holds only a short-lived access token (about
+   three hours, no refresh token), refreshed before each batch; the opencode-go seed should be
+   a key created for this study and revoked afterwards; the provider allowlist for each
+   CHEESELESS run names only that provider's API host; seeds and run evidence stay outside the
+   repository and are deleted after the study. The exposure that Amendment 2 accepts for
+   permitted network access therefore covers these credentials, and results must be read with
+   that caveat.
+2. **Usage is not measured.** No `--usage-file-dir` is supplied, so tokens and cost are
+   recorded as `unavailable` (not measured). The operator reads consumption from the providers'
+   dashboards before and after each batch and reports it separately from the manifest.
+3. **Pinned agent binaries.** The agent CLIs are installed as pinned executables in a system
+   directory so NAIVE can run them inside the sandbox; the wrapper records the CLI version in
+   the agent id, and each manifest record carries `naive_wrapper_sha256`.
+4. **Pilot agent.** The pilot (4 tasks x 2 arms x 1 agent x 5 repetitions) uses the opencode-go
+   model only. The Claude Haiku agent enters in the main phase, after the pilot gate passes.
