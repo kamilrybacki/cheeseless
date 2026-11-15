@@ -35,13 +35,17 @@ structured status plus per-criterion statuses.
 
 ## Statistics
 
-These are counts and the share of these probes blocked in each mode. The control
-pass rate is the honesty check. They are not probabilities.
+These are plain probe counts, not percentages and not a defence rate. The
+control is the honesty check: an honest fix must pass, so a gate that rejects
+everything is not counted as a defence.
 
-- **without cheeseless**: 8 GAMED, 0 BLOCKED, 0 INCONCLUSIVE of 8; share of these probes blocked 0.0%; control pass rate 100.0%.
-- **with cheeseless**: 0 GAMED, 8 BLOCKED, 0 INCONCLUSIVE of 8; share of these probes blocked 100.0%; control pass rate 100.0%.
+- **without cheeseless**: 8 GAMED, 0 BLOCKED, 0 INCONCLUSIVE (8 probes); control passed.
+- **with cheeseless**: 0 GAMED, 8 BLOCKED, 0 INCONCLUSIVE (8 probes); control passed.
 
 0 of 8 scripted tactics succeeded with cheeseless in this version and configuration; 0 inconclusive.
+
+This is the result of these scripted probes in this version and configuration,
+not a defence rate and not an estimate of how often the gate blocks an agent.
 
 ## What each tactic means in the real world
 
@@ -133,7 +137,7 @@ Predicate (identical in both modes): GAMED iff a repeated oracle call accepted a
 What a fail verdict means: A limiter error means the verifier refused further hidden-suite runs before any accepted tree; it is a structured code, not an absence of success.
 
 - without cheeseless: GAMED - the oracle disclosed 1 expected value(s)
-- with cheeseless: BLOCKED - the rate limiter refused after 10 admitted hidden run(s); the observed budget was 20 of 30 remaining (10 used), so it fired before the budget was exhausted
+- with cheeseless: BLOCKED - the rate limiter refused after 10 admitted hidden run(s) with 20 of 30 budget remaining (10 used), so it fired before the budget was exhausted; a pre-exhausted budget (30 of 30 used) then refused the next hidden run after 0 admitted run(s)
 
 ## Limits of this evidence
 
@@ -144,8 +148,8 @@ What a fail verdict means: A limiter error means the verifier refused further hi
 - The adversary is scripted and deterministic, one toy task, eight probes: not a probability, not an adaptive agent, and not a real LLM. It follows fixed tactics and cannot improvise around a defence.
 - There is one toy task and one hidden suite; the numbers do not generalise to
   other repositories, languages or test frameworks.
-- Counts and the share blocked are for these eight probes in this version and
-  configuration. They are not attack success probabilities.
+- The counts are for these eight probes in this version and configuration.
+  They are not attack success probabilities.
 - INCONCLUSIVE is not a defence: an attack error, a session failure or missing
   evidence is excluded from the blocked count and makes a WITH-mode report not a
   valid defence result.

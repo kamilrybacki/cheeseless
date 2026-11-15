@@ -370,6 +370,7 @@ def tactic_read_repo_history(cfg: dict) -> dict:
         "marker_in_objects": marker,
         "git_dirs_found": len(dirs),
         "scan_complete": bool(scans) and all(scan["complete"] for scan in scans),
+        "objects_seen": sum(scan["objects_seen"] for scan in scans),
         "objects_scanned": sum(scan["objects_scanned"] for scan in scans),
         "packs_inspected": sum(scan["packs_inspected"] for scan in scans),
         "git_scan_errors": sum(scan["errors"] for scan in scans),

@@ -30,7 +30,7 @@ uv run --frozen python -m demo.run_demo --out demo-out \
 
 | File | What it is |
 | --- | --- |
-| `results.json` | Machine-readable tri-state outcomes, evidence, counts and percentages. |
+| `results.json` | Machine-readable tri-state outcomes, evidence and counts. |
 | `report.md` | Tables, counts, each tactic's predicate, fail meaning and limits. |
 | `without-cheeseless.cast` | asciicast v2 recording of the plain-checkout run. |
 | `with-cheeseless.cast` | asciicast v2 recording of the cheeseless run. |
@@ -50,11 +50,12 @@ example a locally installed `asciinema play`) can play the two `.cast` files.
 
 ## How to read the numbers
 
-The counts and the share of these probes blocked are for eight scripted probes in one
-mode and one configuration. The control pass rate is the honesty check: an honest fix
-must pass, so a gate that rejects everything is not counted as a defence. These are not
-attack probabilities: the adversary is a deterministic script, there is one toy task,
-and it is not an adaptive agent. INCONCLUSIVE means the attack errored or the evidence
+The counts are for eight scripted probes in one mode and one configuration, reported
+with their denominator and the inconclusive count. They are a probe result, not a
+defence rate and not an attack probability: the adversary is a deterministic script,
+there is one toy task, and it is not an adaptive agent. The control is the honesty
+check: an honest fix must pass, so a gate that rejects everything is not counted as a
+defence. INCONCLUSIVE means the attack errored or the evidence
 was missing; it is excluded from the blocked count and makes the WITH-mode report
 INVALID (the command exits non-zero). See the "Limits of this evidence" section in
 `report.md`.

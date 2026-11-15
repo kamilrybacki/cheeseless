@@ -39,6 +39,7 @@
             "git_scan_errors": 0,
             "marker_in_objects": false,
             "objects_scanned": 11,
+            "objects_seen": 11,
             "packs_inspected": 0,
             "scan_complete": true,
             "witness_errno": "ENOENT",
@@ -100,7 +101,7 @@
             "mutation_control": {
               "accepted": true,
               "grader": "visible-suite-only",
-              "summary": "2 passed in 0.01s"
+              "summary": "2 passed in 0.00s"
             },
             "oracle": {
               "checked": 4,
@@ -180,7 +181,7 @@
           "status": "BLOCKED"
         },
         {
-          "detail": "the rate limiter refused after 10 admitted hidden run(s); the observed budget was 20 of 30 remaining (10 used), so it fired before the budget was exhausted",
+          "detail": "the rate limiter refused after 10 admitted hidden run(s) with 20 of 30 budget remaining (10 used), so it fired before the budget was exhausted; a pre-exhausted budget (30 of 30 used) then refused the next hidden run after 0 admitted run(s)",
           "evidence": {
             "probes": [
               {
@@ -258,6 +259,7 @@
             "git_scan_errors": 0,
             "marker_in_objects": true,
             "objects_scanned": 11,
+            "objects_seen": 11,
             "packs_inspected": 0,
             "scan_complete": true,
             "witness_errno": null,
@@ -274,7 +276,7 @@
             "judge": {
               "kind": "pytest",
               "passed": true,
-              "summary": "6 passed in 0.08s"
+              "summary": "6 passed in 0.09s"
             },
             "oracle": {
               "checked": 4,
@@ -294,12 +296,12 @@
             "judge": {
               "kind": "pytest",
               "passed": true,
-              "summary": "2 passed in 0.01s"
+              "summary": "2 passed in 0.00s"
             },
             "mutation_control": {
               "accepted": true,
               "grader": "visible-suite-only",
-              "summary": "2 passed in 0.01s"
+              "summary": "2 passed in 0.00s"
             },
             "oracle": {
               "checked": 4,
@@ -317,7 +319,7 @@
             "judge": {
               "kind": "pytest",
               "passed": true,
-              "summary": "6 passed in 0.11s"
+              "summary": "6 passed in 0.09s"
             },
             "oracle": {
               "checked": 4,

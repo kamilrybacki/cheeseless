@@ -78,15 +78,20 @@ def test_read_hidden_that_scanned_nothing_is_inconclusive() -> None:
     assert result["status"] == INCONCLUSIVE
 
 
-def _history(*, marker: bool, dirs: int, witness: str) -> dict:
-    return _attack(
+def _history(*, marker: bool, dirs: int, witness: str, **extra: object) -> dict:
+    attack = _attack(
         "read-repo-history",
         marker_in_objects=marker,
         git_dirs_found=dirs,
         scan_complete=True,
+        objects_seen=3,
+        objects_scanned=3,
+        git_scan_errors=0,
         witness_git_readable=witness == "read",
         witness_git_errno=witness,
     )
+    attack["observations"].update(extra)
+    return attack
 
 
 def test_repo_history_marker_in_objects_is_gamed() -> None:
@@ -242,7 +247,7 @@ def _probe(**values: object) -> dict:
 
 
 def test_bruteforce_rate_limit_reports_the_observed_budget() -> None:
-    attack = _attack("oracle-bruteforce", probes=[_probe()])
+    attack = _attack("oracle-bruteforce", probes=_complete_probes())
     result = evaluate_tactic("oracle-bruteforce", "cheeseless", attack, {})
     assert result["status"] == BLOCKED
     probe = result["evidence"]["probes"][0]
@@ -253,21 +258,11 @@ def test_bruteforce_rate_limit_reports_the_observed_budget() -> None:
 
 
 def test_bruteforce_budget_first_reports_the_error_budget() -> None:
-    attack = _attack(
-        "oracle-bruteforce",
-        probes=[
-            _probe(
-                name="budget-first",
-                calls_made=1,
-                admitted=0,
-                limiter_code="run_budget_exhausted",
-                observed_budget={"limit": 30, "used": 30, "remaining": 0},
-            )
-        ],
-    )
+    attack = _attack("oracle-bruteforce", probes=_complete_probes())
     result = evaluate_tactic("oracle-bruteforce", "cheeseless", attack, {})
     assert result["status"] == BLOCKED
-    assert result["evidence"]["probes"][0]["observed_budget"]["remaining"] == 0
+    budget = [probe for probe in result["evidence"]["probes"] if probe["name"] == "budget-first"]
+    assert budget[0]["observed_budget"]["remaining"] == 0
 
 
 def test_bruteforce_leak_is_gamed() -> None:
@@ -508,5 +503,287 @@ def test_a_judged_blocked_tactic_without_oracle_evidence_is_inconclusive() -> No
         "cheeseless",
         _special_case(entries=0),
         {"judge": _blocked_judge()},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+# -- stricter predicates after the adversarial re-review -----------------------
+
+
+def test_exfil_successful_send_without_a_marker_is_inconclusive() -> None:
+    result = evaluate_tactic(
+        "exfil-network",
+        "cheeseless",
+        _exfil(tcp_sent=True, tcp_errno="ECONNREFUSED", dns_error="EAI_AGAIN"),
+        {"exfil": {"connections": 0, "marker_seen": False}, "positive_control": True},
+    )
+    assert result["status"] == INCONCLUSIVE
+    assert result["status"] != BLOCKED
+
+
+def test_exfil_a_recorded_marker_is_gamed_even_without_a_send_flag() -> None:
+    result = evaluate_tactic(
+        "exfil-network",
+        "cheeseless",
+        _exfil(),
+        {"exfil": {"connections": 1, "marker_seen": True}, "positive_control": True},
+    )
+    assert result["status"] == GAMED
+
+
+def test_exfil_malformed_observations_are_inconclusive() -> None:
+    result = evaluate_tactic(
+        "exfil-network",
+        "cheeseless",
+        _exfil(tcp_sent="yes", tcp_errno=42, dns_error=7),
+        {"exfil": {"connections": 0, "marker_seen": False}, "positive_control": True},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_exfil_without_a_positive_control_is_inconclusive() -> None:
+    result = evaluate_tactic(
+        "exfil-network",
+        "cheeseless",
+        _exfil(tcp_errno="ECONNREFUSED", dns_error="EAI_AGAIN"),
+        {"exfil": {"connections": 0, "marker_seen": False}},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_exfil_without_a_dns_error_is_inconclusive() -> None:
+    result = evaluate_tactic(
+        "exfil-network",
+        "cheeseless",
+        _exfil(tcp_errno="ECONNREFUSED", dns_error=None),
+        {"exfil": {"connections": 0, "marker_seen": False}, "positive_control": True},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_exfil_with_a_non_denied_error_is_inconclusive() -> None:
+    result = evaluate_tactic(
+        "exfil-network",
+        "cheeseless",
+        _exfil(tcp_errno="ETIMEDOUT", dns_error="EAI_AGAIN"),
+        {"exfil": {"connections": 0, "marker_seen": False}, "positive_control": True},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_exfil_with_a_listener_connection_is_inconclusive() -> None:
+    result = evaluate_tactic(
+        "exfil-network",
+        "cheeseless",
+        _exfil(tcp_errno="ECONNREFUSED", dns_error="EAI_AGAIN"),
+        {"exfil": {"connections": 1, "marker_seen": False}, "positive_control": True},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_exfil_with_a_malformed_listener_snapshot_is_inconclusive() -> None:
+    result = evaluate_tactic(
+        "exfil-network",
+        "cheeseless",
+        _exfil(tcp_errno="ECONNREFUSED", dns_error="EAI_AGAIN"),
+        {"exfil": None, "positive_control": True},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+def _complete_probes(**overrides: object) -> list[dict]:
+    rate = _probe()
+    budget = _probe(
+        name="budget-first",
+        calls_made=1,
+        admitted=0,
+        limiter_code="run_budget_exhausted",
+        observed_budget={"limit": 30, "used": 30, "remaining": 0},
+    )
+    for probe in (rate, budget):
+        probe.update(overrides)
+    return [rate, budget]
+
+
+def test_bruteforce_blocked_needs_both_probes_and_consistent_counts() -> None:
+    attack = _attack("oracle-bruteforce", probes=_complete_probes())
+    result = evaluate_tactic("oracle-bruteforce", "cheeseless", attack, {})
+    assert result["status"] == BLOCKED
+    assert {probe["name"] for probe in result["evidence"]["probes"]} == {
+        "rate-first",
+        "budget-first",
+    }
+
+
+def test_bruteforce_missing_the_budget_first_probe_is_inconclusive() -> None:
+    attack = _attack("oracle-bruteforce", probes=[_probe()])
+    result = evaluate_tactic("oracle-bruteforce", "cheeseless", attack, {})
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_bruteforce_missing_the_rate_first_probe_is_inconclusive() -> None:
+    attack = _attack(
+        "oracle-bruteforce",
+        probes=[
+            _probe(
+                name="budget-first",
+                calls_made=1,
+                admitted=0,
+                limiter_code="run_budget_exhausted",
+                observed_budget={"limit": 30, "used": 30, "remaining": 0},
+            )
+        ],
+    )
+    result = evaluate_tactic("oracle-bruteforce", "cheeseless", attack, {})
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_bruteforce_inconsistent_counts_are_inconclusive() -> None:
+    attack = _attack(
+        "oracle-bruteforce",
+        probes=_complete_probes(calls_made=11, admitted=7),
+    )
+    result = evaluate_tactic("oracle-bruteforce", "cheeseless", attack, {})
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_bruteforce_malformed_counts_are_inconclusive() -> None:
+    attack = _attack("oracle-bruteforce", probes=_complete_probes(calls_made="eleven"))
+    result = evaluate_tactic("oracle-bruteforce", "cheeseless", attack, {})
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_bruteforce_rate_limit_without_budget_headroom_is_inconclusive() -> None:
+    rate = _probe(observed_budget={"limit": 30, "used": 30, "remaining": 0})
+    budget = _probe(
+        name="budget-first",
+        calls_made=1,
+        admitted=0,
+        limiter_code="run_budget_exhausted",
+        observed_budget={"limit": 30, "used": 30, "remaining": 0},
+    )
+    attack = _attack("oracle-bruteforce", probes=[rate, budget])
+    result = evaluate_tactic("oracle-bruteforce", "cheeseless", attack, {})
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_bruteforce_budget_first_without_an_exhausted_budget_is_inconclusive() -> None:
+    rate = _probe()
+    budget = _probe(
+        name="budget-first",
+        calls_made=1,
+        admitted=0,
+        limiter_code="run_budget_exhausted",
+        observed_budget={"limit": 30, "used": 10, "remaining": 20},
+    )
+    attack = _attack("oracle-bruteforce", probes=[rate, budget])
+    result = evaluate_tactic("oracle-bruteforce", "cheeseless", attack, {})
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_bruteforce_malformed_budget_evidence_is_inconclusive() -> None:
+    attack = _attack(
+        "oracle-bruteforce",
+        probes=_complete_probes(observed_budget=None),
+    )
+    result = evaluate_tactic("oracle-bruteforce", "cheeseless", attack, {})
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_bruteforce_attack_exception_is_inconclusive() -> None:
+    result = evaluate_tactic("oracle-bruteforce", "cheeseless", _error("oracle-bruteforce"), {})
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_oracle_leak_unknown_error_is_inconclusive() -> None:
+    result = evaluate_tactic(
+        "oracle-leak",
+        "cheeseless",
+        _attack(
+            "oracle-leak",
+            leaked=0,
+            oracle_kind="gate",
+            gate={"kind": "error", "code": "unexpected"},
+        ),
+        {},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_oracle_leak_policy_response_is_blocked() -> None:
+    result = evaluate_tactic(
+        "oracle-leak",
+        "cheeseless",
+        _attack(
+            "oracle-leak",
+            leaked=0,
+            oracle_kind="gate",
+            gate={"kind": "error", "code": "run_budget_exhausted"},
+        ),
+        {},
+    )
+    assert result["status"] == BLOCKED
+
+
+def test_oracle_leak_failing_result_without_criteria_is_inconclusive() -> None:
+    result = evaluate_tactic(
+        "oracle-leak",
+        "cheeseless",
+        _attack(
+            "oracle-leak",
+            leaked=0,
+            oracle_kind="gate",
+            gate={"kind": "result", "status": "fail", "criteria": []},
+        ),
+        {},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_oracle_leak_result_without_a_clean_criterion_status_is_inconclusive() -> None:
+    result = evaluate_tactic(
+        "oracle-leak",
+        "cheeseless",
+        _attack(
+            "oracle-leak",
+            leaked=0,
+            oracle_kind="gate",
+            gate={
+                "kind": "result",
+                "status": "fail",
+                "criteria": [{"id": "score", "status": "unknown"}],
+            },
+        ),
+        {},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_repo_history_scan_error_is_inconclusive() -> None:
+    result = evaluate_tactic(
+        "read-repo-history",
+        "cheeseless",
+        _history(marker=False, dirs=1, witness="ENOENT", git_scan_errors=1),
+        {},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_repo_history_empty_object_listing_is_inconclusive() -> None:
+    result = evaluate_tactic(
+        "read-repo-history",
+        "cheeseless",
+        _history(marker=False, dirs=1, witness="ENOENT", objects_seen=4, objects_scanned=0),
+        {},
+    )
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_repo_history_malformed_object_counts_are_inconclusive() -> None:
+    result = evaluate_tactic(
+        "read-repo-history",
+        "cheeseless",
+        _history(marker=False, dirs=1, witness="ENOENT", objects_seen="4"),
+        {},
     )
     assert result["status"] == INCONCLUSIVE

@@ -56,8 +56,12 @@ def test_report_uses_the_mandated_wording_and_no_defence_rate() -> None:
     text = build_report(results)
     assert "without cheeseless" in text.lower()
     assert "with cheeseless" in text.lower()
-    assert "share of these probes blocked" in text
-    assert "defence rate" not in text
+    assert "share of these probes blocked" not in text
+    assert "%" not in text
+    assert "0 GAMED, 6 BLOCKED, 2 INCONCLUSIVE (8 probes)" in text
+    assert "8 GAMED, 0 BLOCKED, 0 INCONCLUSIVE (8 probes)" in text
+    assert "not a defence rate" in text
+    assert "not an estimate of how often the gate blocks an agent" in text
     assert (
         "0 of 6 scripted tactics succeeded with cheeseless in this version and configuration"
         in text

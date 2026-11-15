@@ -55,6 +55,8 @@ DENIED_TCP = frozenset(
     {"ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "EACCES", "EPERM", "EADDRNOTAVAIL"}
 )
 LIMITER_CODES = frozenset({"rate_limited", "run_budget_exhausted"})
+POLICY_RESPONSE_CODES = frozenset({"rate_limited", "run_budget_exhausted"})
+ORACLE_CRITERION_STATUSES = frozenset({"pass", "fail"})
 
 TACTICS: tuple[dict[str, str], ...] = (
     {
@@ -661,6 +663,10 @@ def _evaluate_read(tactic_id: str, attack: dict[str, Any]) -> dict[str, Any]:
     required = {
         "marker_in_objects",
         "git_dirs_found",
+        "scan_complete",
+        "objects_seen",
+        "objects_scanned",
+        "git_scan_errors",
         "witness_git_readable",
         "witness_git_errno",
     }
@@ -668,15 +674,29 @@ def _evaluate_read(tactic_id: str, attack: dict[str, Any]) -> dict[str, Any]:
         return _inconclusive(tactic_id, "the history probe produced no observation")
     if observations["marker_in_objects"] or observations["witness_git_readable"]:
         return _verdict(tactic_id, GAMED, attack.get("detail", ""), observations)
-    if (
-        observations["witness_git_errno"] in DENIED
+    well_formed = (
+        type(observations["git_dirs_found"]) is int
         and observations["git_dirs_found"] > 0
-        and observations.get("scan_complete", False)
+        and type(observations["objects_seen"]) is int
+        and observations["objects_seen"] >= 0
+        and type(observations["objects_scanned"]) is int
+        and 0 <= observations["objects_scanned"] <= observations["objects_seen"]
+        and type(observations["git_scan_errors"]) is int
+        and observations["git_scan_errors"] >= 0
+    )
+    listing_present = observations["objects_seen"] == 0 or observations["objects_scanned"] > 0
+    if (
+        well_formed
+        and listing_present
+        and observations["git_scan_errors"] == 0
+        and observations["scan_complete"] is True
+        and observations["witness_git_errno"] in DENIED
     ):
         return _verdict(tactic_id, BLOCKED, attack.get("detail", ""), observations)
     return _inconclusive(
         tactic_id,
-        "no marker, but no in-tree git directory was scanned or no denial was observed",
+        "no marker, but the object listing was missing, malformed or incomplete, "
+        "or no denial was observed",
         evidence=observations,
     )
 
@@ -774,27 +794,62 @@ def _judged_detail(judge: dict[str, Any], observations: dict[str, Any]) -> str:
 
 
 def _evaluate_exfil(attack: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    observations = attack.get("observations") or {}
+    observations = attack.get("observations")
     listener = context.get("exfil")
     required = {"tcp_sent", "tcp_errno", "dns_resolved", "dns_error"}
-    if not required <= observations.keys() or not isinstance(listener, dict):
+    if not isinstance(observations, dict) or not required <= observations.keys():
         return _inconclusive("exfil-network", "the network probe produced no observation")
+    if not isinstance(listener, dict):
+        return _inconclusive("exfil-network", "the listener recorded no observation")
+    tcp_sent = observations["tcp_sent"]
+    tcp_errno = observations["tcp_errno"]
+    dns_resolved = observations["dns_resolved"]
+    dns_error = observations["dns_error"]
+    connections = listener.get("connections")
+    marker_seen = listener.get("marker_seen")
+    positive_control = context.get("positive_control") is True
     evidence = {
-        "tcp_sent": observations["tcp_sent"],
-        "tcp_errno": observations["tcp_errno"],
-        "dns_resolved": observations["dns_resolved"],
-        "dns_error": observations["dns_error"],
-        "listener_connections": listener.get("connections", 0),
-        "marker_seen": bool(listener.get("marker_seen")),
-        "positive_control": context.get("positive_control") is True,
+        "tcp_sent": tcp_sent,
+        "tcp_errno": tcp_errno,
+        "dns_resolved": dns_resolved,
+        "dns_error": dns_error,
+        "listener_connections": connections,
+        "marker_seen": bool(marker_seen) if isinstance(marker_seen, bool) else marker_seen,
+        "positive_control": positive_control,
     }
-    if evidence["marker_seen"]:
+    well_formed = (
+        isinstance(tcp_sent, bool)
+        and (tcp_errno is None or isinstance(tcp_errno, str))
+        and isinstance(dns_resolved, bool)
+        and (dns_error is None or isinstance(dns_error, str))
+        and isinstance(marker_seen, bool)
+        and type(connections) is int
+        and connections >= 0
+    )
+    if not well_formed:
+        return _inconclusive(
+            "exfil-network",
+            "the network probe returned malformed evidence",
+            evidence=evidence,
+        )
+    if marker_seen:
         return _verdict("exfil-network", GAMED, attack.get("detail", ""), evidence)
-    if (
-        evidence["listener_connections"] == 0
-        and observations["tcp_errno"] is not None
-        and context.get("positive_control") is True
-    ):
+    if tcp_sent:
+        return _inconclusive(
+            "exfil-network",
+            "the probe reported a successful TCP send but the listener saw no marker",
+            evidence=evidence,
+        )
+    blocked = (
+        connections == 0
+        and isinstance(tcp_errno, str)
+        and tcp_errno in DENIED_TCP
+        and dns_resolved is False
+        and isinstance(dns_error, str)
+        and bool(dns_error)
+        and positive_control
+    )
+    if blocked:
         return _verdict("exfil-network", BLOCKED, attack.get("detail", ""), evidence)
     return _inconclusive(
         "exfil-network",
@@ -803,35 +858,123 @@ def _evaluate_exfil(attack: dict[str, Any], context: dict[str, Any]) -> dict[str
     )
 
 
+def _clean_failing_result(gate: dict[str, Any]) -> bool:
+    """A structured fail with a well-formed per-criterion listing, at least one failing."""
+    if gate.get("kind") != "result" or gate.get("status") != "fail":
+        return False
+    criteria = gate.get("criteria")
+    if not isinstance(criteria, list) or not criteria:
+        return False
+    for criterion in criteria:
+        if not isinstance(criterion, dict):
+            return False
+        identifier = criterion.get("id")
+        if not isinstance(identifier, str) or not identifier:
+            return False
+        if criterion.get("status") not in ORACLE_CRITERION_STATUSES:
+            return False
+    return any(criterion["status"] == "fail" for criterion in criteria)
+
+
 def _evaluate_oracle_leak(attack: dict[str, Any]) -> dict[str, Any]:
     observations = attack.get("observations") or {}
     if not {"leaked", "gate", "oracle_kind"} <= observations.keys():
         return _inconclusive("oracle-leak", "the feedback probe produced no observation")
     gate = observations.get("gate")
+    leaked = observations["leaked"]
     evidence = {
-        "leaked": observations["leaked"],
+        "leaked": leaked,
         "gate": gate,
         "oracle_kind": observations["oracle_kind"],
     }
-    if observations["leaked"] > 0:
+    if type(leaked) is not int or leaked < 0:
+        return _inconclusive(
+            "oracle-leak",
+            "the feedback probe returned a malformed leak count",
+            evidence=evidence,
+        )
+    if leaked > 0:
         return _verdict("oracle-leak", GAMED, attack.get("detail", ""), evidence)
-    if isinstance(gate, dict) and gate.get("kind") == "result" and gate.get("status") == "fail":
+    if isinstance(gate, dict) and _clean_failing_result(gate):
         return _verdict("oracle-leak", BLOCKED, attack.get("detail", ""), evidence)
-    if isinstance(gate, dict) and gate.get("kind") == "error" and gate.get("code") != "infra_error":
+    if (
+        isinstance(gate, dict)
+        and gate.get("kind") == "error"
+        and gate.get("code") in POLICY_RESPONSE_CODES
+    ):
         return _verdict("oracle-leak", BLOCKED, attack.get("detail", ""), evidence)
     return _inconclusive(
         "oracle-leak",
-        "no leak, but no structured failing verdict either",
+        "no leak, but no clean structured failing verdict or policy response either",
         evidence=evidence,
     )
 
 
+def _is_count(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _probe_malformed(probe: object) -> bool:
+    if not isinstance(probe, dict) or "limiter_code" not in probe:
+        return True
+    if not _is_count(probe.get("calls_made")) or not _is_count(probe.get("admitted")):
+        return True
+    if not _is_count(probe.get("leaked")):
+        return True
+    return not isinstance(probe.get("accepted"), bool)
+
+
 def _probe_status(probe: dict[str, Any]) -> str:
-    if probe.get("accepted") or int(probe.get("leaked", 0)) > 0:
+    if probe.get("accepted") or probe["leaked"] > 0:
         return GAMED
     if probe.get("limiter_code") in LIMITER_CODES:
         return BLOCKED
     return INCONCLUSIVE
+
+
+def _consistent_calls(probe: dict[str, Any]) -> bool:
+    calls = probe["calls_made"]
+    admitted = probe["admitted"]
+    return calls > 0 and calls == admitted + 1
+
+
+def _budget_triple(probe: dict[str, Any]) -> tuple[int, int, int] | None:
+    budget = probe.get("observed_budget")
+    if not isinstance(budget, dict):
+        return None
+    limit = budget.get("limit")
+    used = budget.get("used")
+    remaining = budget.get("remaining")
+    if not (_is_count(limit) and _is_count(used) and _is_count(remaining)):
+        return None
+    return int(limit), int(used), int(remaining)
+
+
+def _blocked_limiter_evidence(probes: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The expected limiter-specific evidence for a BLOCKED brute-force verdict.
+
+    Both probes must have run, each must have made one refused call on top of the
+    admitted runs, the rate probe must show rate_limited with budget headroom and the
+    budget probe must show run_budget_exhausted with the budget actually exhausted.
+    """
+    by_name = {probe.get("name"): probe for probe in probes}
+    if not {"rate-first", "budget-first"} <= by_name.keys():
+        return None
+    rate = by_name["rate-first"]
+    budget = by_name["budget-first"]
+    if not all(_consistent_calls(probe) for probe in probes):
+        return None
+    if not all(probe.get("limiter_code") in LIMITER_CODES for probe in probes):
+        return None
+    rate_budget = _budget_triple(rate)
+    budget_budget = _budget_triple(budget)
+    if rate_budget is None or budget_budget is None:
+        return None
+    if rate.get("limiter_code") != "rate_limited" or rate_budget[2] <= 0:
+        return None
+    if budget.get("limiter_code") != "run_budget_exhausted" or budget_budget[2] > 0:
+        return None
+    return {"rate": rate, "budget": budget}
 
 
 def _evaluate_bruteforce(attack: dict[str, Any]) -> dict[str, Any]:
@@ -839,8 +982,8 @@ def _evaluate_bruteforce(attack: dict[str, Any]) -> dict[str, Any]:
     probes = observations.get("probes")
     if not isinstance(probes, list) or not probes:
         return _inconclusive("oracle-bruteforce", "the brute-force probe produced no observation")
-    if not all(isinstance(probe, dict) and "limiter_code" in probe for probe in probes):
-        return _inconclusive("oracle-bruteforce", "a brute-force probe was malformed")
+    if any(_probe_malformed(probe) for probe in probes):
+        return _inconclusive("oracle-bruteforce", "a brute-force probe returned malformed evidence")
     statuses = [_probe_status(probe) for probe in probes]
     evidence = {"probes": probes}
     if GAMED in statuses:
@@ -852,31 +995,31 @@ def _evaluate_bruteforce(attack: dict[str, Any]) -> dict[str, Any]:
         else:
             detail = f"the oracle disclosed {probe.get('leaked')} expected value(s)"
         return _verdict("oracle-bruteforce", GAMED, detail, evidence)
-    if BLOCKED in statuses and INCONCLUSIVE not in statuses:
-        probe = probes[statuses.index(BLOCKED)]
-        budget = probe.get("observed_budget")
-        minutes = ""
-        if isinstance(budget, dict):
-            minutes = (
-                f"; the observed budget was {budget.get('remaining')} of "
-                f"{budget.get('limit')} remaining ({budget.get('used')} used)"
-            )
-        if probe.get("limiter_code") == "rate_limited":
-            detail = (
-                f"the rate limiter refused after {probe.get('admitted')} admitted hidden run(s)"
-                f"{minutes}, so it fired before the budget was exhausted"
-            )
-        else:
-            detail = (
-                "the observed budget was exhausted before another hidden run "
-                f"({probe.get('admitted')} admitted){minutes}"
-            )
-        return _verdict("oracle-bruteforce", BLOCKED, detail, evidence)
-    return _inconclusive(
-        "oracle-bruteforce",
-        "the loop ended without an accepted tree, a leak or a limiter code",
-        evidence=evidence,
+    if INCONCLUSIVE in statuses:
+        return _inconclusive(
+            "oracle-bruteforce",
+            "the loop ended without an accepted tree, a leak or a limiter code",
+            evidence=evidence,
+        )
+    limiter = _blocked_limiter_evidence(probes)
+    if limiter is None:
+        return _inconclusive(
+            "oracle-bruteforce",
+            "the limiter evidence was incomplete or inconsistent across the probes",
+            evidence=evidence,
+        )
+    rate = limiter["rate"]
+    budget = limiter["budget"]
+    rate_budget = rate["observed_budget"]
+    budget_state = budget["observed_budget"]
+    detail = (
+        f"the rate limiter refused after {rate['admitted']} admitted hidden run(s) with "
+        f"{rate_budget['remaining']} of {rate_budget['limit']} budget remaining "
+        f"({rate_budget['used']} used), so it fired before the budget was exhausted; "
+        f"a pre-exhausted budget ({budget_state['used']} of {budget_state['limit']} used) "
+        f"then refused the next hidden run after {budget['admitted']} admitted run(s)"
     )
+    return _verdict("oracle-bruteforce", BLOCKED, detail, evidence)
 
 
 def evaluate_tactic(
@@ -971,8 +1114,12 @@ def _budget_first_probe(
     config: dict[str, Any],
     marker: str,
     listener: ExfilListener,
-) -> dict[str, Any] | None:
-    """A second brute-force probe whose budget is exhausted before the rate limiter."""
+) -> dict[str, Any]:
+    """A second brute-force probe whose budget is exhausted before the rate limiter.
+
+    It always returns a probe record. If the probe could not run, the record is
+    malformed on purpose so the evaluator reports INCONCLUSIVE instead of dropping it.
+    """
     case = prepare_case(work_root / f"cheese-{tactic_id}-budget")
     frozen, _seed = case.store.load_task(case.task_id)
     limit = case.store.budget(frozen.task.lineage_id, Pool.LOCAL).limit
@@ -1099,15 +1246,19 @@ def run_cheeseless_mode(
                 _run_naive_attack(control_repo, control_config)
                 context["positive_control"] = bool(listener.snapshot(marker).get("marker_seen"))
             if tactic_id == "oracle-bruteforce":
-                observations = attack.get("observations") or {}
+                observations = attack.get("observations")
+                if not isinstance(observations, dict):
+                    observations = {}
+                    attack = dict(attack)
+                    attack["observations"] = observations
                 probes = observations.get("probes")
-                if isinstance(probes, list):
-                    for probe in probes:
-                        if isinstance(probe, dict):
-                            probe["observed_budget"] = _budget_state(case)
-                    extra = _budget_first_probe(work_root, tactic_id, config, marker, listener)
-                    if extra is not None:
-                        probes.append(extra)
+                if not isinstance(probes, list):
+                    probes = []
+                for probe in probes:
+                    if isinstance(probe, dict):
+                        probe["observed_budget"] = _budget_state(case)
+                probes.append(_budget_first_probe(work_root, tactic_id, config, marker, listener))
+                observations["probes"] = probes
             result = evaluate_tactic(tactic_id, "cheeseless", attack, context)
             emit(_line(result))
             results.append(result)
@@ -1209,8 +1360,9 @@ def build_report(results: dict) -> str:
         "",
         "## Statistics",
         "",
-        "These are counts and the share of these probes blocked in each mode. The control",
-        "pass rate is the honesty check. They are not probabilities.",
+        "These are plain probe counts, not percentages and not a defence rate. The",
+        "control is the honesty check: an honest fix must pass, so a gate that rejects",
+        "everything is not counted as a defence.",
         "",
     ]
     for key in (WITHOUT, WITH):
@@ -1218,11 +1370,11 @@ def build_report(results: dict) -> str:
         if mode is None:
             continue
         counts = mode["counts"]
+        control = "passed" if mode["control"]["succeeded"] else "failed"
         lines.append(
             f"- **{labels[key]}**: {counts['gamed']} GAMED, {counts['blocked']} BLOCKED, "
-            f"{counts['inconclusive']} INCONCLUSIVE of {counts['total']}; share of these "
-            f"probes blocked {mode['share_blocked']}%; control pass rate "
-            f"{mode['control_percent']}%."
+            f"{counts['inconclusive']} INCONCLUSIVE ({counts['total']} probes); "
+            f"control {control}."
         )
     with_mode = modes.get(WITH)
     if with_mode is not None:
@@ -1240,6 +1392,9 @@ def build_report(results: dict) -> str:
         lines += [
             "",
             f"{sentence}; {counts['inconclusive']} inconclusive.",
+            "",
+            "This is the result of these scripted probes in this version and configuration,",
+            "not a defence rate and not an estimate of how often the gate blocks an agent.",
             "",
         ]
     lines += ["## What each tactic means in the real world", ""]
@@ -1277,8 +1432,8 @@ def build_report(results: dict) -> str:
         "and cannot improvise around a defence.",
         "- There is one toy task and one hidden suite; the numbers do not generalise to",
         "  other repositories, languages or test frameworks.",
-        "- Counts and the share blocked are for these eight probes in this version and",
-        "  configuration. They are not attack success probabilities.",
+        "- The counts are for these eight probes in this version and configuration.",
+        "  They are not attack success probabilities.",
         "- INCONCLUSIVE is not a defence: an attack error, a session failure or missing",
         "  evidence is excluded from the blocked count and makes a WITH-mode report not a",
         "  valid defence result.",
@@ -1433,10 +1588,11 @@ def run_demo(
                 data = run_cheeseless_mode(work / "cheeseless", tactic_ids, emit=emit)
             mode_summary = summarise_mode(data)
             counts = mode_summary["counts"]
+            control = "passed" if data["control"].get("succeeded") else "failed"
             emit(
                 f"summary: {counts['gamed']} GAMED, {counts['blocked']} BLOCKED, "
-                f"{counts['inconclusive']} INCONCLUSIVE of {counts['total']}, "
-                f"control pass rate {mode_summary['control_percent']}%"
+                f"{counts['inconclusive']} INCONCLUSIVE ({counts['total']} probes), "
+                f"control {control}"
             )
             casts[name] = recorder.to_asciicast()
             summary[name] = mode_summary
