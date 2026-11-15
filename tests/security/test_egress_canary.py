@@ -133,6 +133,8 @@ class Upstream:
                     self._sse_chunked(clean=True)
                 elif self.path == "/sse-chunked-leak":
                     self._sse_chunked(clean=False)
+                elif self.path == "/sse-chunked-split":
+                    self._sse_chunked(clean=False, split=True)
                 else:
                     self._send(404, b"not found", "text/plain")
 
@@ -169,18 +171,29 @@ class Upstream:
                     self.wfile.flush()
                 self.close_connection = True
 
-            def _sse_chunked(self, *, clean: bool) -> None:
+            def _sse_chunked(self, *, clean: bool, split: bool = False) -> None:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Transfer-Encoding", "chunked")
                 self.end_headers()
-                tail = b"data: public tail\n\n" if clean else b"data: " + SENTINEL + b"\n\n"
-                chunks = (
+                head = (
                     b"event: ping\n\n",
                     b"data: " + b"x" * 300 + b"\n\n",
                     b"data: " + b"y" * 300 + b"\n\n",
-                    tail,
                 )
+                if split:
+                    # The marker straddles three HTTP chunk boundaries.
+                    cut = len(SENTINEL) // 3
+                    tail: tuple[bytes, ...] = (
+                        b"data: " + SENTINEL[:cut],
+                        SENTINEL[cut : 2 * cut],
+                        SENTINEL[2 * cut :] + b"\n\n",
+                    )
+                elif clean:
+                    tail = (b"data: public tail\n\n",)
+                else:
+                    tail = (b"data: " + SENTINEL + b"\n\n",)
+                chunks = head + tail
                 for chunk in chunks:
                     self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                     self.wfile.flush()
@@ -331,13 +344,23 @@ def test_cross_chunk_sse_canary_is_detected(tmp_path, tls, fingerprints):
 
 
 def _dechunk(raw: bytes) -> tuple[bytes, bool]:
-    """Decode a chunked body; the flag is True only if a final 0-chunk ended the input."""
+    """Decode a chunked body; the flag is True only for a fully framed message.
+
+    Every chunk must be followed by CRLF and the body must end with ``0\\r\\n\\r\\n``.
+    """
     out = b""
     while raw:
-        size_line, _, raw = raw.partition(b"\r\n")
-        size = int(size_line, 16)
+        size_line, sep, raw = raw.partition(b"\r\n")
+        if not sep:
+            return out, False
+        try:
+            size = int(size_line, 16)
+        except ValueError:
+            return out, False
         if size == 0:
-            return out, raw in (b"\r\n", b"")
+            return out, raw == b"\r\n"
+        if raw[size : size + 2] != b"\r\n":
+            return out, False
         out, raw = out + raw[:size], raw[size + 2 :]
     return out, False
 
@@ -350,8 +373,16 @@ def test_chunked_stream_with_small_first_chunk_is_delivered_in_full(tmp_path, tl
     finally:
         fixture.proxy.stop()
     body, terminated = _dechunk(_body(response))
-    assert body.startswith(b"event: ping\n\n")
-    assert body.endswith(b"data: public tail\n\n")
+    assert body == (
+        b"event: ping\n\n"
+        + b"data: "
+        + b"x" * 300
+        + b"\n\n"
+        + b"data: "
+        + b"y" * 300
+        + b"\n\n"
+        + b"data: public tail\n\n"
+    )
     assert terminated
     assert fixture.hits == []
 
@@ -364,6 +395,19 @@ def test_chunked_stream_canary_is_still_blocked(tmp_path, tls, fingerprints):
         fixture.proxy.stop()
     assert SENTINEL not in response
     assert fixture.hits
+
+
+def test_chunked_stream_canary_split_across_chunks_leaks_no_prefix(tmp_path, tls, fingerprints):
+    fixture = _start_proxy(tmp_path, tls, fingerprints)
+    try:
+        response = _tcp_get(fixture, "/sse-chunked-split")
+    finally:
+        fixture.proxy.stop()
+    assert fixture.hits
+    for length in range(8, len(SENTINEL) + 1):
+        assert SENTINEL[:length] not in response
+    body, _ = _dechunk(_body(response))
+    assert SENTINEL[:8] not in body
 
 
 def test_archives_forward_only_after_a_clean_recursive_scan(tmp_path, tls, fingerprints):
