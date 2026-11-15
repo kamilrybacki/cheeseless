@@ -131,4 +131,4 @@ estimate first, and resumes by skipping completed run ids.
 
 ## Changelog
 
-- Initial freeze: the commit that introduces this file.
+- Initial freeze at commit `2d74b04` (the commit that introduced this file). No amendments yet.

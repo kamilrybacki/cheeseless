@@ -26,6 +26,12 @@ cheeseless session [--task TASK] [--ro PATH] [--home-seed REL=SRC] [--env K=V] \
     [--evidence-dir NEW_DIR] -- AGENT [ARGS...]
 ```
 
+## Real-agent study
+
+A preregistered comparison of naive vs cheeseless runs with real coding agents lives in
+[`docs/study/protocol.md`](docs/study/protocol.md). Harness check without any agent:
+`uv run python -m study.run --dry-run`. Results: `docs/study/results.md`.
+
 ## Egress DLP guarantees (phase 8)
 
 - The sandbox has no direct network, DNS or UDP. The only egress path is a per-session
