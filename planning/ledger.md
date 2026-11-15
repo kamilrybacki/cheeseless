@@ -533,3 +533,18 @@ finished all then-collected tests during shutdown (1498 passed, 15 skipped in
 the four final regression cases and exited 0: 1502 passed, 15 skipped, 2 warnings
 in 578.64 seconds; coverage 87.81% (required 80%). The exact study selection used
 the requested 600-second wrapper and exited 0. No study protocol amendment needed.
+
+## Egress stream hold-back must not emit empty chunks
+
+Root cause of a real-agent infra error: `EgressAddon` installed a stream callable that
+returned `b""` while `BodyScanner` held back bytes (the 512-byte sniff window). For an
+HTTP/1.1 `Transfer-Encoding: chunked` response mitmproxy writes an empty chunk as
+`0\r\n\r\n`, the end-of-body marker, so the client received a truncated, empty body
+(`Malformed_HTTP_Response` in the agent). Content-length and HTTP/2 paths were not
+affected, which is why earlier canary tests and the Claude endpoint passed.
+
+Fix: the callable now returns a list of chunks, empty when nothing is releasable. The
+DLP decision logic is untouched. Tests: `tests/security/test_egress_canary.py` gains a
+chunked SSE endpoint with a small first chunk (full delivery and proper termination) and
+a chunked canary stream (still blocked, hit recorded). No ADR change; no protocol
+amendment needed.

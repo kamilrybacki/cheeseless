@@ -129,6 +129,10 @@ class Upstream:
                     self._send(200, value.encode(), "text/plain")
                 elif self.path == "/sse":
                     self._sse()
+                elif self.path == "/sse-chunked":
+                    self._sse_chunked(clean=True)
+                elif self.path == "/sse-chunked-leak":
+                    self._sse_chunked(clean=False)
                 else:
                     self._send(404, b"not found", "text/plain")
 
@@ -163,6 +167,25 @@ class Upstream:
                 for chunk in chunks:
                     self.wfile.write(chunk)
                     self.wfile.flush()
+                self.close_connection = True
+
+            def _sse_chunked(self, *, clean: bool) -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                tail = b"data: public tail\n\n" if clean else b"data: " + SENTINEL + b"\n\n"
+                chunks = (
+                    b"event: ping\n\n",
+                    b"data: " + b"x" * 300 + b"\n\n",
+                    b"data: " + b"y" * 300 + b"\n\n",
+                    tail,
+                )
+                for chunk in chunks:
+                    self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+                    self.wfile.flush()
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
                 self.close_connection = True
 
             def log_message(self, *args: object) -> None:
@@ -301,6 +324,42 @@ def test_cross_chunk_sse_canary_is_detected(tmp_path, tls, fingerprints):
     fixture = _start_proxy(tmp_path, tls, fingerprints)
     try:
         response = _tcp_get(fixture, "/sse")
+    finally:
+        fixture.proxy.stop()
+    assert SENTINEL not in response
+    assert fixture.hits
+
+
+def _dechunk(raw: bytes) -> tuple[bytes, bool]:
+    """Decode a chunked body; the flag is True only if a final 0-chunk ended the input."""
+    out = b""
+    while raw:
+        size_line, _, raw = raw.partition(b"\r\n")
+        size = int(size_line, 16)
+        if size == 0:
+            return out, raw in (b"\r\n", b"")
+        out, raw = out + raw[:size], raw[size + 2 :]
+    return out, False
+
+
+def test_chunked_stream_with_small_first_chunk_is_delivered_in_full(tmp_path, tls, fingerprints):
+    """Hold-back must never emit an empty chunk: that is the HTTP/1.1 body terminator."""
+    fixture = _start_proxy(tmp_path, tls, fingerprints)
+    try:
+        response = _tcp_get(fixture, "/sse-chunked")
+    finally:
+        fixture.proxy.stop()
+    body, terminated = _dechunk(_body(response))
+    assert body.startswith(b"event: ping\n\n")
+    assert body.endswith(b"data: public tail\n\n")
+    assert terminated
+    assert fixture.hits == []
+
+
+def test_chunked_stream_canary_is_still_blocked(tmp_path, tls, fingerprints):
+    fixture = _start_proxy(tmp_path, tls, fingerprints)
+    try:
+        response = _tcp_get(fixture, "/sse-chunked-leak")
     finally:
         fixture.proxy.stop()
     assert SENTINEL not in response
