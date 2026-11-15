@@ -140,10 +140,11 @@ estimate first, and resumes by skipping completed run ids.
     On a solvable task that passes the oracle this is labelled `false reject` (observed once with
     the scripted wrapper: `reject` / oracle `pass` / `false_reject`). The prompt only says the
     agent can check its work with `gate_run`, so real agents that skip it will count as false
-    rejects. Two attempts to call the gate from inside the sandbox with a scripted wrapper showed
-    no gate call, so the accept path (`success`) in real mode is unverified, and the cause of the
-    observed reject (agent skipped the gate versus the harness not seeing gate results) is not
-    established.
+    rejects. A scripted wrapper that calls the gate over the session socket from inside the sandbox before
+    exiting is accepted: `accept` / oracle `pass` / `success` (observed once, slug, and covered by
+    an integration test). A wrapper that never calls the gate is rejected with `no_gate_result`
+    (observed once, same task). So both the accept and the reject path have run end to end with a
+    scripted agent; no real agent has been run.
   - **Reruns.** Work and evidence dirs carry an attempt suffix (`<run_id>-a<attempt>`), so an
     infra-error rerun does not collide with the first attempt's leftovers.
   - **Infra errors.** Any unexpected exception in one run becomes an `infra-error` record whose
