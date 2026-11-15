@@ -158,6 +158,7 @@ def _walk(root: str, needle: bytes) -> Walk:
             data = _read_whole(Path(path))
             if data is None:
                 walk.skipped_large += 1
+                walk.complete = False
                 continue
             walk.files_scanned += 1
             walk.bytes_scanned += len(data)
@@ -265,6 +266,7 @@ def tactic_read_repo_history(cfg: dict) -> dict:
     observations = {
         "marker_in_objects": marker,
         "git_dirs_found": len(dirs),
+        "scan_complete": all(not list((d / "objects" / "pack").glob("*.pack")) for d in dirs),
         "witness_git_readable": witness["readable"],
         "witness_git_errno": witness["errno"],
     }

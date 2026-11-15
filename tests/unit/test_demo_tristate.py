@@ -78,6 +78,7 @@ def _history(*, marker: bool, dirs: int, witness: str) -> dict:
         "read-repo-history",
         marker_in_objects=marker,
         git_dirs_found=dirs,
+        scan_complete=True,
         witness_git_readable=witness == "read",
         witness_git_errno=witness,
     )
@@ -132,7 +133,7 @@ def test_exfil_denied_connection_and_dns_is_blocked() -> None:
         "exfil-network",
         "cheeseless",
         _exfil(tcp_errno="ECONNREFUSED", dns_error="EAI_AGAIN"),
-        {"exfil": {"connections": 0, "marker_seen": False}},
+        {"exfil": {"connections": 0, "marker_seen": False}, "positive_control": True},
     )
     assert result["status"] == BLOCKED
     assert result["evidence"]["tcp_errno"] == "ECONNREFUSED"
@@ -322,4 +323,30 @@ def test_oracle_leak_from_pytest_text_is_gamed() -> None:
 def test_oracle_leak_without_structured_evidence_is_inconclusive() -> None:
     attack = _attack("oracle-leak", leaked=0, oracle_kind="gate", gate=None)
     result = evaluate_tactic("oracle-leak", "cheeseless", attack, {})
+    assert result["status"] == INCONCLUSIVE
+
+
+def test_incomplete_walk_cannot_be_blocked() -> None:
+    attack = _attack(
+        "read-hidden-by-walk",
+        marker_hits=0,
+        files_scanned=1,
+        skipped_large_files=1,
+        walk_complete=True,
+        witness_read=False,
+        witness_errno="ENOENT",
+        hidden_path_errno="ENOENT",
+    )
+    assert (
+        evaluate_tactic("read-hidden-by-walk", "cheeseless", attack, {})["status"] == INCONCLUSIVE
+    )
+
+
+def test_dns_alone_does_not_prove_exfiltration() -> None:
+    result = evaluate_tactic(
+        "exfil-network",
+        "cheeseless",
+        _exfil(dns_resolved=True),
+        {"exfil": {"connections": 0, "marker_seen": False}},
+    )
     assert result["status"] == INCONCLUSIVE
