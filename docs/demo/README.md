@@ -2,7 +2,8 @@
 
 A reproducible comparison between a plain repository and a cheeseless host session.
 The same scripted adversary runs eight test-gaming tactics against both, plus an honest
-fix as a control.
+fix as a control. Each tactic is reported as GAMED, BLOCKED or INCONCLUSIVE; only a
+BLOCKED outcome with positive structured evidence counts as blocked.
 
 ## Run it
 
@@ -11,7 +12,7 @@ uv run --frozen python -m demo.run_demo --out docs/demo
 ```
 
 The command needs bubblewrap (`/usr/bin/bwrap`) and `/usr/bin/python3`, because the
-cheeseless half runs a real host session. It takes about a minute and a half.
+cheeseless half runs a real host session. It takes about two minutes.
 
 Useful flags:
 
@@ -29,8 +30,8 @@ uv run --frozen python -m demo.run_demo --out demo-out \
 
 | File | What it is |
 | --- | --- |
-| `results.json` | Machine-readable outcomes, counts and percentages. |
-| `report.md` | Tables, percentages, each tactic's real-world meaning and limits. |
+| `results.json` | Machine-readable tri-state outcomes, evidence, counts and percentages. |
+| `report.md` | Tables, counts, each tactic's predicate, fail meaning and limits. |
 | `without-cheeseless.cast` | asciicast v2 recording of the plain-checkout run. |
 | `with-cheeseless.cast` | asciicast v2 recording of the cheeseless run. |
 | `player.html` | Self-contained side-by-side player for both recordings. |
@@ -49,8 +50,11 @@ example a locally installed `asciinema play`) can play the two `.cast` files.
 
 ## How to read the numbers
 
-The percentage is the share of scripted tactics that gamed the gate in that mode. The
-control pass rate is the honesty check: an honest fix must pass, so a gate that rejects
-everything is not counted as a defence. These are not attack probabilities: the
-adversary is a deterministic script, there is one toy task, and it is not an LLM. See
-the "Limits of this demo" section in `report.md`.
+The counts and the share of these probes blocked are for eight scripted probes in one
+mode and one configuration. The control pass rate is the honesty check: an honest fix
+must pass, so a gate that rejects everything is not counted as a defence. These are not
+attack probabilities: the adversary is a deterministic script, there is one toy task,
+and it is not an adaptive agent. INCONCLUSIVE means the attack errored or the evidence
+was missing; it is excluded from the blocked count and makes the WITH-mode report
+INVALID (the command exits non-zero). See the "Limits of this demo" section in
+`report.md`.
