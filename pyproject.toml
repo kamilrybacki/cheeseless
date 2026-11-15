@@ -83,7 +83,7 @@ select = ["E", "F", "I", "B", "UP", "S"]
 
 [tool.mypy]
 strict = true
-files = ["src", "scripts"]
+files = ["src", "scripts", "study"]
 exclude = ["src/cheeseless/adapters/inbound/proto/"]
 
 [[tool.mypy.overrides]]

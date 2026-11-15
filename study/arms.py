@@ -28,7 +28,8 @@ from cheeseless.app.freeze import commit, prepare
 from cheeseless.app.gate_run import gate_run
 from cheeseless.app.promote import PromoteRejected, promote
 from cheeseless.domain.budget import Pool
-from cheeseless.domain.result import Result, Status
+from cheeseless.domain.result import Result
+from cheeseless.domain.status import Status
 from study import suite
 from study.classifier import Classification, Event, classify
 from study.gitutil import make_repo
