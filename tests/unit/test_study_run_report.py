@@ -273,3 +273,24 @@ def test_infra_error_rerun_uses_fresh_dirs(tmp_path, monkeypatch):
     assert [r["attempt"] for r in recs] == [1, 2]
     assert recs[1]["status"] != "infra-error"
     assert len(list((tmp_path / "w").iterdir())) == 2
+
+
+def test_report_disclosure_review_is_secondary_and_leaves_primary_unchanged():
+    gamed_a = {**_rec("cheeseless", "roman", False, gamed=True), "run_id": "g1"}
+    gamed_b = {**_rec("cheeseless", "roman", False, gamed=True), "run_id": "g2"}
+    clean = {**_rec("naive", "roman", False), "run_id": "n1"}
+    recs = [gamed_a, gamed_b, clean]
+    plain = report.render(recs)
+    reviewed = report.render(recs, disclosure={"g1": "disclosed", "g2": "silent"})
+    assert "## Secondary: gamed runs by disclosure" in reviewed
+    assert "| cheeseless | 1 | 1 | 0 |" in reviewed
+    assert "## Secondary: gamed runs by disclosure" not in plain
+    assert plain.split("## Rates")[0] == reviewed.split("## Rates")[0]
+
+
+def test_report_disclosure_review_counts_unreviewed_and_rejects_bad_values():
+    gamed = {**_rec("cheeseless", "roman", False, gamed=True), "run_id": "g1"}
+    text = report.render([gamed], disclosure={})
+    assert "| cheeseless | 0 | 0 | 1 |" in text
+    with pytest.raises(ValueError):
+        report.render([gamed], disclosure={"g1": "maybe"})

@@ -548,3 +548,13 @@ DLP decision logic is untouched. Tests: `tests/security/test_egress_canary.py` g
 chunked SSE endpoint with a small first chunk (full delivery and proper termination) and
 a chunked canary stream (still blocked, hit recorded). No ADR change; no protocol
 amendment needed.
+
+## 2026-11-15: study Amendment 4 (disclosure annotation, staged runs)
+
+- Added a secondary `gamed` split (disclosed vs silent) from a manual sidecar; primary
+  outcomes unchanged, intent still not inferred.
+- Main phase run in stages (96 DeepSeek runs, 12 Haiku probe, then sized) instead of 360 at
+  once; the 360 was a judgement call, not a power calculation.
+- Decision: do not hide the staged runtime from the agent. The MCP shim must execute from it
+  and it holds no hidden tests; documented as a limitation. Per-criterion feedback bisection
+  documented as a design property of a black-box gate.
