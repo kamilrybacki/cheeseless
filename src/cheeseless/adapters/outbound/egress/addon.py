@@ -162,8 +162,11 @@ class EgressAddon:
         state = BodyScanner(self._scanner)
         self._states[flow.id] = state
 
-        def stream(chunk: bytes) -> bytes:
-            return self._stream(flow, state, chunk)
+        def stream(chunk: bytes) -> list[bytes]:
+            # An empty bytes chunk is the HTTP/1.1 chunked terminator, so a held-back
+            # (or blocked) chunk must yield no chunks at all, never ``b""``.
+            out = self._stream(flow, state, chunk)
+            return [out] if out else []
 
         response.stream = stream
 
