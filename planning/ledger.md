@@ -495,3 +495,41 @@ were replaced with real clients in a fresh PID namespace (`unshare --user --pid
 | P14-1 | **Harness gap fixed: the E2E can now pass an egress policy.** `run_agent` called `host_session` without a policy, so the default empty allowlist left a real agent unable to reach its model API. `CHEESELESS_E2E_AGENT_EGRESS` (path to a `.json`/`.toml` policy outside the repo, loaded with the existing `load_egress_policy`) feeds `AgentConfig.egress_policy`; load errors surface as `AgentUnavailable` naming only the exception type. Deterministic tests cover unset, valid, invalid and forwarding. |
 | P14-2 | **Real-agent E2E PASSED (2026-11-15).** `tests/e2e/test_e2e_agent.py` with Claude Code 2.1.319 (`--model sonnet`) in the bwrap host session: 1 passed in 27 s. The transcript shows 7 `gate_run` tool calls, the first attempt did not pass and a later one did; the harness's evidence scan, HOME-removal proof, promote and real CI judge all passed. One vendor/model only; a second vendor (Codex) was not run. |
 | P14-3 | **Operator setup, all outside the repo.** A wrapper script runs `claude -p` with `--strict-mcp-config` and an MCP config naming `$CHEESELESS_MCP`; the claude binary directory and the wrapper directory are read-only mounts; a sanitized credentials copy (access token only, refresh token blanked, so a sandboxed refresh cannot rotate the operator's login) and a minimal `.claude.json` are seeds; the policy allows only the one model host. After the run the seeded credentials copy in the captured evidence was shredded. The evidence directory is sensitive and was not committed. |
+
+| Study-2 | **Pre-data adversarial review fixes.** NAIVE uses a minimal bubblewrap namespace and a fail-closed protected-path/write probe; post-agent candidate execution and editable test collection are isolated too, with positive and denial controls; network needs explicit opt-in. Both real arms disclose diff-only attempt observability and unknown event-based kinds. Usage comes only from a separate parent-owned trusted-wrapper directory. Mandatory pilot/main phases protect held-outs and resume/report separation; fresh-session attestation is recorded. Manifest writes use one append write plus fsync; incomplete tails require explicit archived repair. Task paired differences lead the descriptive statistics. Amendment 2 preserves frozen text and the optional gate prompt/hash; skipped checks remain operational false rejects. No real agent calls were used for validation. |
+
+### Study harness follow-up review (2026-11-15)
+
+- NAIVE launch and self-check explicitly use `close_fds=True`, `pass_fds=()` and
+  disconnected stdin. Python closes descriptors in the exec child; closing them in
+  the harness parent would break its own files/sockets, and a Python preexec hook
+  would be unsafe in a threaded process. Installed bubblewrap help exposes no
+  `--close-fd` option. A real sandbox regression keeps a file canary and socket
+  inheritable and verifies their descriptors are absent in the child.
+- NAIVE executable validation uses the mounted namespace, with a fixed system PATH
+  and an explicit executable file seed route under `/agent-home`. Direct seed
+  wrappers have their SHA-256 recorded in each real manifest record. The frozen
+  protocol remains unchanged; operational details live in the supplemental checklist.
+- Manifest tail repair validates every complete JSON record before archival or
+  truncation. A malformed complete record followed by a fragment changes nothing.
+- The reported quiet study hang reproduced as slow successful tests: the unmodified
+  base completed 108 study tests in 117.93 seconds. Each dry-arm matrix test runs
+  multiple sandboxed grades before emitting its first dot. Study git operations and
+  the remaining security probe now have timeouts; subprocess stdin is disconnected.
+- CI runs `uv run mypy` over src, scripts and study. Explicit `mypy_path = "src"`
+  gives standalone `mypy study` the same typed source imports without suppressions.
+
+Validation: the exact timeout-wrapped study selection passed 118 tests (1399
+deselected) in 149.46 seconds; targeted review/security regressions passed 15
+tests in 12.54 seconds. Both CI mypy (100 source files) and standalone study mypy
+(17 source files) pass. All four import contracts, generated-file checks, ruff
+lint, formatting, diff whitespace and the diff leak scan pass. Four pre-existing
+format-only differences in unrelated test files were normalized for the requested
+repository-wide format check.
+
+Full coverage validation: the first 600-second wrapper returned 124 although pytest
+finished all then-collected tests during shutdown (1498 passed, 15 skipped in
+621.05 seconds, 87.82% coverage). A fresh full run with a 900-second wrapper included
+the four final regression cases and exited 0: 1502 passed, 15 skipped, 2 warnings
+in 578.64 seconds; coverage 87.81% (required 80%). The exact study selection used
+the requested 600-second wrapper and exited 0. No study protocol amendment needed.

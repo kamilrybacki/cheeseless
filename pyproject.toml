@@ -82,8 +82,9 @@ select = ["E", "F", "I", "B", "UP", "S"]
 "tests/**" = ["S101"]
 
 [tool.mypy]
+mypy_path = "src"
 strict = true
-files = ["src", "scripts"]
+files = ["src", "scripts", "study"]
 exclude = ["src/cheeseless/adapters/inbound/proto/"]
 
 [[tool.mypy.overrides]]

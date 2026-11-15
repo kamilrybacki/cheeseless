@@ -168,9 +168,7 @@ def test_known_http_methods_are_preserved_in_the_audit(
     assert fixture.events[0].method == audited_method
 
 
-def test_an_audit_failure_still_fails_an_unknown_method_closed(
-    tmp_path, upstream, fingerprints
-):
+def test_an_audit_failure_still_fails_an_unknown_method_closed(tmp_path, upstream, fingerprints):
     def failing(_event: AuditEvent) -> None:
         raise RuntimeError("sink unavailable")
 
