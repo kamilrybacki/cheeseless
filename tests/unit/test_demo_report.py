@@ -6,6 +6,7 @@ from demo.run_demo import (
     BLOCKED,
     GAMED,
     INCONCLUSIVE,
+    TACTIC_IDS,
     _is_valid,
     build_report,
     scrub,
@@ -63,7 +64,17 @@ def test_report_uses_the_mandated_wording_and_no_defence_rate() -> None:
     )
     assert "2 inconclusive" in text
     assert "INVALID" in text
-    assert "Limits of this demo" in text
+    assert "Limits of this evidence" in text
+    assert "decoy host witness path" in text
+    assert "not the real trusted scratch location" in text
+    assert "probe observed a defence-consistent outcome" in text
+    assert "not that every route is closed" in text
+    assert (
+        "in this run the probe could not connect to the host loopback listener and could not "
+        "resolve a name; this is not a proof of a DNS policy" in text
+    )
+    assert "eight probes" in text
+    assert "not an adaptive agent" in text
 
 
 def test_a_valid_report_is_not_marked_invalid() -> None:
@@ -141,3 +152,47 @@ def test_a_without_only_run_can_be_valid() -> None:
 def test_a_failed_control_makes_the_run_invalid() -> None:
     results = {"modes": {"with-cheeseless": summarise_mode(_mode([BLOCKED] * 8, False))}}
     assert _is_valid(results) is False
+
+
+def test_report_states_that_weaken_tests_is_mode_specific() -> None:
+    text = build_report(
+        {
+            "valid": True,
+            "modes": {
+                "without-cheeseless": summarise_mode(_mode([GAMED] * 8, True)),
+                "with-cheeseless": summarise_mode(_mode([BLOCKED] * 8, True)),
+            },
+        }
+    )
+    assert "The weaken-tests edit is mode-specific" in text
+
+
+def test_report_renders_the_weaken_tests_mutation_sentence() -> None:
+    tactics = []
+    for tactic_id in TACTIC_IDS:
+        status = BLOCKED if tactic_id == "weaken-tests" else GAMED
+        tactic = _tactic(tactic_id, status)
+        if tactic_id == "weaken-tests":
+            tactic["detail"] = (
+                "the graded suite returned status fail; an unprotected grader accepts this "
+                "edit; the cheeseless verdict rejected it because the hidden suite is not "
+                "replaceable"
+            )
+            tactic["evidence"] = {"oracle_rejected": True}
+        tactics.append(tactic)
+    text = build_report(
+        {
+            "valid": True,
+            "modes": {
+                "without-cheeseless": summarise_mode(_mode([GAMED] * 8, True)),
+                "with-cheeseless": summarise_mode(
+                    {
+                        "tactics": tactics,
+                        "control": {"id": "control", "succeeded": True, "detail": "ok"},
+                    }
+                ),
+            },
+        }
+    )
+    assert "an unprotected grader accepts this edit" in text
+    assert "the hidden suite is not replaceable" in text

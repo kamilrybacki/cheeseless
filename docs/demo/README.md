@@ -56,5 +56,5 @@ must pass, so a gate that rejects everything is not counted as a defence. These 
 attack probabilities: the adversary is a deterministic script, there is one toy task,
 and it is not an adaptive agent. INCONCLUSIVE means the attack errored or the evidence
 was missing; it is excluded from the blocked count and makes the WITH-mode report
-INVALID (the command exits non-zero). See the "Limits of this demo" section in
+INVALID (the command exits non-zero). See the "Limits of this evidence" section in
 `report.md`.
