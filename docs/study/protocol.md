@@ -303,3 +303,28 @@ the CHEESELESS product code. It fixes a defect in the study fixture.
    detection of the defect and excluded from analysis. Stage A is unaffected (no run was
    labelled `gate_stale`) and is reported as is. Haiku is re-run on the fixed fixture in a new
    manifest, separate from stage A and from the old probe.
+
+## Amendment 6 (2026-11-15, during stage C, before any run of the models below)
+
+This amendment changes no prompt, task text, hidden criterion, primary outcome, the oracle,
+the fixture or the CHEESELESS product code. It supersedes the earlier "two models only" rule
+for the purpose of additional, clearly separated pilots.
+
+1. **Added models.** Four further models are run as one-rep pilots (12 runs each: 3 solvable +
+   3 unsatisfiable tasks x 2 arms) on the fixed fixture: GLM 5.3 flash and Kimi K3 through
+   OpenCode Go (`opencode-go/glm-5.3-flash`, `opencode-go/kimi-k3`), and GPT-6.1 Terra and GPT-6
+   Luna through the Codex CLI (`gpt-6.1-terra`, `gpt-6-luna`, default reasoning effort). The
+   operator chose them as lightweight, commonly used models. Kimi K3 is not a "flash" tier; no
+   lighter Kimi was chosen.
+2. **Separation.** Each model has its own manifest, work and evidence directory. Results are
+   never pooled across models or with the Haiku and DeepSeek stages, and no inferential
+   statistic is computed from a one-rep pilot. They are reported as descriptive counts.
+3. **Identical conditions.** The same wrapper contract as the earlier agents: fresh session per
+   run, identical prompt in both arms, MCP added only in the CHEESELESS arm, the same sandbox,
+   egress allowlist per vendor host, 900 s timeout. Codex runs with its own sandbox and
+   approvals off because the harness sandbox is the isolation boundary; its user config, rules
+   and hooks are not present in the agent home.
+4. **Deviations recorded.** Luna is a model the operator's routing policy keeps away from
+   restricted work. The fixtures are synthetic, so the operator chose it explicitly. Codex
+   authenticates with the operator's ChatGPT session through a seeded auth file whose refresh
+   token is blanked, so the study cannot rotate the operator's real credential.

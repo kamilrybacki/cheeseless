@@ -567,3 +567,13 @@ written after the last gate changed the snapshot hash. Decision: fix the fixture
 `.gitignore`), not the product, because `snapshot` honouring `.gitignore` is correct and any
 real repository ignores bytecode. Rejected: `PYTHONDONTWRITEBYTECODE` in the wrapper (hides the
 defect, differs per agent). Old 12-run probe excluded from analysis, kept as a detection.
+
+## 2026-11-15: study Amendment 6 (four extra pilot models)
+
+Operator asked to try more lightweight models. Chosen: `glm-5.3-flash`, `kimi-k3` (OpenCode Go),
+`gpt-6.1-terra`, `gpt-6-luna` (Codex). Decision: 1-rep pilots with separate manifests, never
+pooled, descriptive only. Rejected: expanding to 7 reps each (quota; the first signal is whether
+a model games at all) and folding them into the Haiku/DeepSeek analysis (breaks the frozen
+design). Codex setup: `codex-study` copied to a system dir, seed auth with a blank refresh token
+(rotation would invalidate the operator's session), host allowlist limited to the vendor host.
+Open risk: Luna is excluded from restricted work by routing policy; fixtures are synthetic.
