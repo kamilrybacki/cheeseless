@@ -1,7 +1,8 @@
 """Optional token and cost channel from the operator wrapper.
 
-The wrapper may write ``usage.json`` into the directory named by ``CHEESELESS_STUDY_USAGE_DIR``
-(the per-run work root, outside the agent's tree). Shape: ``{"tokens": int, "cost_usd": number}``.
+An operator process may write ``usage.json`` into the per-run work root ``W/<run_id>-a<attempt>``
+(the harness does not pass this path to the agent wrapper).
+Shape: ``{"tokens": int, "cost_usd": number}``.
 Anything else is ignored; no value is ever invented.
 """
 

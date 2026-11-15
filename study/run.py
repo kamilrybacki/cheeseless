@@ -206,9 +206,10 @@ def _real_loop(
         )
         if run_id in done:
             continue
-        root = work / f"{run_id}"
+        attempt = manifest.next_attempt(path, run_id)
+        root = work / f"{run_id}-a{attempt}"
         root.mkdir(parents=True, exist_ok=True)
-        evidence = evidence_root / run_id  # must not exist: host_session creates it
+        evidence = evidence_root / f"{run_id}-a{attempt}"  # must not exist: host_session creates it
         evidence_root.mkdir(parents=True, exist_ok=True)
         started = _now()
         try:
@@ -225,7 +226,7 @@ def _real_loop(
             mode="real",
             seed=seed,
             agent=agent.agent,
-            attempt=manifest.next_attempt(path, run_id),
+            attempt=attempt,
             canary=canary,
             started=started,
             usage=read_usage(root),

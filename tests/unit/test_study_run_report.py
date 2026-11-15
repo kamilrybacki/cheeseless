@@ -244,3 +244,24 @@ def test_report_session_blocked_sensitivity():
     assert "session_blocked runs (cheeseless, unsatisfiable): 1." in text
     assert "| counted as missing | 0/3 | 0/3 |" in text
     assert "| counted as blocked | 0/4 | 1/4 |" in text
+
+
+def test_infra_error_rerun_uses_fresh_dirs(tmp_path, monkeypatch):
+    for k, v in _env(tmp_path, "#!/bin/sh\nexit 0\n").items():
+        monkeypatch.setenv(k, v)
+    mpath = tmp_path / "m.jsonl"
+    argv = [
+        "--manifest", str(mpath), "--workdir", str(tmp_path / "w"),
+        "--evidence-dir", str(tmp_path / "e"), "--tasks", "slug", "--arms", "naive",
+        "--reps", "1", "--yes",
+    ]  # fmt: skip
+    real = run.run_naive_real
+    monkeypatch.setattr(run, "run_naive_real", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
+    assert run.main(argv, out=lambda _s: None) == 0
+    assert list(manifest.read_all(mpath))[0]["status"] == "infra-error"
+    monkeypatch.setattr(run, "run_naive_real", real)
+    assert run.main(argv, out=lambda _s: None) == 0
+    recs = list(manifest.read_all(mpath))
+    assert [r["attempt"] for r in recs] == [1, 2]
+    assert recs[1]["status"] != "infra-error"
+    assert len(list((tmp_path / "w").iterdir())) == 2
