@@ -56,6 +56,7 @@ CHEESELESS_E2E_AGENT_CMD='["/home/me/bin/cheeseless-agent-wrapper"]' \
 CHEESELESS_E2E_AGENT_SEED='{".config/tool/credentials.json": "/home/me/.config/tool/credentials.json"}' \
 CHEESELESS_E2E_AGENT_RO='["/home/me/.config/tool"]' \
 CHEESELESS_E2E_AGENT_TIMEOUT=900 \
+CHEESELESS_E2E_AGENT_EGRESS=/home/me/.config/cheeseless/agent-egress.json \
 uv run --frozen pytest tests/e2e/test_e2e_agent.py -m e2e_agent -s
 ```
 
@@ -66,11 +67,40 @@ uv run --frozen pytest tests/e2e/test_e2e_agent.py -m e2e_agent -s
   `CHEESELESS_TASK` are not needed and conflicting values cannot redirect it.
 - `CHEESELESS_E2E_AGENT_SEED` and `CHEESELESS_E2E_AGENT_RO` are optional operator-owned
   credential/config material passed through the normal validated session extras.
+- `CHEESELESS_E2E_AGENT_EGRESS` is an optional path to an egress-policy file (`.json` or
+  `.toml`, parsed by the same loader as the CLI `--egress-policy` option). The default
+  policy allows **no** hosts, so a real agent can never reach its model API without one:
+  list the model API host(s) under both `model_hosts` and `allowed_hosts`, for example
+  `{"allowed_hosts": ["api.example.com"], "model_hosts": ["api.example.com"]}`. Keep the
+  file outside this repository. An unreadable or invalid file refuses the run and the
+  error names only the exception type, never the file contents.
 - Without an explicit command it tries an installed `claude`, then `codex`. A known CLI
   with no visible config directory is refused explicitly unless seeds or mounts are
   supplied.
 - The test fails on a wall-clock timeout, proves the session HOME was removed, scans the
   captured evidence for canaries, then promotes the tree and runs the real CI judge.
+
+### Example wrapper (Claude Code)
+
+A minimal operator wrapper, kept outside the repository. The agent binary directory and the
+wrapper directory are passed as `CHEESELESS_E2E_AGENT_RO`; credentials and a minimal
+`.claude.json` are passed as seeds. Prefer a sanitized credentials copy (access token only,
+empty refresh token) so a refresh inside the throwaway session cannot rotate your real login.
+
+```sh
+#!/bin/bash
+set -eu
+cfg="${TMPDIR:-/tmp}/cheeseless-mcp.json"
+printf '{"mcpServers":{"cheeseless":{"command":"%s","args":[]}}}' "$CHEESELESS_MCP" > "$cfg"
+export DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+exec /path/to/claude -p "$1" --mcp-config "$cfg" --strict-mcp-config \
+  --permission-mode acceptEdits \
+  --allowedTools mcp__cheeseless__gate_run Read Edit Write Glob Grep Bash
+```
+
+The egress policy then needs only the model host, for example
+`{"allowed_hosts": ["api.example.com"], "model_hosts": ["api.example.com"]}`. Delete the
+captured evidence afterwards: it contains the seeded files.
 
 Deterministic tests for the harness itself run in the normal suite and make no network or
 paid calls (`tests/e2e/test_agent_harness.py`).

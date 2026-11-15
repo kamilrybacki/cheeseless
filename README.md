@@ -8,8 +8,9 @@ budget, egress DLP, and CI as the source of truth.
 DLP proxy, the CI judge, the cross-run CI budget counter and the phase 12 local release
 audit are implemented (PR #1–#5 merged at `924d953`), including the phase 11 follow-ups
 (baked MCP shim, per-request allow audit, opt-in real-agent E2E). The live GitHub
-`P10-6` release gate, the known server-side pull refs, explicit publication approval and
-the opt-in real-agent E2E remain open; see `planning/handoff.md`. A clean local audit is
+`P10-6` release gate and the opt-in real-agent E2E have passed (ledger P13-10, P14-2); the
+known server-side pull refs and explicit publication approval remain open; see
+`planning/handoff.md`. A clean local audit is
 not a release-readiness claim.
 
 Usage:

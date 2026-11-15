@@ -109,14 +109,15 @@ source of truth; changes land through `promote`, not hooks.
   (P10-29, P10-30). The `ci.yml` bwrap step is verified (P10-8).
 - GitHub `refs/pull/1` and `refs/pull/2` still hold commits with the old author email;
   removing them needs GitHub Support or a fresh repository (operator decision).
-- The P11-11 follow-ups are implemented but the real-agent E2E stays opt-in and was not
-  executed in this workspace. Run it with the manual command in
+- The real-agent E2E ran and PASSED on 2026-11-15 with Claude Code (ledger P14-2). It stays
+  opt-in; run it with the manual command in
   [`docs/agent-prompting.md`](../docs/agent-prompting.md); it needs an operator-owned
-  wrapper and credentials outside this repository.
+  wrapper, credentials and an egress policy outside this repository.
 - Phase 12 sanitizer is implemented and the local audit is clean, but publication is
   still blocked by the live GitHub P10-6 gate, the server-side `refs/pull/1`/`refs/pull/2`
-  history, explicit operator publication approval (Q34) and the opt-in real-agent check.
-  The local audit cannot see server-side refs and does not prove history is sanitized.
+  history, and explicit operator publication approval (Q34). The live gate (P13-10) and the
+  real-agent E2E (P14-2) have both passed. The local audit cannot see server-side refs and
+  does not prove history is sanitized.
 - Residual phase 8 limits (P8-12): freeze requires two private sentinel markers per
   artifact class, but markers split across files or hidden behind other reversible
   encodings are not detected; 64-bit rolling-hash collisions are theoretical; bytes clean before a mid-stream
