@@ -74,6 +74,7 @@ Requires Python >=3.12 and `mitmproxy>=12.3.1,<13` (pinned in `pyproject.toml`).
 - Prompt authors: [`docs/agent-prompting.md`](docs/agent-prompting.md)
 - Egress audit: [`docs/egress-audit.md`](docs/egress-audit.md)
 - Defence demo: [`docs/demo/README.md`](docs/demo/README.md)
+- Effectiveness brief: [`docs/effectiveness.md`](docs/effectiveness.md)
 - Release audit: [`docs/release-audit.md`](docs/release-audit.md)
 - Agent rules: [`AGENTS.md`](AGENTS.md)
 
