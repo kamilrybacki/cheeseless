@@ -56,6 +56,7 @@ CHEESELESS_E2E_AGENT_CMD='["/home/me/bin/cheeseless-agent-wrapper"]' \
 CHEESELESS_E2E_AGENT_SEED='{".config/tool/credentials.json": "/home/me/.config/tool/credentials.json"}' \
 CHEESELESS_E2E_AGENT_RO='["/home/me/.config/tool"]' \
 CHEESELESS_E2E_AGENT_TIMEOUT=900 \
+CHEESELESS_E2E_AGENT_EGRESS=/home/me/.config/cheeseless/agent-egress.json \
 uv run --frozen pytest tests/e2e/test_e2e_agent.py -m e2e_agent -s
 ```
 
@@ -66,6 +67,13 @@ uv run --frozen pytest tests/e2e/test_e2e_agent.py -m e2e_agent -s
   `CHEESELESS_TASK` are not needed and conflicting values cannot redirect it.
 - `CHEESELESS_E2E_AGENT_SEED` and `CHEESELESS_E2E_AGENT_RO` are optional operator-owned
   credential/config material passed through the normal validated session extras.
+- `CHEESELESS_E2E_AGENT_EGRESS` is an optional path to an egress-policy file (`.json` or
+  `.toml`, parsed by the same loader as the CLI `--egress-policy` option). The default
+  policy allows **no** hosts, so a real agent can never reach its model API without one:
+  list the model API host(s) under both `model_hosts` and `allowed_hosts`, for example
+  `{"allowed_hosts": ["api.example.com"], "model_hosts": ["api.example.com"]}`. Keep the
+  file outside this repository. An unreadable or invalid file refuses the run and the
+  error names only the exception type, never the file contents.
 - Without an explicit command it tries an installed `claude`, then `codex`. A known CLI
   with no visible config directory is refused explicitly unless seeds or mounts are
   supplied.

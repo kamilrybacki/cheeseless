@@ -34,13 +34,16 @@ from cheeseless.app.gate_run import gate_run
 from cheeseless.app.promote import promote
 from cheeseless.bootstrap import host_session
 from cheeseless.domain.budget import Pool
+from cheeseless.domain.egress_policy import EgressPolicy, PolicyError
 from cheeseless.session_files import copy_evidence, write_projection_list
+from cheeseless.session_options import SessionOptionError, load_egress_policy
 from tests.toy import CANARY, FIXED_MAIN, SENTINEL, make_repo
 
 COMMAND_ENV = "CHEESELESS_E2E_AGENT_CMD"
 SEED_ENV = "CHEESELESS_E2E_AGENT_SEED"
 READ_ONLY_ENV = "CHEESELESS_E2E_AGENT_RO"
 TIMEOUT_ENV = "CHEESELESS_E2E_AGENT_TIMEOUT"
+EGRESS_ENV = "CHEESELESS_E2E_AGENT_EGRESS"
 DEFAULT_TIMEOUT = 900.0
 EVIDENCE_FILE_LIMIT = 1 << 20
 EVIDENCE_ENTRY_LIMIT = 100_000
@@ -82,6 +85,7 @@ class AgentConfig:
     seeds: Mapping[str, Path]
     read_only: tuple[Path, ...]
     timeout: float
+    egress_policy: EgressPolicy | None = None
 
 
 @dataclass
@@ -130,6 +134,19 @@ def parse_agent_command(value: str) -> tuple[str, ...]:
     ):
         raise AgentUnavailable(f"{COMMAND_ENV} must be a non-empty argv list")
     return tuple(parsed)
+
+
+def _load_egress(values: Mapping[str, str]) -> EgressPolicy | None:
+    """Load the operator egress policy; errors name only the exception type, never contents."""
+    raw = values.get(EGRESS_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        return load_egress_policy(Path(raw))
+    except (SessionOptionError, PolicyError) as exc:
+        raise AgentUnavailable(
+            f"{EGRESS_ENV} is not a usable egress policy file: {type(exc).__name__}"
+        ) from exc
 
 
 def _discover(which=shutil.which) -> tuple[str, ...] | None:
@@ -189,7 +206,13 @@ def load_agent_config(
             "the selected agent has no operator-owned credential directory; "
             f"set {SEED_ENV} or {READ_ONLY_ENV} (the harness never inspects their contents)"
         )
-    return AgentConfig(command=command, seeds=seeds, read_only=read_only, timeout=timeout)
+    return AgentConfig(
+        command=command,
+        seeds=seeds,
+        read_only=read_only,
+        timeout=timeout,
+        egress_policy=_load_egress(values),
+    )
 
 
 def prepare_case(root: Path) -> Case:
@@ -230,6 +253,7 @@ def run_agent(case: Case, config: AgentConfig) -> None:
             home_seed=dict(config.seeds),
             extra_read_only=config.read_only,
             evidence_dir=case.evidence,
+            egress_policy=config.egress_policy,
         ) as info:
             home = Path(info["home_dir"])
             proc: subprocess.Popen[object] = info["agent_proc"]

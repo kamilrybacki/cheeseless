@@ -6,12 +6,15 @@ import json
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from cheeseless.domain.egress_policy import EgressPolicy
 from cheeseless.domain.status import Status
 from tests.e2e.harness import (
     COMMAND_ENV,
+    EGRESS_ENV,
     READ_ONLY_ENV,
     SEED_ENV,
     TIMEOUT_ENV,
@@ -83,6 +86,96 @@ def test_operator_seeds_or_read_only_mounts_satisfy_the_credential_gate(tmp_path
     assert config.seeds == {".config/tool/credentials.json": seed}
     assert config.read_only == ()
     assert config.timeout == 12.5
+
+
+def _wrapper(tmp_path: Path) -> Path:
+    agent = tmp_path / "wrapper"
+    agent.write_text("#!/bin/sh\nexit 0\n")
+    agent.chmod(0o500)
+    return agent
+
+
+def _egress_config(tmp_path: Path, extra: dict[str, str]) -> AgentConfig:
+    agent = _wrapper(tmp_path)
+    env = {COMMAND_ENV: json.dumps([str(agent)]), SEED_ENV: json.dumps({"a": "b"}), **extra}
+    return load_agent_config(env, home=tmp_path, which=lambda _n: str(agent))
+
+
+@pytest.mark.parametrize("extra", [{}, {EGRESS_ENV: ""}, {EGRESS_ENV: "   "}])
+def test_unset_or_empty_egress_policy_is_none(tmp_path, extra):
+    assert _egress_config(tmp_path, extra).egress_policy is None
+
+
+def test_a_valid_egress_policy_file_is_loaded(tmp_path):
+    policy_file = tmp_path / "egress.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "allowed_hosts": ["api.example.com", "auth.example.com"],
+                "model_hosts": ["api.example.com"],
+            }
+        )
+    )
+    config = _egress_config(tmp_path, {EGRESS_ENV: str(policy_file)})
+    assert config.egress_policy is not None
+    assert config.egress_policy.allowed_hosts == {"api.example.com", "auth.example.com"}
+    assert config.egress_policy.model_hosts == {"api.example.com"}
+
+
+def test_a_missing_egress_policy_file_is_refused(tmp_path):
+    with pytest.raises(AgentUnavailable, match=EGRESS_ENV):
+        _egress_config(tmp_path, {EGRESS_ENV: str(tmp_path / "absent.json")})
+
+
+def test_an_egress_policy_with_a_bad_extension_is_refused(tmp_path):
+    policy_file = tmp_path / "egress.txt"
+    policy_file.write_text("{}")
+    with pytest.raises(AgentUnavailable, match=EGRESS_ENV):
+        _egress_config(tmp_path, {EGRESS_ENV: str(policy_file)})
+
+
+def test_an_invalid_egress_policy_is_refused_without_echoing_its_contents(tmp_path):
+    policy_file = tmp_path / "egress.json"
+    policy_file.write_text(
+        json.dumps({"allowed_hosts": ["ok.example.com"], "model_hosts": ["leaky-host.example.com"]})
+    )
+    with pytest.raises(AgentUnavailable) as caught:
+        _egress_config(tmp_path, {EGRESS_ENV: str(policy_file)})
+    message = str(caught.value)
+    assert EGRESS_ENV in message and "PolicyError" in message
+    assert "leaky-host" not in message and "ok.example.com" not in message
+
+
+def test_run_agent_forwards_the_egress_policy_to_host_session(tmp_path, monkeypatch):
+    seen: dict[str, object] = {}
+
+    def fake_host_session(**kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop before any session starts")
+
+    monkeypatch.setattr("tests.e2e.harness.host_session", fake_host_session)
+    policy = EgressPolicy(
+        allowed_hosts=frozenset({"api.example.com"}),
+        model_hosts=frozenset({"api.example.com"}),
+    )
+    config = AgentConfig(
+        command=("/bin/true",),
+        seeds={},
+        read_only=(),
+        timeout=5.0,
+        egress_policy=policy,
+    )
+    case = SimpleNamespace(
+        state=tmp_path / "state",
+        repo=SimpleNamespace(root=tmp_path / "repo"),
+        task_id="task",
+        projection=tmp_path / "projection",
+        sockets=tmp_path / "sockets",
+        evidence=tmp_path / "evidence",
+    )
+    with pytest.raises(RuntimeError, match="stop before"):
+        run_agent(case, config)  # type: ignore[arg-type]
+    assert seen["egress_policy"] is policy
 
 
 @pytest.mark.parametrize(
