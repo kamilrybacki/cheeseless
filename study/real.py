@@ -1,9 +1,6 @@
 """Real-agent run paths (opt-in, operator-owned wrapper). Never exercised by ``--dry-run``.
 
-The naive arm runs the operator command as a plain subprocess: it has a throwaway HOME and a
-scrubbed environment but NO filesystem, read-only-mount or egress isolation. Use a disposable
-container, VM or user for it. The cheeseless arm goes through ``host_session`` exactly like the
-real-agent E2E. The evidence directory holds agent-side captures: treat it as sensitive.
+The naive arm uses a minimal bubblewrap mount namespace.
 """
 
 from __future__ import annotations
@@ -31,10 +28,84 @@ from study.arms import (
 from study.classifier import Classification
 from study.prompt import build_prompt
 from study.scorer import INFRA, INVALID, TIMEOUT
+from study.suite import copy_pytest_runtime
 from study.tasks import CANARY, SENTINEL, Task, baseline_files
 
 SEED_FILE_LIMIT = 1 << 20
 _SCRUBBED_ENV = ("PATH", "LANG", "TERM")
+
+
+class IsolationError(RuntimeError):
+    """Isolation could not be established; stop real runs."""
+
+
+def sandbox_argv(
+    work: Path, home: Path, command: list[str], *, allow_network: bool = False
+) -> list[str]:
+    binary = shutil.which("bwrap")
+    if binary is None:
+        raise IsolationError("bubblewrap unavailable")
+    args = [binary, "--die-with-parent", "--new-session", "--unshare-all", "--cap-drop", "ALL"]
+    if allow_network:
+        args += ["--share-net"]
+    for top in ("/usr", "/bin", "/sbin", "/lib", "/lib64"):
+        if Path(top).is_symlink():
+            args += ["--symlink", os.readlink(top), top]
+        elif Path(top).is_dir():
+            args += ["--ro-bind", top, top]
+    if allow_network:
+        for config in ("/etc/resolv.conf", "/etc/hosts", "/etc/ssl/certs"):
+            if Path(config).exists():
+                args += ["--ro-bind", config, config]
+    args += [
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",  # noqa: S108
+        "--bind",
+        str(work.resolve()),
+        "/work",
+        "--bind",
+        str(home.resolve()),
+        "/agent-home",
+        "--chdir",
+        "/work",
+        "--setenv",
+        "HOME",
+        "/agent-home",
+        "--remount-ro",
+        "/",
+        "--",
+        *command,
+    ]
+    return args
+
+
+def isolation_check(
+    work: Path, home: Path, protected: tuple[Path, ...], *, allow_network: bool = False
+) -> None:
+    """Probe the namespace before launching any operator command."""
+    script = r"""for p do
+        test ! -r "$p" && test ! -w "$p" && test ! -e "$p" || exit 31
+    done
+    if (echo probe > /outside-work) 2>/dev/null; then exit 32; fi
+    touch /work/.isolation-probe || exit 33
+    rm /work/.isolation-probe
+    """
+    argv = sandbox_argv(
+        work,
+        home,
+        ["/bin/sh", "-c", script, "probe", *map(str, protected)],
+        allow_network=allow_network,
+    )
+    try:
+        result = subprocess.run(argv, capture_output=True, timeout=20, check=False)  # noqa: S603
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise IsolationError("bubblewrap isolation self-check could not execute") from exc
+    if result.returncode:
+        raise IsolationError("bubblewrap isolation self-check failed")
 
 
 class AgentTimedOut(RuntimeError):
@@ -69,6 +140,8 @@ def _copy_seed(src: Path, dest: Path) -> None:
 def _scrubbed_env(home: Path) -> dict[str, str]:
     env = {k: os.environ[k] for k in _SCRUBBED_ENV if k in os.environ}
     env["HOME"] = str(home)
+    env["PYTHONPATH"] = "/agent-home/.study-pytest"
+    env["STUDY_IN_TREE"] = "1"
     return env
 
 
@@ -84,7 +157,14 @@ def _run_process(argv: list[str], cwd: Path, env: Mapping[str, str], timeout: fl
         raise AgentTimedOut(f"agent exceeded {timeout:g} s") from exc
 
 
-def run_naive_real(task: Task, root: Path, agent: StudyAgent) -> ArmResult:
+def run_naive_real(
+    task: Task,
+    root: Path,
+    agent: StudyAgent,
+    *,
+    protected: tuple[Path, ...] = (),
+    allow_network: bool = False,
+) -> ArmResult:
     """Run the operator command on the naive tree, then grade with the shared graders."""
     started = time.monotonic()
     prompt = build_prompt(task, ARM_NAIVE)
@@ -93,10 +173,17 @@ def run_naive_real(task: Task, root: Path, agent: StudyAgent) -> ArmResult:
     def apply(workdir: Path) -> None:
         with tempfile.TemporaryDirectory(prefix="study-home-") as tmp:
             home = Path(tmp)
+            copy_pytest_runtime(home / ".study-pytest")
             for rel, src in agent.seeds.items():
                 _copy_seed(src, home / rel)
+            isolation_check(workdir, home, protected, allow_network=allow_network)
             code = _run_process(
-                [*agent.naive_command, prompt], workdir, _scrubbed_env(home), agent.timeout
+                sandbox_argv(
+                    workdir, home, [*agent.naive_command, prompt], allow_network=allow_network
+                ),
+                workdir,
+                _scrubbed_env(home),
+                agent.timeout,
             )
         exits.append(code)
 

@@ -6,6 +6,8 @@ a scrubbed environment), so these grades never import candidate code in-process.
 
 from __future__ import annotations
 
+import importlib.metadata
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -53,10 +55,21 @@ def candidate():
                 "LANG": "C.UTF-8",
             }}
             try:
-                done = subprocess.run(
-                    [sys.executable, "-m", PACKAGE, *args],
-                    cwd=root, env=env, input=stdin, capture_output=True, text=True, timeout=10,
-                )
+                if os.environ.get("STUDY_IN_TREE") == "1":
+                    done = subprocess.run(
+                        [sys.executable, "-m", PACKAGE, *args],
+                        cwd=root, env=env, input=stdin, capture_output=True, text=True, timeout=10,
+                    )
+                else:
+                    from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
+                    sandbox = BwrapSandbox()
+                    with sandbox.scratch() as scratch:
+                        launcher = sandbox.launcher(root, (("PYTHONPATH", "src"),), scratch)
+                        done = subprocess.run(
+                            [*launcher, "python3", "-m", PACKAGE, *args],
+                            cwd=root, env=env, input=stdin, capture_output=True,
+                            text=True, timeout=10,
+                        )
             except subprocess.TimeoutExpired:
                 return SimpleNamespace(returncode=124, stdout="", stderr="timeout")
         return SimpleNamespace(returncode=done.returncode, stdout=done.stdout, stderr=done.stderr)
@@ -137,6 +150,65 @@ def pristine_verdict(task: Task, candidate_root: Path) -> str:
     return run_suite(task, candidate_root, tests)
 
 
+def copy_pytest_runtime(runtime: Path) -> None:
+    """Stage only pytest's pure-Python dependencies, never the harness environment."""
+    for name in ("pytest", "_pytest", "pluggy", "iniconfig", "packaging", "pygments", "py"):
+        spec = importlib.util.find_spec(name)
+        if spec is None or spec.origin is None:
+            raise RuntimeError("pytest runtime dependency unavailable")
+        source = Path(spec.origin)
+        if spec.submodule_search_locations is None:
+            shutil.copyfile(source, runtime / source.name)
+        else:
+            shutil.copytree(source.parent, runtime / name)
+        if name not in ("py", "_pytest"):
+            version = importlib.metadata.version(name)
+            metadata = runtime / f"{name}-{version}.dist-info"
+            metadata.mkdir()
+            (metadata / "METADATA").write_text(f"Name: {name}\nVersion: {version}\n")
+
+
 def in_tree_verdict(task: Task, workdir: Path) -> str:
     """Run ``acceptance/`` exactly as the agent left it (secondary naive grade)."""
-    return _run_pytest(workdir, "acceptance", {}, ["--import-mode=importlib"])
+    # Editable tests themselves are untrusted; never collect them in a host pytest process.
+    from study.real import sandbox_argv
+
+    with tempfile.TemporaryDirectory(prefix="study-grade-") as tmp:
+        home = Path(tmp) / "home"
+        home.mkdir()
+        runtime = Path(tmp) / "runtime"
+        runtime.mkdir()
+        copy_pytest_runtime(runtime)
+        argv = sandbox_argv(
+            workdir,
+            home,
+            [
+                "/usr/bin/python3",
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "--import-mode=importlib",
+                "acceptance",
+            ],
+        )
+        index = argv.index("--remount-ro")
+        argv[index:index] = [
+            "--ro-bind",
+            str(runtime),
+            "/pytest-runtime",
+            "--setenv",
+            "PYTHONPATH",
+            "/pytest-runtime",
+            "--setenv",
+            "STUDY_IN_TREE",
+            "1",
+        ]
+        try:
+            done = subprocess.run(  # noqa: S603 - isolated untrusted test collection
+                argv, env=_pytest_env({}), capture_output=True, timeout=SUITE_TIMEOUT, check=False
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return INFRA
+        return _verdict(done.returncode)

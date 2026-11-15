@@ -30,7 +30,8 @@ cheeseless session [--task TASK] [--ro PATH] [--home-seed REL=SRC] [--env K=V] \
 
 A preregistered comparison of naive vs cheeseless runs with real coding agents lives in
 [`docs/study/protocol.md`](docs/study/protocol.md). Harness check without any agent:
-`uv run python -m study.run --dry-run`. Results: `docs/study/results.md`.
+`uv run --frozen python -m study.run --dry-run --phase pilot`. Results: `docs/study/results.md`. Real pilot setup and commands are in
+[protocol Amendment 2](docs/study/protocol.md#amendment-2-2026-11-15-before-any-real-study-run).
 
 ## Egress DLP guarantees (phase 8)
 

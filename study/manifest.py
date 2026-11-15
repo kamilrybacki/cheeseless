@@ -76,16 +76,52 @@ def dumps(record: Mapping[str, Any]) -> str:
 def append(path: Path, record: Mapping[str, Any]) -> None:
     line = dumps({"schema_version": SCHEMA_VERSION, **record})
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(line + "\n")
+    data = (line + "\n").encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        if os.write(fd, data) != len(data):
+            raise CorruptManifest("short manifest append; repair trailing record before resume")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+class CorruptManifest(ValueError):
+    """Incomplete or malformed manifest record."""
 
 
 def read_all(path: Path) -> Iterator[dict[str, Any]]:
     if not path.exists():
         return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        if raw.strip():
-            yield json.loads(raw)
+    data = path.read_bytes()
+    if data and not data.endswith(b"\n"):
+        raise CorruptManifest("truncated trailing manifest record; explicit repair required")
+    for n, raw in enumerate(data.splitlines(), 1):
+        try:
+            rec = json.loads(raw)
+            if not isinstance(rec, dict):
+                raise ValueError
+        except (ValueError, UnicodeError) as exc:
+            raise CorruptManifest(f"corrupt manifest record {n}") from exc
+        yield rec
+
+
+def validate_resume(path: Path, phase: str, *, repair_tail: bool = False) -> None:
+    if repair_tail and path.exists():
+        data = path.read_bytes()
+        if data and not data.endswith(b"\n"):
+            backup = path.with_suffix(path.suffix + ".corrupt-tail")
+            with backup.open("xb") as fh:
+                fh.write(data[data.rfind(b"\n") + 1 :])
+            with path.open("r+b") as fh:
+                fh.truncate(data.rfind(b"\n") + 1)
+                fh.flush()
+                os.fsync(fh.fileno())
+    for rec in read_all(path):
+        if rec.get("record_type", "run") == "run" and rec.get("phase") != phase:
+            raise ValueError("manifest phase mismatch (including missing phase)")
+        if rec.get("mode") == "real" and rec.get("session_policy") != "fresh_per_run":
+            raise ValueError("real manifest requires session_policy=fresh_per_run")
 
 
 def latest_runs(path: Path) -> dict[str, dict[str, Any]]:

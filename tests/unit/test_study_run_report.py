@@ -55,7 +55,7 @@ def test_check_dry_reports_mismatch():
 def test_real_mode_refuses_without_opt_in(monkeypatch):
     monkeypatch.delenv("CHEESELESS_STUDY_AGENT", raising=False)
     lines: list[str] = []
-    assert run.main([], out=lines.append) == 2
+    assert run.main(["--phase", "pilot"], out=lines.append) == 2
     assert "opt-in" in lines[0]
 
 
@@ -65,6 +65,9 @@ def _env(tmp_path: Path, script: str) -> dict[str, str]:
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
     return {
         "CHEESELESS_STUDY_AGENT": "1",
+        "CHEESELESS_STUDY_FRESH_SESSION": "1",
+        "CHEESELESS_STUDY_AGENT_SEED": json.dumps({"agent.sh": str(wrapper)}),
+        "CHEESELESS_STUDY_AGENT_CMD_NAIVE": json.dumps(["/bin/sh", "/agent-home/agent.sh"]),
         "CHEESELESS_STUDY_AGENT_CMD": json.dumps([str(wrapper)]),
         "CHEESELESS_STUDY_AGENT_ID": json.dumps({"vendor": "test", "model": "m", "version": "1"}),
     }
@@ -93,6 +96,7 @@ def test_real_mode_needs_yes_then_runs_naive_with_scripted_wrapper(tmp_path, mon
         monkeypatch.setenv(k, v)
     mpath = tmp_path / "m.jsonl"
     argv = [
+        "--phase", "pilot",
         "--manifest", str(mpath), "--workdir", str(tmp_path / "w"),
         "--evidence-dir", str(tmp_path / "e"), "--tasks", "slug", "--arms", "naive",
         "--reps", "1",
@@ -115,6 +119,7 @@ def test_naive_agent_nonzero_exit_is_infra_error_not_blocked(tmp_path, monkeypat
         monkeypatch.setenv(k, v)
     mpath = tmp_path / "m.jsonl"
     argv = [
+        "--phase", "pilot",
         "--manifest", str(mpath), "--workdir", str(tmp_path / "w"),
         "--evidence-dir", str(tmp_path / "e"), "--tasks", "roman", "--arms", "naive",
         "--reps", "1", "--yes",
@@ -177,19 +182,19 @@ def test_write_report_refuses_redaction_hit(tmp_path):
 def test_usage_file_validated(tmp_path):
     from study.usage import read_usage
 
-    assert read_usage(tmp_path) is None
-    f = tmp_path / "usage.json"
+    assert read_usage(tmp_path, "run-a1") is None
+    f = tmp_path / "run-a1.json"
     f.write_text('{"tokens": 120, "cost_usd": 0.5}')
-    u = read_usage(tmp_path)
+    u = read_usage(tmp_path, "run-a1")
     assert u is not None and u.tokens == 120 and u.cost_usd == 0.5
     for bad in ("not json", "[1]", '{"tokens": -1}', '{"tokens": true}', '{"tokens": "9"}'):
         f.write_text(bad)
-        assert read_usage(tmp_path) is None
+        assert read_usage(tmp_path, "run-a1") is None
     f.write_text('{"tokens": 5}' + " " * 5000)
-    assert read_usage(tmp_path) is None
+    assert read_usage(tmp_path, "run-a1") is None
     f.unlink()
     f.symlink_to(tmp_path / "x")
-    assert read_usage(tmp_path) is None
+    assert read_usage(tmp_path, "run-a1") is None
 
 
 def test_record_has_started_and_usage(tmp_path, monkeypatch):
@@ -197,6 +202,7 @@ def test_record_has_started_and_usage(tmp_path, monkeypatch):
         monkeypatch.setenv(k, v)
     mpath = tmp_path / "m.jsonl"
     argv = [
+        "--phase", "pilot",
         "--manifest", str(mpath), "--workdir", str(tmp_path / "w"),
         "--evidence-dir", str(tmp_path / "e"), "--tasks", "slug", "--arms", "naive",
         "--reps", "1", "--yes",
@@ -217,6 +223,7 @@ def test_unexpected_exception_becomes_infra_error(tmp_path, monkeypatch):
     monkeypatch.setattr(run, "run_naive_real", boom)
     mpath = tmp_path / "m.jsonl"
     argv = [
+        "--phase", "pilot",
         "--manifest", str(mpath), "--workdir", str(tmp_path / "w"),
         "--evidence-dir", str(tmp_path / "e"), "--tasks", "slug,wordfreq", "--arms", "naive",
         "--reps", "1", "--yes",
@@ -251,6 +258,7 @@ def test_infra_error_rerun_uses_fresh_dirs(tmp_path, monkeypatch):
         monkeypatch.setenv(k, v)
     mpath = tmp_path / "m.jsonl"
     argv = [
+        "--phase", "pilot",
         "--manifest", str(mpath), "--workdir", str(tmp_path / "w"),
         "--evidence-dir", str(tmp_path / "e"), "--tasks", "slug", "--arms", "naive",
         "--reps", "1", "--yes",

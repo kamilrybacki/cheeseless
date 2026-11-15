@@ -76,12 +76,13 @@ def pooled_difference(cells: Sequence[Cell]) -> float | None:
 
 def cluster_bootstrap(
     cells: Sequence[Cell], seed: int, reps: int = 2000
-) -> tuple[float, float, int] | None:
+) -> tuple[float, float, int, int] | None:
     """Seeded percentile bootstrap of the pooled B - A difference.
 
     The resampling unit is the *task*: each draw takes whole tasks (with replacement) and keeps
     every agent cell of a drawn task together. Cell keys are ``task/agent``. Returns
-    ``(low, high, n_clusters)``; the cluster count is the number of distinct tasks and must be
+    ``(low, high, n_clusters, distinct_resamples)``; the cluster count is the number
+    of distinct tasks and must be
     reported next to the interval (few clusters make it descriptive, not inferential).
     """
     by_task: dict[str, list[Cell]] = {}
@@ -93,15 +94,18 @@ def cluster_bootstrap(
         return None
     rng = random.Random(seed)  # noqa: S311 - seeded, non-crypto
     draws = []
+    distinct = set()
     for _ in range(reps):
-        sample = [c for t in (tasks[rng.randrange(len(tasks))] for _ in tasks) for c in by_task[t]]
+        selected = tuple(tasks[rng.randrange(len(tasks))] for _ in tasks)
+        distinct.add(selected)
+        sample = [c for t in selected for c in by_task[t]]
         d = pooled_difference(sample)
         if d is not None:
             draws.append(d)
     draws.sort()
     lo = draws[int(0.025 * (len(draws) - 1))]
     hi = draws[int(math.ceil(0.975 * (len(draws) - 1)))]
-    return lo, hi, len(tasks)
+    return lo, hi, len(tasks), len(distinct)
 
 
 def shuffled_order(items: Sequence[str], seed: int) -> list[str]:

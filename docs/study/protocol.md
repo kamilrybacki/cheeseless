@@ -157,3 +157,74 @@ estimate first, and resumes by skipping completed run ids.
     where the directory is; if the pilot shows null tokens, the operator must add an outer
     wrapper. This channel was tested with a file, not with a real agent.
   - **Sensitivity.** The report now includes the `session_blocked` sensitivity table (section 4).
+
+## Amendment 2 (2026-11-15, before any real study run)
+
+This amendment supersedes the operational details above without changing the frozen protocol
+or Amendment 1. No real agent has run in this study. The prompt template remains
+`406fecfcdaa8b805`: keep the optional `gate_run` wording. An independent reviewer recommended
+retaining it. False rejects are operational outcomes, including agents skipping an available
+check; they are not solely measures of verifier correctness.
+
+1. **Enforced isolation.** NAIVE now runs inside bubblewrap with read-only system directories,
+   a writable per-run checkout at `/work`, a throwaway HOME at `/agent-home`, and a private
+   tmpfs scratch directory. The host study checkout (including oracle and scorer), manifest,
+   evidence and trusted usage directory are never mounted. Before any real launch, an in-sandbox
+   probe checks that protected paths are absent, unreadable and unwritable and that writing
+   outside the writable mounts fails. Failure or missing bubblewrap refuses the run with a
+   nonzero exit; there is no host-execution fallback. The parent alone appends manifest records.
+   NAIVE still sees its task's acceptance suite by design, but never the independent oracle.
+   Post-agent candidate commands also use the existing isolated candidate launcher; editable
+   in-tree tests are collected in a separate minimal namespace with only trusted pytest runtime
+   dependencies. No candidate code or agent-editable tests execute on the host.
+   NAIVE wrappers must be system executables or copied HOME seeds invoked through an interpreter;
+   arbitrary host paths and extra read-only mounts are unavailable to NAIVE. Trusted pytest
+   dependencies are staged in HOME so the prompt's test command remains available. CHEESELESS retains
+   its validated host-session mounts; harness paths are forbidden in seeds and extra mounts.
+   Network is disabled unless `--allow-agent-network` is explicit. CHEESELESS additionally needs
+   its provider allowlist policy. Permitted network is an accepted exposure: the operator must
+   use a disposable account/credential, including for HOME seeds, since provider access can
+   carry agent-controlled data. No production account or reusable personal credential is suitable.
+2. **Observability.** Both real arms record `observability=diff_only`. Hidden-read,
+   history-read and network attempts are `unknown`, never zero. The gaming-attempt comparison
+   covers only diff-observable attempts; unobservable kinds cannot be compared across arms.
+   Primary outcomes remain oracle-decided gamed, false reject and completion.
+3. **Usage trust.** Work-root `usage.json` is ignored. Optional `--usage-file-dir U` must name a
+   parent-owned directory outside all agent-reachable directories and the study work tree.
+   A trusted outer wrapper writes `U/<run_id>-a<attempt>.json` with `tokens` and/or `cost_usd`;
+   those records have provenance `trusted_wrapper`. Missing/invalid measurements are null with
+   provenance `unavailable`, reported as **not measured**. The harness never fabricates usage.
+4. **Phases.** `--phase pilot|main` is mandatory, recorded on each run and checked on resume.
+   Pilot rejects `rpn` and `dedupe` even through explicit `--tasks` or `--include-held-out`.
+   Main includes all six tasks by default. Reports refuse mixed phases. Use separate manifests.
+   Dry runs follow the same phase selection, so pilot validation does not exercise held-outs.
+5. **Sessions.** Real wrappers must declare `CHEESELESS_STUDY_FRESH_SESSION=1` and start a fresh
+   provider session for every invocation, without resume/session reuse. The manifest records
+   `session_policy=fresh_per_run`; refusal occurs without this declaration. This is an operator
+   attestation, not provider-side proof. Persistent-session designs are outside this study.
+6. **Manifest integrity.** Each line is appended with one `os.write` on an `O_APPEND` descriptor
+   followed by `fsync`. Incomplete trailing records are errors, not silently ignored. Resume
+   refuses corruption unless `--repair-manifest-tail` explicitly archives an incomplete tail
+   to a sibling `.corrupt-tail` file and truncates to the last complete line. Malformed complete
+   records still require operator investigation. Run one parent per manifest; concurrent study
+   scheduling is outside scope.
+7. **Descriptive statistics.** Task-level paired differences are the primary displayed
+   comparison. Pooled Wilson intervals are **run-level descriptive intervals that ignore
+   within-task correlation**. The cluster bootstrap is **descriptive only with this number
+   of tasks**; report the task count and actual distinct ordered resamples generated by the
+   seeded bootstrap (at most 27 for three tasks). These analyses are not confirmatory.
+
+Current commands (the earlier examples are frozen history):
+
+```sh
+uv run --frozen python -m study.run --dry-run --phase pilot
+CHEESELESS_STUDY_AGENT=1 CHEESELESS_STUDY_FRESH_SESSION=1 \
+  CHEESELESS_STUDY_AGENT_CMD=... CHEESELESS_STUDY_AGENT_ID=... \
+  uv run --frozen python -m study.run --phase pilot \
+  --manifest M --workdir W --evidence-dir E --usage-file-dir U \
+  --allow-agent-network --reps 5 --yes
+uv run --frozen python -m study.report --manifest M
+```
+
+M, W, E and U must be outside this checkout; W must be separate from protected paths.
+Do not add the network flag for local scripted validation.

@@ -1,9 +1,6 @@
 """Optional token and cost channel from the operator wrapper.
 
-An operator process may write ``usage.json`` into the per-run work root ``W/<run_id>-a<attempt>``
-(the harness does not pass this path to the agent wrapper).
-Shape: ``{"tokens": int, "cost_usd": number}``.
-Anything else is ignored; no value is ever invented.
+Only an explicitly configured parent-owned directory is read, with per-attempt filenames.
 """
 
 from __future__ import annotations
@@ -30,8 +27,10 @@ def _num(value: object) -> float | None:
     return float(value)
 
 
-def read_usage(root: Path) -> Usage | None:
-    path = root / USAGE_FILE
+def read_usage(root: Path | None, attempt_id: str | None = None) -> Usage | None:
+    if root is None or attempt_id is None:
+        return None
+    path = root / f"{attempt_id}.json"
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_BYTES:
             return None

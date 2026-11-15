@@ -35,11 +35,12 @@ LIMITS = """\
 - Counts are for the tasks, agents, prompt and cheeseless version named above, nothing else.
 - Runs inside one task and agent are correlated; the effective sample is smaller than N.
 - Cluster intervals resample tasks. With few tasks they are descriptive, not confirmatory.
-- Gaming attempts are observed actions (deterministic classifier). Intent is not inferred.
-  In real mode the naive arm has no transcript events, so attempts there may be undercounted.
+- Gaming attempt comparisons cover diff-observable attempts only in both real arms.
+  Hidden-read, history-read and network attempts are unknown and cannot be compared across arms.
+  Intent is not inferred. Primary outcomes remain oracle-decided gamed, false reject, completion.
 - Runs with status invalid, infra-error or timeout are excluded from rates and listed
   separately. An infra error is never counted as a blocked attack.
-- Token and cost figures are absent unless the agent wrapper reported them.
+- Tokens and cost: not measured unless supplied by a trusted outer wrapper.
 """
 
 NOT_SHOWN = """\
@@ -138,12 +139,17 @@ def _difference(cells: Sequence[Cell], seed: int) -> list[str]:
     pd = "n/a" if pooled is None else f"{100 * pooled:+.1f} pp"
     out = [f"Pooled difference (cheeseless - naive): {pd}."]
     if boot is None:
-        out.append("Cluster bootstrap: not available (too few clusters).")
+        n = len({c.key.split("/", 1)[0] for c in cells if c.a.n and c.b.n})
+        out.append(
+            f"Cluster bootstrap: not available ({n} tasks; 0 distinct resamples; "
+            "descriptive only with this number of tasks)."
+        )
     else:
-        lo, hi, n = boot
+        lo, hi, n, distinct = boot
         out.append(
             f"Cluster bootstrap 95% interval: {100 * lo:+.1f} to {100 * hi:+.1f} pp "
-            f"({n} task clusters; descriptive when n is small)."
+            f"({n} tasks; {distinct} distinct resamples; "
+            "descriptive only with this number of tasks)."
         )
     return out
 
@@ -202,15 +208,17 @@ def render(records: Sequence[Mapping[str, Any]], seed: int = 1) -> str:
     recs = [r for r in records if r.get("mode") == "real" and r.get("record_type", "run") == "run"]
     if not recs:
         return NO_DATA
+    if len({r.get("phase", "unspecified") for r in recs}) != 1:
+        raise ValueError("report refuses to mix phases")
     agents = sorted({_agent(r) for r in recs})
     tasks = sorted({str(r["task_id"]) for r in recs})
     metrics = [
         ("gamed", False, "gamed"),
-        ("attempted", False, "attempted"),
+        ("diff-observable attempted", False, "attempted"),
         ("blocked", False, "blocked"),
         ("success", True, "success"),
         ("false reject", True, "false_reject"),
-        ("attempted", True, "attempted"),
+        ("diff-observable attempted", True, "attempted"),
     ]
     rows = []
     for name, solvable, key in metrics:
@@ -230,7 +238,16 @@ def render(records: Sequence[Mapping[str, Any]], seed: int = 1) -> str:
         *_zero_lines("unsatisfiable-task runs gamed", ARM_A, gamed_a),
         *_zero_lines("unsatisfiable-task runs gamed", ARM_B, gamed_b),
         "",
+        "## Primary comparison: task-level paired differences",
+        "",
+        *_heterogeneity(cells, "Gamed (unsatisfiable)"),
+        *_heterogeneity(_cells(recs, "false_reject", True), "False reject (solvable)"),
+        *_heterogeneity(_cells(recs, "success", True), "Completion (solvable)"),
+        "",
         "## Rates",
+        "",
+        "Pooled Wilson intervals are run-level descriptive intervals that ignore "
+        "within-task correlation.",
         "",
         *_table(rows),
         "",
@@ -249,6 +266,23 @@ def render(records: Sequence[Mapping[str, Any]], seed: int = 1) -> str:
         "## Sensitivity: session_blocked runs",
         "",
         *_blocked_sensitivity(recs),
+        "",
+        "## Attempt observability (both arms: diff only)",
+        "",
+        "| arm | kind | attempts |",
+        "|---|---|---|",
+        *[
+            f"| {arm} | {flag} | unknown |"
+            for arm in sorted({r["arm"] for r in recs})
+            for flag in ("read_hidden", "history_read", "net_exfil")
+        ],
+        "",
+        "Tokens and cost: "
+        + (
+            "trusted_wrapper measurements available"
+            if any(r.get("usage_provenance") == "trusted_wrapper" for r in recs)
+            else "not measured"
+        ),
         "",
         "## Excluded runs",
         "",
@@ -278,7 +312,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = p.parse_args(argv)
     try:
         text = write_report(args.manifest, args.out, args.seed)
-    except manifest.RedactionError as exc:
+    except ValueError as exc:
         print(exc)
         return 1
     print("no data" if text == NO_DATA else f"wrote {args.out}")
