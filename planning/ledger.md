@@ -577,3 +577,14 @@ a model games at all) and folding them into the Haiku/DeepSeek analysis (breaks 
 design). Codex setup: `codex-study` copied to a system dir, seed auth with a blank refresh token
 (rotation would invalidate the operator's session), host allowlist limited to the vendor host.
 Open risk: Luna is excluded from restricted work by routing policy; fixtures are synthetic.
+
+## 2026-11-15: study Amendment 7 (Codex pilot infrastructure)
+
+Three stacked infra faults broke the first Terra and Luna runs: missing `codex-code-mode-host`
+(no command tool), `-C /work` absent in the CHEESELESS arm, and Codex's WebSocket transport
+blocked by the egress proxy as `protocol-upgrade`. Decision: fix the wrapper and environment,
+not the product or the proxy rule, because blocking upgrades is correct behaviour for the
+gate. Forcing HTTPS through a custom provider keeps the vendor host and both arms identical.
+Rejected: allowing protocol upgrades for Codex (weakens the egress policy for one agent) and
+counting the earlier runs (the agent could not act). The earlier attempts stay as detections.
+Open risk: Codex remote plugins and apps are reachable in both arms.
