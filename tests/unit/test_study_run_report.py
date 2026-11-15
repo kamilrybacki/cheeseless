@@ -172,3 +172,75 @@ def test_write_report_refuses_redaction_hit(tmp_path):
     out = tmp_path / "results.md"
     assert report.main(["--manifest", str(mp), "--out", str(out)]) == 0
     assert out.read_text() == report.NO_DATA
+
+
+def test_usage_file_validated(tmp_path):
+    from study.usage import read_usage
+
+    assert read_usage(tmp_path) is None
+    f = tmp_path / "usage.json"
+    f.write_text('{"tokens": 120, "cost_usd": 0.5}')
+    u = read_usage(tmp_path)
+    assert u is not None and u.tokens == 120 and u.cost_usd == 0.5
+    for bad in ("not json", "[1]", '{"tokens": -1}', '{"tokens": true}', '{"tokens": "9"}'):
+        f.write_text(bad)
+        assert read_usage(tmp_path) is None
+    f.write_text('{"tokens": 5}' + " " * 5000)
+    assert read_usage(tmp_path) is None
+    f.unlink()
+    f.symlink_to(tmp_path / "x")
+    assert read_usage(tmp_path) is None
+
+
+def test_record_has_started_and_usage(tmp_path, monkeypatch):
+    for k, v in _env(tmp_path, "#!/bin/sh\nexit 0\n").items():
+        monkeypatch.setenv(k, v)
+    mpath = tmp_path / "m.jsonl"
+    argv = [
+        "--manifest", str(mpath), "--workdir", str(tmp_path / "w"),
+        "--evidence-dir", str(tmp_path / "e"), "--tasks", "slug", "--arms", "naive",
+        "--reps", "1", "--yes",
+    ]  # fmt: skip
+    assert run.main(argv, out=lambda _s: None) == 0
+    rec = list(manifest.read_all(mpath))[0]
+    assert rec["started"] and rec["started"] <= rec["ended"]
+    assert rec["tokens"] is None and rec["cost_usd"] is None
+
+
+def test_unexpected_exception_becomes_infra_error(tmp_path, monkeypatch):
+    for k, v in _env(tmp_path, "#!/bin/sh\nexit 0\n").items():
+        monkeypatch.setenv(k, v)
+
+    def boom(*_a, **_k):
+        raise ZeroDivisionError("/home/someone/secret")
+
+    monkeypatch.setattr(run, "run_naive_real", boom)
+    mpath = tmp_path / "m.jsonl"
+    argv = [
+        "--manifest", str(mpath), "--workdir", str(tmp_path / "w"),
+        "--evidence-dir", str(tmp_path / "e"), "--tasks", "slug,wordfreq", "--arms", "naive",
+        "--reps", "1", "--yes",
+    ]  # fmt: skip
+    assert run.main(argv, out=lambda _s: None) == 0
+    recs = list(manifest.read_all(mpath))
+    assert len(recs) == 2 and all(r["status"] == "infra-error" for r in recs)
+    assert all(r["exclusion_reason"] == "unexpected:ZeroDivisionError" for r in recs)
+    assert "someone" not in mpath.read_text()
+
+
+def test_report_session_blocked_sensitivity():
+    recs = [{**_rec("cheeseless", "roman", False), "run_id": f"c{i}"} for i in range(3)]
+    recs.append(
+        {
+            **_rec("cheeseless", "roman", False),
+            "run_id": "sb",
+            "status": "invalid",
+            "exclusion_reason": "session_blocked",
+        }
+    )
+    recs.append({**_rec("naive", "roman", False), "run_id": "n"})
+    text = report.render(recs)
+    assert "## Sensitivity: session_blocked runs" in text
+    assert "session_blocked runs (cheeseless, unsatisfiable): 1." in text
+    assert "| counted as missing | 0/3 | 0/3 |" in text
+    assert "| counted as blocked | 0/4 | 1/4 |" in text

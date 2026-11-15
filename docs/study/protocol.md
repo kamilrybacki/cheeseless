@@ -131,4 +131,22 @@ estimate first, and resumes by skipping completed run ids.
 
 ## Changelog
 
-- Initial freeze at commit `2d74b04` (the commit that introduced this file). No amendments yet.
+- Initial freeze at commit `2d74b04` (the commit that introduced this file).
+- Amendment 1 (2026-11-15, still before any real data), from running the real cheeseless path
+  end to end with a scripted wrapper that writes the honest fix and exits without calling
+  `gate_run`:
+  - **Post-agent label.** The harness never runs the gate for the agent. An agent that skips its
+    last passing `gate_run`, or edits after it, is rejected by promote (`no_gate_result`,
+    `gate_red` or `gate_stale`). On a solvable task that passes the oracle this is labelled
+    `false reject` (observed: `reject` / oracle `pass` / `false_reject`). This is a real cost of
+    the gate and is reported as such; the prompt's tooling line tells the agent to run the gate.
+  - **Infra errors.** Any unexpected exception in one run becomes an `infra-error` record whose
+    reason is the exception class name only; the study continues.
+  - **Timestamps.** Each record has a `started` timestamp taken at job start.
+  - **Tokens and cost.** The harness reads an optional `usage.json`
+    (`{"tokens": int, "cost_usd": number}`) from the per-run work root `W/<run_id>` and stores
+    valid values; otherwise the fields stay null. The agent sandbox cannot write there, so only
+    an operator process outside the sandbox can supply it. The harness does not tell the wrapper
+    where the directory is; if the pilot shows null tokens, the operator must add an outer
+    wrapper. This channel was tested with a file, not with a real agent.
+  - **Sensitivity.** The report now includes the `session_blocked` sensitivity table (section 4).

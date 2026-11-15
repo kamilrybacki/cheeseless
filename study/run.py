@@ -21,10 +21,16 @@ from study.agent_config import AgentId, AgentUnavailable, StudyAgent, load_study
 from study.arms import ARM_CHEESELESS, ARM_NAIVE, ArmResult, run_cheeseless, run_naive
 from study.expected import EXPECTED
 from study.prompt import build_prompt, prompt_hash
-from study.real import evidence_has_canary, run_cheeseless_real, run_naive_real
+from study.real import (
+    evidence_has_canary,
+    infra_result,
+    run_cheeseless_real,
+    run_naive_real,
+)
 from study.scorer import INVALID, VALID, score
 from study.stats import shuffled_order
 from study.tasks import TASKS, TASKS_BY_ID, Task
+from study.usage import Usage, read_usage
 
 STUDY_ID = "cheeseless-real-agent-v1"
 SECONDS_SOLVABLE = 53.0
@@ -54,7 +60,16 @@ def estimate_seconds(jobs: Sequence[Job]) -> float:
 
 
 def _record(
-    job: Job, res: ArmResult, *, mode: str, seed: int, agent: AgentId, attempt: int, canary: bool
+    job: Job,
+    res: ArmResult,
+    *,
+    mode: str,
+    seed: int,
+    agent: AgentId,
+    attempt: int,
+    canary: bool,
+    started: str | None = None,
+    usage: Usage | None = None,
 ) -> dict[str, object]:
     cls = res.classification
     labels = score(
@@ -82,11 +97,12 @@ def _record(
         "behaviour": job.behaviour,
         "agent": {"vendor": agent.vendor, "model": agent.model, "version": agent.version},
         "prompt_hash": prompt_hash(build_prompt(job.task, job.arm)),
-        "ended": datetime.now(UTC).isoformat(timespec="seconds"),
+        "started": started,
+        "ended": _now(),
         "wall_seconds": res.wall_seconds,
         "gate_runs": res.gate_runs,
-        "tokens": None,
-        "cost_usd": None,
+        "tokens": usage.tokens if usage else None,
+        "cost_usd": usage.cost_usd if usage else None,
         "judge_verdict": res.verdict,
         "judge_reason": res.judge_reason,
         "judge_in_tree": res.judge_in_tree,
@@ -108,6 +124,10 @@ def _record(
         "exclusion_reason": res.reason if res.status != VALID else None,
         "reason": res.reason,
     }
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _append_safe(path: Path, rec: dict[str, object]) -> dict[str, object]:
@@ -188,12 +208,16 @@ def _real_loop(
             continue
         root = work / f"{run_id}"
         root.mkdir(parents=True, exist_ok=True)
-        evidence = evidence_root / run_id
-        evidence.mkdir(parents=True, exist_ok=True)
-        if job.arm == ARM_NAIVE:
-            res = run_naive_real(job.task, root, agent)
-        else:
-            res = run_cheeseless_real(job.task, root, agent, evidence)
+        evidence = evidence_root / run_id  # must not exist: host_session creates it
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        started = _now()
+        try:
+            if job.arm == ARM_NAIVE:
+                res = run_naive_real(job.task, root, agent)
+            else:
+                res = run_cheeseless_real(job.task, root, agent, evidence)
+        except Exception as exc:  # noqa: BLE001 - one bad run must not stop the study
+            res = infra_result(job.arm, f"unexpected:{type(exc).__name__}")
         canary = job.arm == ARM_CHEESELESS and evidence_has_canary(evidence)
         rec = _record(
             job,
@@ -203,6 +227,8 @@ def _real_loop(
             agent=agent.agent,
             attempt=manifest.next_attempt(path, run_id),
             canary=canary,
+            started=started,
+            usage=read_usage(root),
         )
         _append_safe(path, rec)
         ran += 1

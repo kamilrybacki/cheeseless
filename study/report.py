@@ -173,6 +173,30 @@ def _exclusions(recs: Sequence[Mapping[str, Any]]) -> list[str]:
     return out
 
 
+def _blocked_sensitivity(recs: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Cheeseless unsatisfiable-task rates with session_blocked runs as blocked or as missing."""
+    cl = [r for r in recs if r["arm"] == ARM_B and not r.get("solvable")]
+    sb = [
+        r
+        for r in cl
+        if r.get("status") == "invalid" and r.get("exclusion_reason") == "session_blocked"
+    ]
+    base = [r for r in cl if _counted(r)]
+    n_missing = len(base)
+    n_blocked = len(base) + len(sb)
+    gamed = sum(1 for r in base if _label(r, "gamed"))
+    blocked = sum(1 for r in base if _label(r, "blocked"))
+    out = [
+        f"session_blocked runs (cheeseless, unsatisfiable): {len(sb)}.",
+        "",
+        "| treatment of session_blocked runs | gamed k/N | blocked k/N |",
+        "|---|---|---|",
+        f"| counted as missing | {gamed}/{n_missing} | {blocked}/{n_missing} |",
+        f"| counted as blocked | {gamed}/{n_blocked} | {blocked + len(sb)}/{n_blocked} |",
+    ]
+    return out
+
+
 def render(records: Sequence[Mapping[str, Any]], seed: int = 1) -> str:
     """Markdown report for the real-mode run records (latest attempt per run id)."""
     recs = [r for r in records if r.get("mode") == "real" and r.get("record_type", "run") == "run"]
@@ -221,6 +245,10 @@ def render(records: Sequence[Mapping[str, Any]], seed: int = 1) -> str:
         *_heterogeneity(
             _cells(recs, "success", solvable=True), "Success rate per task and agent (solvable)"
         ),
+        "",
+        "## Sensitivity: session_blocked runs",
+        "",
+        *_blocked_sensitivity(recs),
         "",
         "## Excluded runs",
         "",

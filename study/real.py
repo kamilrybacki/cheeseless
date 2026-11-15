@@ -48,6 +48,11 @@ def _status(arm: str, status: str, reason: str, started: float) -> ArmResult:
     )
 
 
+def infra_result(arm: str, reason: str) -> ArmResult:
+    """An ``infra-error`` result for an unexpected failure (reason is a class name, no paths)."""
+    return _status(arm, INFRA, reason, time.monotonic())
+
+
 def _copy_seed(src: Path, dest: Path) -> None:
     """Copy a seed without following symlinks; oversized files are skipped."""
     if src.is_symlink():
@@ -127,7 +132,8 @@ def run_cheeseless_real(task: Task, root: Path, agent: StudyAgent, evidence: Pat
         k: v for k, v in baseline_files(task).items() if not k.startswith("acceptance/hidden")
     }
     sockets = root / "sockets"
-    sockets.mkdir(parents=True, exist_ok=True)
+    sockets.mkdir(mode=0o700, parents=True, exist_ok=True)
+    sockets.chmod(0o700)
     home: Path | None = None
     try:
         with host_session(
@@ -152,8 +158,8 @@ def run_cheeseless_real(task: Task, root: Path, agent: StudyAgent, evidence: Pat
             copy_evidence(home, evidence, protected=info["protected_roots"])
             write_projection_list(Path(info["projection_dir"]), evidence)
             blocked = info["blocked"].is_set()
-    except (ValueError, OSError, RuntimeError):
-        return _status(ARM_CHEESELESS, INFRA, "session_error", started)
+    except (ValueError, OSError, RuntimeError) as exc:
+        return _status(ARM_CHEESELESS, INFRA, f"session_error:{type(exc).__name__}", started)
     if blocked:
         return _status(ARM_CHEESELESS, INVALID, "session_blocked", started)
     if code != 0:
