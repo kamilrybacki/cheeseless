@@ -21,7 +21,7 @@ CHECK_TIMEOUT = 300.0
 # It collects and (in run mode) executes the hidden suite against the mounted reference and
 # prints one result line. It never imports the host package.
 DRIVER = r"""
-import json, os, shutil, subprocess, sys, tempfile, types
+import json, os, shutil, subprocess, sys, tempfile, time, types
 import pytest
 
 MARK = "CHEESELESS-AUTHOR "
@@ -66,6 +66,45 @@ class Rec:
             self.outcomes[nid] = "xpassed" if x else "passed"
 
 
+SHARED = ("/tmp", "/dev/shm")
+
+
+def snapshot():
+    # Every file, symlink and directory under the shared writable roots, with its state.
+    seen = {}
+    for root in SHARED:
+        for here, dirs, files in os.walk(root):
+            for name in [*dirs, *files]:
+                path = os.path.join(here, name)
+                try:
+                    st = os.lstat(path)
+                except OSError:
+                    continue
+                isdir = os.path.isdir(path) and not os.path.islink(path)
+                seen[path] = None if isdir else (st.st_size, st.st_mtime_ns, st.st_mode)
+    return seen
+
+
+def restore(before):
+    # Remove what a call created under the shared roots; report what it changed.
+    touched = []
+    after = snapshot()
+    for path in sorted(after, key=len, reverse=True):
+        if path in before:
+            if before[path] != after[path]:
+                touched.append(path)
+            continue
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.unlink(path)
+        except OSError:
+            pass
+    touched += [p for p in before if p not in after]
+    return touched
+
+
 class Runner:
     @pytest.fixture
     def candidate(self):
@@ -74,18 +113,31 @@ class Runner:
         class C:
             def run(self, args=(), stdin=None, timeout=None):
                 data = stdin.encode() if isinstance(stdin, str) else stdin
-                # Every call gets fresh writable state copied from the immutable baseline,
-                # like a normal candidate call; nothing carries over between calls.
+                # Every call gets a fresh filesystem namespace derived from the immutable
+                # baseline, like a normal candidate call: its own cwd tree, HOME and TMPDIR,
+                # and nothing it leaves under /tmp or /dev/shm survives. The deadline covers
+                # the baseline copy too.
+                deadline = time.monotonic() + (timeout or 30.0)
+                before = snapshot()
                 work = tempfile.mkdtemp(prefix="cand-")
-                tree = os.path.join(work, "tree")
+                tree, home, tmp = (os.path.join(work, n) for n in ("tree", "home", "tmp"))
+                env = {**os.environ, "HOME": home, "TMPDIR": tmp}
                 try:
+                    os.mkdir(home)
+                    os.mkdir(tmp)
                     shutil.copytree(ref, tree, symlinks=True)
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        raise AssertionError("candidate call timed out")
                     p = subprocess.run([*argv, *args], input=data, capture_output=True,
-                                       cwd=tree, timeout=timeout or 30.0)
+                                       cwd=tree, env=env, timeout=left)
                 except subprocess.TimeoutExpired:
                     raise AssertionError("candidate call timed out")
                 finally:
                     shutil.rmtree(work, ignore_errors=True)
+                    touched = [t for t in restore(before) if not t.startswith(work)]
+                if touched:
+                    raise AssertionError("candidate modified shared state: " + touched[0])
                 dec = lambda b: b.decode("utf-8", "replace")
                 return types.SimpleNamespace(returncode=p.returncode,
                                              stdout=dec(p.stdout), stderr=dec(p.stderr))
