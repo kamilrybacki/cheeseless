@@ -318,6 +318,83 @@ def test_approve_twice_is_refused(world):
     assert caught.value.kind == "not_proposed"
 
 
+class _HookedStore(FileStore):
+    """A real store that runs a hook at a chosen point of the approval protocol."""
+
+    after_read = None
+    after_reserve = None
+
+    def authoring_state(self, lineage_id, spec_digest):
+        state = super().authoring_state(lineage_id, spec_digest)
+        hook, self.after_read = self.after_read, None
+        if hook:
+            hook()
+        return state
+
+    def save_authoring_state(self, state):
+        saved = super().save_authoring_state(state)
+        if saved.phase is TaskPhase.APPROVING:
+            hook, self.after_reserve = self.after_reserve, None
+            if hook:
+                hook()
+        return saved
+
+
+@pytest.fixture
+def hooked(toy_repo, tmp_path):
+    repo = GitRepository.discover(toy_repo)
+    store = _HookedStore(store_root(repo.common_dir(), tmp_path / "state"))
+    return repo, store, tmp_path
+
+
+def test_interleaved_approvals_freeze_exactly_once(hooked):
+    repo, store, tmp = hooked
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+    winners = []
+    # A has read PROPOSED; B completes its whole approval before A reserves.
+    store.after_read = lambda: winners.append(_approve(repo, store, tmp, proposal))
+    with pytest.raises(AuthorError) as caught:
+        _approve(repo, store, tmp, proposal)
+    assert caught.value.kind in {"not_proposed", "approval_conflict"}
+    assert len(winners) == 1 and store.active_task_id() == winners[0].task_id
+
+
+def test_a_reference_swapped_after_the_reservation_is_refused_and_rolled_back(hooked):
+    repo, store, tmp = hooked
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+
+    def swap():
+        (repo.root / "ref_extra.txt").write_text("swapped reference\n")
+        _record(repo, store)
+
+    store.after_reserve = swap
+    with pytest.raises(AuthorError) as caught:
+        _approve(repo, store, tmp, proposal)
+    assert caught.value.kind == "crosscheck_stale"
+    assert store.active_task_id() is None
+    contract = uc.read_contract(repo, _source(repo))
+    state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
+    assert state.phase is TaskPhase.PROPOSED
+
+
+def test_a_failed_approval_releases_the_reservation(world):
+    repo, store, tmp = world
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+    passed = FakeAuthorSandbox(_line(outcomes={t["node_id"]: "passed" for t in TESTS}))
+    with pytest.raises(FreezeError):
+        _approve(repo, store, tmp, proposal, author_sandbox=passed)
+    contract = uc.read_contract(repo, _source(repo))
+    state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
+    assert state.phase is TaskPhase.PROPOSED
+    assert _approve(repo, store, tmp, proposal).task_id == proposal.proposal_id
+
+
 def test_commit_takes_a_waiver(world):
     from cheeseless.app.freeze import commit, prepare
 

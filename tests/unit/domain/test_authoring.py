@@ -72,7 +72,7 @@ def test_propose_from_authoring_and_blocked_only() -> None:
 
 def test_stale_returns_to_authoring_and_frozen_is_terminal() -> None:
     assert _state().proposed().stale().phase is TaskPhase.AUTHORING
-    frozen = _state().proposed().frozen()
+    frozen = _state().proposed().approving().frozen()
     assert frozen.phase is TaskPhase.FROZEN
     for op in (frozen.proposed, frozen.stale, frozen.frozen, lambda: frozen.reference_failed(SPEC)):
         with pytest.raises(AuthoringError):
@@ -140,3 +140,18 @@ def test_proposal_validates_shapes() -> None:
             acceptance_tree=OID_A,
             spec_digest=SPEC,
         )
+
+
+def test_approving_is_a_sealed_reservation_between_proposed_and_frozen() -> None:
+    proposed = _state().proposed()
+    approving = proposed.approving()
+    assert approving.phase is TaskPhase.APPROVING and approving.sealed and not approving.closed
+    assert approving.released().phase is TaskPhase.PROPOSED
+    with pytest.raises(AuthoringError):
+        _state().approving()
+    with pytest.raises(AuthoringError):
+        proposed.frozen()
+    with pytest.raises(AuthoringError):
+        approving.spec_edited("2" * 64)
+    with pytest.raises(AuthoringError):
+        approving.proposed()

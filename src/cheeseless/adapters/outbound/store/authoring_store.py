@@ -6,6 +6,7 @@ are keyed by lineage id (the task id changes with every tree); proposals and
 crosschecks are keyed by the proposal id, which equals the future task id.
 """
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,15 @@ class AuthoringStoreMixin:
         with _fs.locked(self._root / "store.lock"):
             _fs.write_atomic(self._authoring_path(name), codec.dumps(data))
 
+    def _stored_version(self, lineage: str) -> int:
+        data = self._read_authoring(f"state-{lineage}.json")
+        if data is None:
+            return 0
+        try:
+            return int(data["version"])
+        except (KeyError, ValueError, TypeError) as exc:
+            raise StoreError(f"corrupt authoring state for {lineage}: {exc}") from exc
+
     # -- authoring state -----------------------------------------------------
 
     def authoring_state(self, lineage_id: str, spec_digest: str) -> AuthoringState:
@@ -68,21 +78,32 @@ class AuthoringStoreMixin:
                 TaskPhase(data["phase"]),
                 int(data["reference_failures"]),
                 int(data["retries_used"]),
+                int(data["version"]),
             )
             return stored if stored.spec_digest == spec else stored.spec_edited(spec)
         except (KeyError, ValueError, TypeError, AuthoringError) as exc:
             raise StoreError(f"corrupt authoring state for {lineage}: {exc}") from exc
 
-    def save_authoring_state(self, state: AuthoringState) -> None:
-        self._write_authoring(
-            f"state-{_lineage(state.lineage_id)}.json",
-            {
-                "spec_digest": state.spec_digest,
-                "phase": state.phase.value,
-                "reference_failures": state.reference_failures,
-                "retries_used": state.retries_used,
-            },
-        )
+    def save_authoring_state(self, state: AuthoringState) -> AuthoringState:
+        lineage = _lineage(state.lineage_id)
+        _fs.ensure_private_dir(self._root / _DIR)
+        with _fs.locked(self._root / "store.lock"):
+            if self._stored_version(lineage) != state.version:
+                raise AuthoringError("the authoring state changed since it was read")
+            saved = replace(state, version=state.version + 1)
+            _fs.write_atomic(
+                self._authoring_path(f"state-{lineage}.json"),
+                codec.dumps(
+                    {
+                        "spec_digest": saved.spec_digest,
+                        "phase": saved.phase.value,
+                        "reference_failures": saved.reference_failures,
+                        "retries_used": saved.retries_used,
+                        "version": saved.version,
+                    }
+                ),
+            )
+        return saved
 
     # -- proposals -----------------------------------------------------------
 

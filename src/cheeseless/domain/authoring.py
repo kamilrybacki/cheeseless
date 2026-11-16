@@ -26,6 +26,8 @@ class TaskPhase(enum.Enum):
     AUTHORING = "authoring"
     REFERENCE_BLOCKED = "reference_blocked"
     PROPOSED = "proposed"
+    # An approval holds the reservation: exactly one approver may freeze a proposal.
+    APPROVING = "approving"
     FROZEN = "frozen"
 
 
@@ -43,16 +45,23 @@ class AuthoringState:
     reference_failures: int = 0
     # Retries already started after the first failure.
     retries_used: int = 0
+    # Bumped by the store on every save; a save of a stale version is refused.
+    version: int = 0
 
     def __post_init__(self) -> None:
         ids.lineage_id(self.lineage_id)
         ids.sha256_hex(self.spec_digest, "spec digest")
-        if self.reference_failures < 0 or self.retries_used < 0:
+        if self.reference_failures < 0 or self.retries_used < 0 or self.version < 0:
             raise ValueError("counts cannot be negative")
 
     @property
     def closed(self) -> bool:
         return self.phase is TaskPhase.FROZEN
+
+    @property
+    def sealed(self) -> bool:
+        """Frozen, or being frozen: author operations are refused in both."""
+        return self.phase in (TaskPhase.FROZEN, TaskPhase.APPROVING)
 
     @property
     def retries_left(self) -> int:
@@ -61,7 +70,7 @@ class AuthoringState:
         return max(0, MAX_REFERENCE_RETRIES - self.retries_used)
 
     def _open(self) -> None:
-        if self.closed:
+        if self.sealed:
             raise AuthoringError("the task is frozen; author operations are closed")
 
     def reference_failed(self, current_spec: str) -> AuthoringState:
@@ -106,8 +115,18 @@ class AuthoringState:
             raise AuthoringError(f"only a proposed task can go stale, not {self.phase.value}")
         return replace(self, phase=TaskPhase.AUTHORING)
 
-    def frozen(self) -> AuthoringState:
+    def approving(self) -> AuthoringState:
         if self.phase is not TaskPhase.PROPOSED:
+            raise AuthoringError(f"cannot approve from {self.phase.value}")
+        return replace(self, phase=TaskPhase.APPROVING)
+
+    def released(self) -> AuthoringState:
+        if self.phase is not TaskPhase.APPROVING:
+            raise AuthoringError(f"nothing to release in {self.phase.value}")
+        return replace(self, phase=TaskPhase.PROPOSED)
+
+    def frozen(self) -> AuthoringState:
+        if self.phase is not TaskPhase.APPROVING:
             raise AuthoringError(f"cannot freeze from {self.phase.value}")
         return replace(self, phase=TaskPhase.FROZEN)
 

@@ -206,7 +206,7 @@ def freeze_propose(
     contract = read_contract(repo, source)
     spec = spec_of(contract)
     state = store.authoring_state(contract.lineage_id, spec)
-    if state.closed:
+    if state.sealed:
         raise AuthorError("frozen", "the task is frozen; author operations are closed")
     if state.phase is TaskPhase.PROPOSED:
         state = state.stale()
@@ -265,9 +265,43 @@ def approve_freeze(
     proposal = store.load_proposal(proposal_id)
     if proposal is None:
         raise AuthorError("unknown_proposal", "no such proposal")
-    contract_state = store.authoring_state(proposal.lineage_id, proposal.spec_digest)
-    if contract_state.phase is not TaskPhase.PROPOSED:
-        raise AuthorError("not_proposed", f"the task is {contract_state.phase.value}")
+    state = store.authoring_state(proposal.lineage_id, proposal.spec_digest)
+    if state.phase is not TaskPhase.PROPOSED:
+        raise AuthorError("not_proposed", f"the task is {state.phase.value}")
+    _ready(repo, store, proposal, no_reference)
+    # Reserve before the expensive, side-effecting part: one approver at a time, and only
+    # from the exact state version this approver validated.
+    try:
+        reserved = store.save_authoring_state(state.approving())
+    except AuthoringError as exc:
+        raise AuthorError(
+            "approval_conflict", f"another approval won the reservation: {exc}"
+        ) from exc
+    try:
+        # The reservation closed the author surface, so what is checked now is what is frozen.
+        _ready(repo, store, proposal, no_reference)
+        prepared: PreparedFreeze = prepare(
+            repo,
+            None,
+            sandbox,
+            author_sandbox=author_sandbox,
+            baseline_commit=proposal.baseline_commit,
+            source=repo.head_commit(),
+        )
+        if prepared.task_id != proposal.proposal_id:
+            raise AuthorError("not_merged", "HEAD no longer reproduces the proposed freeze")
+        result = commit(prepared, store, waiver=reason if no_reference else "")
+    except BaseException:
+        store.save_authoring_state(reserved.released())
+        raise
+    store.save_authoring_state(reserved.frozen())
+    store.log_event(
+        result.task_id, "freeze-approve", f"{actor}{' no-reference' if no_reference else ''}"
+    )
+    return result
+
+
+def _ready(repo: Repository, store: AuthoringStore, proposal: Proposal, no_reference: bool) -> None:
     head = repo.head_commit()
     if repo.tree_of(head, "acceptance") != proposal.acceptance_tree:
         raise AuthorError("not_merged", "the proposed acceptance tree is not merged into HEAD")
@@ -275,25 +309,6 @@ def approve_freeze(
         problem = _crosscheck_problem(repo, store, proposal)
         if problem is not None:
             raise problem
-    prepared: PreparedFreeze = prepare(
-        repo,
-        None,
-        sandbox,
-        author_sandbox=author_sandbox,
-        baseline_commit=proposal.baseline_commit,
-        source=head,
-    )
-    if prepared.task_id != proposal.proposal_id:
-        raise AuthorError("not_merged", "HEAD no longer reproduces the proposed freeze")
-    result = commit(prepared, store, waiver=reason if no_reference else "")
-    try:
-        store.save_authoring_state(contract_state.frozen())
-    except AuthoringError as exc:  # pragma: no cover - guarded above
-        raise AuthorError("not_proposed", str(exc)) from exc
-    store.log_event(
-        result.task_id, "freeze-approve", f"{actor}{' no-reference' if no_reference else ''}"
-    )
-    return result
 
 
 __all__ = [

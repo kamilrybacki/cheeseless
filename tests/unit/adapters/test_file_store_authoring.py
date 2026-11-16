@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from cheeseless.adapters.outbound.store.file_store import FileStore
-from cheeseless.domain.authoring import AuthoringState, CrosscheckRecord, Proposal
+from cheeseless.domain.authoring import (
+    AuthoringError,
+    AuthoringState,
+    CrosscheckRecord,
+    Proposal,
+    TaskPhase,
+)
 from cheeseless.ports.store import StoreError
 
 OID = "a" * 40
@@ -23,8 +29,9 @@ def test_state_defaults_to_authoring_and_round_trips(store: FileStore) -> None:
     fresh = store.authoring_state("demo", SPEC)
     assert fresh == AuthoringState("demo", SPEC)
     blocked = fresh.reference_failed(SPEC)
-    store.save_authoring_state(blocked)
-    assert store.authoring_state("demo", SPEC) == blocked
+    saved = store.save_authoring_state(blocked)
+    assert store.authoring_state("demo", SPEC) == saved
+    assert saved.phase is blocked.phase and saved.version == blocked.version + 1
 
 
 def test_state_for_edited_spec_is_reset(store: FileStore) -> None:
@@ -129,3 +136,24 @@ def test_removing_the_waiver_mac_or_adding_a_waiver_is_detected(store: FileStore
     p2.write_bytes(json.dumps(d2).encode())
     with pytest.raises(StoreError, match="waiver"):
         store.load_task(other.task.task_id)
+
+
+def test_a_stale_state_cannot_be_saved(store: FileStore) -> None:
+    first = store.authoring_state("demo", SPEC)
+    second = store.authoring_state("demo", SPEC)
+    store.save_authoring_state(first.proposed())
+    with pytest.raises(AuthoringError, match="changed"):
+        store.save_authoring_state(second.proposed())
+
+
+def test_only_one_reader_wins_the_approval_reservation(store: FileStore) -> None:
+    store.save_authoring_state(AuthoringState("demo", SPEC).proposed())
+    a = store.authoring_state("demo", SPEC)
+    b = store.authoring_state("demo", SPEC)
+    reserved = store.save_authoring_state(a.approving())
+    assert reserved.phase is TaskPhase.APPROVING
+    with pytest.raises(AuthoringError):
+        store.save_authoring_state(b.approving())
+    assert store.authoring_state("demo", SPEC).phase is TaskPhase.APPROVING
+    released = store.save_authoring_state(reserved.released())
+    assert released.phase is TaskPhase.PROPOSED
