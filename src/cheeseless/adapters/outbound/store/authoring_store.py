@@ -69,7 +69,7 @@ class AuthoringStoreMixin:
                 int(data["reference_failures"]),
                 int(data["retries_used"]),
             )
-            return stored.spec_edited(spec)
+            return stored if stored.spec_digest == spec else stored.spec_edited(spec)
         except (KeyError, ValueError, TypeError, AuthoringError) as exc:
             raise StoreError(f"corrupt authoring state for {lineage}: {exc}") from exc
 

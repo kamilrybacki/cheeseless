@@ -62,7 +62,7 @@ class FreezeError(Exception):
         self.problems = redacted
 
 
-def _read_contract(repo: Repository, commit: str) -> Contract:
+def read_contract(repo: Repository, commit: str) -> Contract:
     raw = repo.show(commit, CONTRACT_PATH)
     data = yaml.safe_load(raw.decode("utf-8"))
     paths = {b.path for b in repo.blobs_under(repo.tree_of(commit), "acceptance/contract")}
@@ -119,7 +119,7 @@ def prepare(
         baseline_commit = repo.head_commit()
     if source is None:
         source = baseline_commit
-    contract = _read_contract(repo, source)
+    contract = read_contract(repo, source)
     baseline_tree = repo.tree_of(source)
     acceptance_tree = repo.tree_of(source, "acceptance")
     # The whole public contract directory is projected, spec.md and public tests included.
@@ -199,6 +199,7 @@ def commit(
     store: Store,
     *,
     seed: bytes | None = None,
+    waiver: str = "",
 ) -> FreezeCommitResult:
     if seed is None:
         seed = secrets.token_bytes(HOLDOUT_SEED_BYTES)
@@ -223,6 +224,7 @@ def commit(
         hidden_blobs=prepared.hidden_blobs,
         visible=dict(split_result.visible),
         holdout=dict(split_result.holdout),
+        waiver=waiver,
     )
     store.save_task(frozen, seed)
     store.save_fingerprints(prepared.fingerprints)
@@ -237,4 +239,5 @@ __all__ = [
     "FreezeError",
     "prepare",
     "commit",
+    "read_contract",
 ]
