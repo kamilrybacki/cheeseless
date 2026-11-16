@@ -7,13 +7,27 @@ holdout seed, frozen tasks, the run budget and signed results.
 from typing import Protocol
 
 from cheeseless.domain.budget import Budget, Pool
+from cheeseless.domain.dispute import DisputeCode, DisputePolicy, DisputeRecord, DisputeStatus
 from cheeseless.domain.dlp import Fingerprints
+from cheeseless.domain.errors import ErrorCode
 from cheeseless.domain.freeze import FrozenTask
 from cheeseless.domain.result import Result
 
 
 class StoreError(Exception):
     """The store is missing, corrupt or not private. Callers fail closed."""
+
+
+class SessionDisputedError(StoreError):
+    """The task's session ended in a dispute; no result may be published for it."""
+
+
+class DisputeRefused(Exception):  # noqa: N818 - a refusal, not a fault
+    """A dispute was refused for a catalogued reason. Nothing was recorded."""
+
+    def __init__(self, code: ErrorCode) -> None:
+        super().__init__(code.value)
+        self.code = code
 
 
 class Store(Protocol):
@@ -57,4 +71,29 @@ class Store(Protocol):
 
     def load_fingerprints(self, task_id: str) -> Fingerprints | None:
         """Return the fingerprint set, or ``None`` when freeze did not create one."""
+        ...
+
+    def dispute_policy(self) -> DisputePolicy:
+        """Trusted dispute policy; disabled when the host never set one."""
+        ...
+
+    def set_dispute_policy(self, policy: DisputePolicy) -> None: ...
+
+    def session_disputed(self, task_id: str) -> bool:
+        """True while an open or upheld dispute keeps the task closed."""
+        ...
+
+    def file_dispute(
+        self, task_id: str, lineage_id: str, criterion_id: str, code: DisputeCode, note: str
+    ) -> None:
+        """Atomically check policy, cap and session state, then record the dispute.
+
+        Raises ``DisputeRefused`` and records nothing when it must be refused.
+        """
+        ...
+
+    def disputes(self) -> tuple[DisputeRecord, ...]: ...
+
+    def resolve_dispute(self, dispute_id: str, outcome: DisputeStatus, actor: str) -> DisputeRecord:
+        """Record the outcome once. Raises ``StoreError`` on a second resolution."""
         ...

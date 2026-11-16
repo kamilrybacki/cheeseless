@@ -30,6 +30,11 @@ class ErrorCode(enum.Enum):
     EXECUTABLE_MISSING = "executable_missing"
     STARTUP_CRASH = "startup_crash"
     SMOKE_TEST_FAILED = "smoke_test_failed"
+    DISPUTE_DISABLED = "dispute_disabled"
+    DISPUTE_CAP_REACHED = "dispute_cap_reached"
+    DISPUTE_INVALID = "dispute_invalid"
+    DISPUTE_NOT_ALLOWED = "dispute_not_allowed"
+    SESSION_DISPUTED = "session_disputed"
 
 
 # Stages before the first hidden input that may carry a stderr tail (Q51).
@@ -124,6 +129,31 @@ CATALOGUE: dict[ErrorCode, CatalogueEntry] = {
         "A public smoke test from acceptance/contract/ failed.",
         "Run the contract tests locally and fix the failure. This attempt cost no run budget.",
         True,
+    ),
+    ErrorCode.DISPUTE_DISABLED: CatalogueEntry(
+        "Disputes are not enabled for this repository.",
+        "Keep working on the public criteria, or ask the operator to enable disputes.",
+        False,
+    ),
+    ErrorCode.DISPUTE_CAP_REACHED: CatalogueEntry(
+        "The dispute limit for this task lineage is used up.",
+        "Do not dispute again. Ask the operator.",
+        False,
+    ),
+    ErrorCode.DISPUTE_INVALID: CatalogueEntry(
+        "The dispute was not accepted: check the criterion id, the code and the note.",
+        "Use a public criterion id, one of the listed codes and a short plain-text note.",
+        False,
+    ),
+    ErrorCode.DISPUTE_NOT_ALLOWED: CatalogueEntry(
+        "A session that already holds a passing result cannot dispute.",
+        "Promote the passing result, or keep working if you changed the code since.",
+        False,
+    ),
+    ErrorCode.SESSION_DISPUTED: CatalogueEntry(
+        "This session was closed by a dispute.",
+        "Stop. The operator decides whether a fresh session may start.",
+        False,
     ),
 }
 

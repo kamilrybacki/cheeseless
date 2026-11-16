@@ -38,6 +38,7 @@ class JudgeReason:
     BUDGET_EXHAUSTED = "budget_exhausted"
     INFRA_ERROR = "infra_error"
     HIDDEN_FAILED = "criteria_failed"
+    DISPUTED = "session_disputed"
     OK = "ok"
 
 
@@ -94,12 +95,17 @@ def judge(
     head_commit: str,
     tool_version: str = "0.1.0",
     timeout: float = 300.0,
+    disputed: bool = False,
 ) -> CiVerdict:
     # (a) Freeze drift: tests edited on the default branch after the freeze are untrusted.
     if repo.tree_of(base_commit, "acceptance") != frozen.acceptance_tree:
         raise FreezeDrift("default branch acceptance/ differs from the frozen tree")
 
     head_tree = repo.tree_of(head_commit)
+
+    # A disputed session is never a pass: no run, no budget charge (ADR 0009, stage g).
+    if disputed:
+        return CiVerdict(Status.FAIL, head_tree, JudgeReason.DISPUTED)
 
     # (b) Protected paths fail before any run and before any budget charge. What the PR
     # changed is measured from the merge base, not the moving default-branch tip.

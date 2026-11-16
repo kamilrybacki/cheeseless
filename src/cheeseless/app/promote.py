@@ -41,6 +41,8 @@ def promote(
     if task_id is None:
         raise ValueError("no active task")
     frozen, _seed = store.load_task(task_id)
+    if store.session_disputed(task_id):
+        raise ValueError("the session ended in a dispute and cannot be promoted")
     result = store.latest_result(task_id)
     if result is None:
         raise ValueError("no result for task")

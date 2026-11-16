@@ -26,13 +26,15 @@ from . import error_pb2 as cheeseless_dot_v1_dot_error__pb2
 from . import result_pb2 as cheeseless_dot_v1_dot_result__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x63heeseless/v1/verifier.proto\x12\rcheeseless.v1\x1a\x19\x63heeseless/v1/error.proto\x1a\x1a\x63heeseless/v1/result.proto\"\x1d\n\nRunRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"\x9a\x01\n\x0bRunResponse\x12\'\n\x06result\x18\x01 \x01(\x0b\x32\x15.cheeseless.v1.ResultH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x12\x30\n\x12\x63riterion_failures\x18\x03 \x03(\x0b\x32\x14.cheeseless.v1.ErrorB\t\n\x07outcome\" \n\rStatusRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"\x9d\x01\n\x0eStatusResponse\x12\'\n\x06result\x18\x01 \x01(\x0b\x32\x15.cheeseless.v1.ResultH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x12\x30\n\x12\x63riterion_failures\x18\x03 \x03(\x0b\x32\x14.cheeseless.v1.ErrorB\t\n\x07outcome2\x8f\x01\n\x08Verifier\x12<\n\x03Run\x12\x19.cheeseless.v1.RunRequest\x1a\x1a.cheeseless.v1.RunResponse\x12\x45\n\x06Status\x12\x1c.cheeseless.v1.StatusRequest\x1a\x1d.cheeseless.v1.StatusResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x63heeseless/v1/verifier.proto\x12\rcheeseless.v1\x1a\x19\x63heeseless/v1/error.proto\x1a\x1a\x63heeseless/v1/result.proto\"\x1d\n\nRunRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"\x9a\x01\n\x0bRunResponse\x12\'\n\x06result\x18\x01 \x01(\x0b\x32\x15.cheeseless.v1.ResultH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x12\x30\n\x12\x63riterion_failures\x18\x03 \x03(\x0b\x32\x14.cheeseless.v1.ErrorB\t\n\x07outcome\" \n\rStatusRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"\x9d\x01\n\x0eStatusResponse\x12\'\n\x06result\x18\x01 \x01(\x0b\x32\x15.cheeseless.v1.ResultH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x12\x30\n\x12\x63riterion_failures\x18\x03 \x03(\x0b\x32\x14.cheeseless.v1.ErrorB\t\n\x07outcome\"o\n\x0e\x44isputeRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x14\n\x0c\x63riterion_id\x18\x02 \x01(\t\x12(\n\x04\x63ode\x18\x03 \x01(\x0e\x32\x1a.cheeseless.v1.DisputeCode\x12\x0c\n\x04note\x18\x04 \x01(\t\"\x1d\n\nDisputeAck\x12\x0f\n\x07message\x18\x01 \x01(\t\"m\n\x0f\x44isputeResponse\x12(\n\x03\x61\x63k\x18\x01 \x01(\x0b\x32\x19.cheeseless.v1.DisputeAckH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x42\t\n\x07outcome*\xa4\x01\n\x0b\x44isputeCode\x12\x1c\n\x18\x44ISPUTE_CODE_UNSPECIFIED\x10\x00\x12!\n\x1d\x44ISPUTE_CODE_CONTRADICTS_SPEC\x10\x01\x12\x1b\n\x17\x44ISPUTE_CODE_UNTESTABLE\x10\x02\x12\x1f\n\x1b\x44ISPUTE_CODE_AMBIGUOUS_SPEC\x10\x03\x12\x16\n\x12\x44ISPUTE_CODE_OTHER\x10\x04\x32\xd9\x01\n\x08Verifier\x12<\n\x03Run\x12\x19.cheeseless.v1.RunRequest\x1a\x1a.cheeseless.v1.RunResponse\x12\x45\n\x06Status\x12\x1c.cheeseless.v1.StatusRequest\x1a\x1d.cheeseless.v1.StatusResponse\x12H\n\x07\x44ispute\x12\x1d.cheeseless.v1.DisputeRequest\x1a\x1e.cheeseless.v1.DisputeResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'cheeseless.v1.verifier_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
+  _globals['_DISPUTECODE']._serialized_start=740
+  _globals['_DISPUTECODE']._serialized_end=904
   _globals['_RUNREQUEST']._serialized_start=102
   _globals['_RUNREQUEST']._serialized_end=131
   _globals['_RUNRESPONSE']._serialized_start=134
@@ -41,6 +43,12 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_STATUSREQUEST']._serialized_end=322
   _globals['_STATUSRESPONSE']._serialized_start=325
   _globals['_STATUSRESPONSE']._serialized_end=482
-  _globals['_VERIFIER']._serialized_start=485
-  _globals['_VERIFIER']._serialized_end=628
+  _globals['_DISPUTEREQUEST']._serialized_start=484
+  _globals['_DISPUTEREQUEST']._serialized_end=595
+  _globals['_DISPUTEACK']._serialized_start=597
+  _globals['_DISPUTEACK']._serialized_end=626
+  _globals['_DISPUTERESPONSE']._serialized_start=628
+  _globals['_DISPUTERESPONSE']._serialized_end=737
+  _globals['_VERIFIER']._serialized_start=907
+  _globals['_VERIFIER']._serialized_end=1124
 # @@protoc_insertion_point(module_scope)

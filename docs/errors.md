@@ -130,3 +130,48 @@ A public smoke test from acceptance/contract/ failed.
 - **Retryable:** yes
 - **Stderr tail (pre-hidden stage):** yes
 - **Wire:** `ERROR_CODE_SMOKE_TEST_FAILED` = 14
+
+### `DISPUTE_DISABLED`
+
+Disputes are not enabled for this repository.
+
+- **What to do:** Keep working on the public criteria, or ask the operator to enable disputes.
+- **Retryable:** no
+- **Stderr tail (pre-hidden stage):** no
+- **Wire:** `ERROR_CODE_DISPUTE_DISABLED` = 15
+
+### `DISPUTE_CAP_REACHED`
+
+The dispute limit for this task lineage is used up.
+
+- **What to do:** Do not dispute again. Ask the operator.
+- **Retryable:** no
+- **Stderr tail (pre-hidden stage):** no
+- **Wire:** `ERROR_CODE_DISPUTE_CAP_REACHED` = 16
+
+### `DISPUTE_INVALID`
+
+The dispute was not accepted: check the criterion id, the code and the note.
+
+- **What to do:** Use a public criterion id, one of the listed codes and a short plain-text note.
+- **Retryable:** no
+- **Stderr tail (pre-hidden stage):** no
+- **Wire:** `ERROR_CODE_DISPUTE_INVALID` = 17
+
+### `DISPUTE_NOT_ALLOWED`
+
+A session that already holds a passing result cannot dispute.
+
+- **What to do:** Promote the passing result, or keep working if you changed the code since.
+- **Retryable:** no
+- **Stderr tail (pre-hidden stage):** no
+- **Wire:** `ERROR_CODE_DISPUTE_NOT_ALLOWED` = 18
+
+### `SESSION_DISPUTED`
+
+This session was closed by a dispute.
+
+- **What to do:** Stop. The operator decides whether a fresh session may start.
+- **Retryable:** no
+- **Stderr tail (pre-hidden stage):** no
+- **Wire:** `ERROR_CODE_SESSION_DISPUTED` = 19

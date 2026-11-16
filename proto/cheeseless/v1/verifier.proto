@@ -36,7 +36,36 @@ message StatusResponse {
   repeated Error criterion_failures = 3;
 }
 
+// Closed set of dispute reasons (ADR 0009). Never a Result status.
+enum DisputeCode {
+  DISPUTE_CODE_UNSPECIFIED = 0;
+  DISPUTE_CODE_CONTRADICTS_SPEC = 1;
+  DISPUTE_CODE_UNTESTABLE = 2;
+  DISPUTE_CODE_AMBIGUOUS_SPEC = 3;
+  DISPUTE_CODE_OTHER = 4;
+}
+
+message DisputeRequest {
+  string task_id = 1;
+  string criterion_id = 2;
+  DisputeCode code = 3;
+  string note = 4;
+}
+
+// Identical for every accepted dispute: no id, count or timestamp.
+message DisputeAck {
+  string message = 1;
+}
+
+message DisputeResponse {
+  oneof outcome {
+    DisputeAck ack = 1;
+    Error error = 2;
+  }
+}
+
 service Verifier {
   rpc Run(RunRequest) returns (RunResponse);
   rpc Status(StatusRequest) returns (StatusResponse);
+  rpc Dispute(DisputeRequest) returns (DisputeResponse);
 }

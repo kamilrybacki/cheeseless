@@ -16,11 +16,19 @@ from typing import Any
 from cheeseless.adapters.outbound.store import _fs, codec
 from cheeseless.domain import ids
 from cheeseless.domain.budget import DEFAULT_LIMITS, Budget, Pool
+from cheeseless.domain.dispute import (
+    DisputeCode,
+    DisputePolicy,
+    DisputeRecord,
+    DisputeStatus,
+    refusal,
+)
 from cheeseless.domain.dlp import Fingerprints
 from cheeseless.domain.freeze import FrozenTask
 from cheeseless.domain.holdout import SEED_BYTES
 from cheeseless.domain.result import MIN_KEY_BYTES, Result
-from cheeseless.ports.store import StoreError
+from cheeseless.domain.status import Status
+from cheeseless.ports.store import DisputeRefused, SessionDisputedError, StoreError
 
 KEY_BYTES = MIN_KEY_BYTES
 
@@ -136,12 +144,131 @@ class FileStore:
         task_id = _task_id(result.task_id)
         results = self._root / "results"
         line = codec.encode_result(result, operator_cause=operator_cause, time=self._clock())
-        _fs.append_line(results / f"{task_id}.jsonl", line)
-        _fs.write_atomic(results / f"{task_id}.json", codec.encode_result(result))
+        with _fs.locked(self._root / "store.lock"):
+            if self._blocked(task_id, self._records()):
+                raise SessionDisputedError("the session ended in a dispute")
+            _fs.append_line(results / f"{task_id}.jsonl", line)
+            _fs.write_atomic(results / f"{task_id}.json", codec.encode_result(result))
 
     def latest_result(self, task_id: str) -> Result | None:
         raw = _fs.read_bytes(self._root / "results" / f"{_task_id(task_id)}.json")
         return None if raw is None else codec.decode_result(raw)
+
+    # -- disputes (ADR 0009, stage g) --------------------------------------------
+    # Files are created lazily so the layout is unchanged while disputes are unused.
+
+    def dispute_policy(self) -> DisputePolicy:
+        raw = _fs.read_bytes(self._root / "dispute-policy.json")
+        if raw is None:
+            return DisputePolicy()
+        data = codec.loads(raw, "dispute-policy.json")
+        try:
+            return DisputePolicy(enabled=data["enabled"], cap=data["cap"])
+        except (KeyError, ValueError) as exc:
+            raise StoreError(f"dispute policy is invalid: {exc}") from exc
+
+    def set_dispute_policy(self, policy: DisputePolicy) -> None:
+        body = codec.dumps({"enabled": policy.enabled, "cap": policy.cap})
+        with _fs.locked(self._root / "store.lock"):
+            _fs.write_atomic(self._root / "dispute-policy.json", body)
+
+    def _records(self) -> tuple[DisputeRecord, ...]:
+        raw = self._read_json("disputes.json").get("records", [])
+        if not isinstance(raw, list):
+            raise StoreError("dispute records are invalid")
+        try:
+            return tuple(
+                DisputeRecord(
+                    dispute_id=str(r["dispute_id"]),
+                    task_id=str(r["task_id"]),
+                    lineage_id=str(r["lineage_id"]),
+                    criterion_id=str(r["criterion_id"]),
+                    code=DisputeCode(r["code"]),
+                    note=str(r["note"]),
+                    status=DisputeStatus(r["status"]),
+                    resolved_by=str(r.get("resolved_by", "")),
+                )
+                for r in raw
+            )
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise StoreError("dispute records are invalid") from exc
+
+    def _write_records(self, records: tuple[DisputeRecord, ...]) -> None:
+        rows = [
+            {
+                "dispute_id": r.dispute_id,
+                "task_id": r.task_id,
+                "lineage_id": r.lineage_id,
+                "criterion_id": r.criterion_id,
+                "code": r.code.value,
+                "note": r.note,
+                "status": r.status.value,
+                "resolved_by": r.resolved_by,
+            }
+            for r in records
+        ]
+        _fs.write_atomic(self._root / "disputes.json", codec.dumps({"records": rows}))
+
+    @staticmethod
+    def _blocked(task_id: str, records: tuple[DisputeRecord, ...]) -> bool:
+        return any(r.task_id == task_id and r.blocks_session for r in records)
+
+    def session_disputed(self, task_id: str) -> bool:
+        return self._blocked(_task_id(task_id), self._records())
+
+    def disputes(self) -> tuple[DisputeRecord, ...]:
+        return self._records()
+
+    def file_dispute(
+        self, task_id: str, lineage_id: str, criterion_id: str, code: DisputeCode, note: str
+    ) -> None:
+        task_id = _task_id(task_id)
+        ids.lineage_id(lineage_id)
+        self.load_task(task_id)
+        with _fs.locked(self._root / "store.lock"):
+            records = self._records()
+            latest = self.latest_result(task_id)
+            reason = refusal(
+                self.dispute_policy(),
+                lineage_count=sum(1 for r in records if r.lineage_id == lineage_id),
+                holds_pass=latest is not None and latest.status is Status.PASS,
+                blocked=self._blocked(task_id, records),
+            )
+            if reason is not None:
+                raise DisputeRefused(reason)
+            record = DisputeRecord(
+                f"d-{len(records) + 1}", task_id, lineage_id, criterion_id, code, note
+            )
+            self._write_records((*records, record))
+            self.log_event(task_id, "dispute", record.dispute_id)
+
+    def resolve_dispute(self, dispute_id: str, outcome: DisputeStatus, actor: str) -> DisputeRecord:
+        if outcome is DisputeStatus.OPEN:
+            raise StoreError("a dispute can only be resolved as upheld or rejected")
+        if not actor.strip():
+            raise StoreError("a resolution needs an actor")
+        with _fs.locked(self._root / "store.lock"):
+            records = self._records()
+            match = [r for r in records if r.dispute_id == dispute_id]
+            if not match:
+                raise StoreError(f"unknown dispute: {dispute_id}")
+            if match[0].status is not DisputeStatus.OPEN:
+                raise StoreError(f"dispute {dispute_id} is already resolved")
+            done = DisputeRecord(
+                match[0].dispute_id,
+                match[0].task_id,
+                match[0].lineage_id,
+                match[0].criterion_id,
+                match[0].code,
+                match[0].note,
+                outcome,
+                actor.strip(),
+            )
+            self._write_records(tuple(done if r is match[0] else r for r in records))
+            self.log_event(
+                done.task_id, f"dispute-{outcome.value}", f"{dispute_id} by {done.resolved_by}"
+            )
+            return done
 
     # -- DLP fingerprints --------------------------------------------------------
 

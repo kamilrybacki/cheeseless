@@ -79,6 +79,9 @@ def ci_export(args: argparse.Namespace) -> int:
     if task_id is None:
         _err("ci-export failed: no frozen task")
         return EXIT_USAGE
+    if store.session_disputed(task_id):
+        _err("ci-export refused: the session ended in a dispute")
+        return EXIT_USAGE
     frozen, seed = store.load_task(task_id)
     limit = store.budget(frozen.task.lineage_id, Pool.CI).limit
     ledger = BudgetLedgerRef(
