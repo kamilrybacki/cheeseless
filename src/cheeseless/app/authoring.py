@@ -313,8 +313,16 @@ def approve_freeze(
         # apart from a dead one. A second approver is refused, not queued.
         with store.approval_ownership(proposal.lineage_id):
             return _approve_owned(
-                repo, sandbox, author_sandbox, store, proposal, state, resuming,
-                actor=actor, no_reference=no_reference, reason=reason,
+                repo,
+                sandbox,
+                author_sandbox,
+                store,
+                proposal,
+                state,
+                resuming,
+                actor=actor,
+                no_reference=no_reference,
+                reason=reason,
             )
     except AuthoringError as exc:
         raise AuthorError("approval_conflict", f"another approval is in progress: {exc}") from exc
@@ -394,7 +402,9 @@ def recover_approval(store: AuthorStore, proposal_id: str, *, actor: str) -> str
     except AuthoringError as exc:
         text = str(exc)
         if "held" in text:
-            raise AuthorError("approver_alive", "an approver is still running; not recovering") from exc
+            raise AuthorError(
+                "approver_alive", "an approver is still running; not recovering"
+            ) from exc
         raise AuthorError("recovery_conflict", f"the authoring state changed: {text}") from exc
 
 
