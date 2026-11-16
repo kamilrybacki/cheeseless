@@ -109,14 +109,19 @@ def prepare(
     sandbox: Sandbox,
     *,
     baseline_commit: str | None = None,
+    source: str | None = None,
     timeout: float = 300.0,
     tool_version: str = "0.1.0",
 ) -> PreparedFreeze:
+    """Validate a freeze. ``source`` (a commit or tree oid) is where the files are read
+    from; it defaults to the baseline commit. The digest always uses ``baseline_commit``."""
     if baseline_commit is None:
         baseline_commit = repo.head_commit()
-    contract = _read_contract(repo, baseline_commit)
-    baseline_tree = repo.tree_of(baseline_commit)
-    acceptance_tree = repo.tree_of(baseline_commit, "acceptance")
+    if source is None:
+        source = baseline_commit
+    contract = _read_contract(repo, source)
+    baseline_tree = repo.tree_of(source)
+    acceptance_tree = repo.tree_of(source, "acceptance")
     # The whole public contract directory is projected, spec.md and public tests included.
     projection_tree = repo.tree_without(baseline_tree, "acceptance", "acceptance/contract")
     hidden_blobs = tuple(
@@ -125,8 +130,8 @@ def prepare(
         if not b.path.startswith("contract/")
     )
 
-    hidden_contents = _hidden_contents(repo, baseline_commit, hidden_blobs)
-    projection_blobs = _public_contents(repo, baseline_commit, projection_tree)
+    hidden_contents = _hidden_contents(repo, source, hidden_blobs)
+    projection_blobs = _public_contents(repo, source, projection_tree)
     public_contents = [content for _, content in projection_blobs]
     public_surfaces = [content for _, content in projection_blobs] + [
         path for path, _ in projection_blobs

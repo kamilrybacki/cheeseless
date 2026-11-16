@@ -153,3 +153,21 @@ def test_prepare_redacts_markers_in_build_stderr(toy_repo, tmp_path):
     assert "build failed" in message
     assert MARKER not in message
     assert f"<sentinel digest {digest(MARKER.encode())}>" in message
+
+
+def test_prepare_reads_from_a_tree_source_and_digests_the_baseline(toy_repo, tmp_path):
+    from cheeseless.domain.evaluation import TestOutcome
+
+    repo = GitRepository.discover(toy_repo)
+    head = repo.head_commit()
+    plain = prepare(repo, _FakeRunner([_suite(TestOutcome.FAILED)]), _FakeSandbox(tmp_path))
+    from_tree = prepare(
+        repo,
+        _FakeRunner([_suite(TestOutcome.FAILED)]),
+        _FakeSandbox(tmp_path),
+        baseline_commit=head,
+        source=repo.tree_of(head),
+    )
+    assert from_tree.task_id == plain.task_id
+    assert from_tree.acceptance_tree == plain.acceptance_tree
+    assert from_tree.baseline_commit == head
