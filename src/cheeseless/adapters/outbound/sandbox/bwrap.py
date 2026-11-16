@@ -17,7 +17,12 @@ from pathlib import Path
 
 from cheeseless.adapters.outbound.sandbox import profiles, seccomp
 from cheeseless.adapters.outbound.sandbox.launch import force_remove
-from cheeseless.ports.sandbox import AuthorOutcome, SandboxError, StepOutcome
+from cheeseless.ports.sandbox import (
+    AUTHOR_REFERENCE_ENV,
+    AuthorOutcome,
+    SandboxError,
+    StepOutcome,
+)
 
 DEFAULT_BWRAP = "/usr/bin/bwrap"
 BUILD_TIMEOUT = 600.0
@@ -200,6 +205,9 @@ class BwrapSandbox:
         # The interpreter and its libraries live outside /usr in a venv; mount them
         # read-only so the unapproved suite can be collected at all.
         interpreter = _interpreter_roots(self._protected)
+        reference_inside = profiles.inside_path()
+        # The tests locate the read-only reference through this variable.
+        trusted = [(AUTHOR_REFERENCE_ENV, reference_inside)] if reference is not None else []
         fd = seccomp.program_fd()
         try:
             argv = profiles.author(
@@ -207,11 +215,12 @@ class BwrapSandbox:
                 acceptance=acceptance.resolve(),
                 inside=profiles.inside_path(),
                 reference=reference.resolve() if reference is not None else None,
-                reference_inside=profiles.inside_path(),
+                reference_inside=reference_inside,
                 extra_read_only=sorted(interpreter),
                 env=env,
                 seccomp_fd=fd,
                 command=command,
+                trusted_env=trusted,
             )
             done = subprocess.run(  # noqa: S603 - argv built from validated parts
                 argv,

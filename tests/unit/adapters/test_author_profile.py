@@ -80,3 +80,28 @@ def test_author_run_is_contained_and_cannot_write(tmp_path: Path) -> None:
     )
     assert outcome.exit_code == 0
     assert outcome.stdout.endswith("ro")
+
+
+@pytest.mark.skipif(
+    not shutil.which(DEFAULT_BWRAP) and not Path(DEFAULT_BWRAP).exists(), reason="no bwrap"
+)
+def test_author_run_exposes_the_reference_path_in_the_environment(tmp_path: Path) -> None:
+    from cheeseless.ports.sandbox import AUTHOR_REFERENCE_ENV
+
+    acc, ref = tmp_path / "acc", tmp_path / "ref"
+    for d in (acc, ref):
+        d.mkdir()
+    (ref / "marker.txt").write_text("hi")
+    code = (
+        f"import os,sys\np=os.environ[{AUTHOR_REFERENCE_ENV!r}]\n"
+        "sys.stdout.write(open(p+'/marker.txt').read())\n"
+    )
+    outcome = BwrapSandbox().author_run(acc, ref, [sys.executable, "-I", "-c", code], env=())
+    assert outcome.stdout == "hi"
+    none = BwrapSandbox().author_run(
+        acc,
+        None,
+        [sys.executable, "-I", "-c", f"import os;print({AUTHOR_REFERENCE_ENV!r} in os.environ)"],
+        env=(),
+    )
+    assert none.stdout.strip() == "False"

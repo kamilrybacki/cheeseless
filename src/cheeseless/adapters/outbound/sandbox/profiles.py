@@ -184,6 +184,7 @@ def author(
     env: Sequence[tuple[str, str]],
     seccomp_fd: int,
     command: Sequence[str],
+    trusted_env: Sequence[tuple[str, str]] = (),
 ) -> list[str]:
     """The author runner: unapproved tests, read-only trees, no store, no network."""
     mount = _inside(inside)
@@ -195,7 +196,9 @@ def author(
         if str(path) in RESERVED_MOUNTS or not path.is_absolute():
             raise SandboxError(f"cannot mount {path} into the author runner")
         args += ["--ro-bind-try", str(path), str(path)]
-    return [*args, "--chdir", mount, *_candidate_env(env), *_command(command)]
+    # ``trusted_env`` is set by the runner itself, so it skips the reserved-name check.
+    trusted = [a for key, value in trusted_env for a in ("--setenv", key, value)]
+    return [*args, "--chdir", mount, *_candidate_env(env), *trusted, *_command(command)]
 
 
 def open_acceptance(projection: Path) -> int:

@@ -48,6 +48,10 @@ class AuthorOutcome:
     timed_out: bool = False
 
 
+# Set by the author runner to the read-only inside path of the reference, when mounted.
+AUTHOR_REFERENCE_ENV = "CHEESELESS_AUTHOR_REFERENCE"
+
+
 class AuthorSandbox(Protocol):
     def author_run(
         self,
