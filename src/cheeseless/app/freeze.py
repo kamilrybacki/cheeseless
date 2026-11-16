@@ -102,6 +102,34 @@ def _projection_contents(
     return out
 
 
+def rebuild_fingerprints(
+    repo: Repository, frozen: FrozenTask, source: str
+) -> tuple[Fingerprints | None, str]:
+    """Rebuild a published task's fingerprints from ``source``; ``(None, why)`` on mismatch.
+
+    Nothing in the stored task is trusted beyond its digest: the acceptance tree, the
+    projection and the hidden blob list are re-derived from the repository and compared."""
+    if repo.tree_of(source, "acceptance") != frozen.acceptance_tree:
+        return None, "the default branch no longer holds the frozen acceptance tree"
+    projection = repo.replace_subtree(
+        repo.tree_of(frozen.baseline_commit),
+        "acceptance",
+        repo.tree_of(source),
+        "acceptance/contract",
+    )
+    hidden = tuple(
+        HiddenBlob(path=f"acceptance/{b.path}", oid=b.oid)
+        for b in repo.blobs_under(frozen.acceptance_tree, "")
+        if not b.path.startswith("contract/")
+    )
+    if projection != frozen.projection_tree or hidden != frozen.hidden_blobs:
+        return None, "the task record disagrees with the repository"
+    public = [c for _, c in _projection_contents(repo, frozen.baseline_commit, source, projection)]
+    return build_fingerprints(
+        frozen.task.task_id, _hidden_contents(repo, source, hidden), public
+    ), ""
+
+
 def _contained_run(
     author_sandbox: AuthorSandbox, acc_root: Path, cand_root: Path, contract: Contract
 ) -> SuiteRun:

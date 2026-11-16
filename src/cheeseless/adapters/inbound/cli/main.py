@@ -318,7 +318,7 @@ def _cmd_author(args: argparse.Namespace, ctx: Context) -> int:
         print("author recover needs --as <actor>", file=sys.stderr)
         return 2
     try:
-        outcome = recover_approval(_author_store(ctx), args.task, actor=args.actor)
+        outcome = recover_approval(ctx.repo, _author_store(ctx), args.task, actor=args.actor)
     except AuthorError as exc:
         _emit(args, {"recovered": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
         return 1

@@ -18,7 +18,14 @@ from cheeseless.app.author_driver import (
     RESULT_MARK,
     run_driver_on,
 )
-from cheeseless.app.freeze import FreezeError, PreparedFreeze, commit, prepare, read_contract
+from cheeseless.app.freeze import (
+    FreezeError,
+    PreparedFreeze,
+    commit,
+    prepare,
+    read_contract,
+    rebuild_fingerprints,
+)
 from cheeseless.domain import ids
 from cheeseless.domain.authoring import (
     AuthoringError,
@@ -36,7 +43,7 @@ from cheeseless.domain.freeze import freeze_digest
 from cheeseless.ports.authoring import AuthoringStore
 from cheeseless.ports.repository import Repository, RepositoryError
 from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
-from cheeseless.ports.store import Store
+from cheeseless.ports.store import Store, StoreError
 
 
 class AuthorError(Exception):
@@ -386,7 +393,7 @@ def _approve_owned(
     return result
 
 
-def recover_approval(store: AuthorStore, proposal_id: str, *, actor: str) -> str:
+def recover_approval(repo: Repository, store: AuthorStore, proposal_id: str, *, actor: str) -> str:
     """Host-only: clear an APPROVING reservation whose approver died. Returns the outcome.
 
     Refused while the approver is alive (it holds the ownership lock). Never reachable
@@ -398,7 +405,7 @@ def recover_approval(store: AuthorStore, proposal_id: str, *, actor: str) -> str
     try:
         owner = store.approval_ownership(proposal.lineage_id)
         with owner:
-            return _recover_owned(store, proposal, actor)
+            return _recover_owned(repo, store, proposal, actor)
     except AuthoringError as exc:
         text = str(exc)
         if "held" in text:
@@ -408,7 +415,7 @@ def recover_approval(store: AuthorStore, proposal_id: str, *, actor: str) -> str
         raise AuthorError("recovery_conflict", f"the authoring state changed: {text}") from exc
 
 
-def _recover_owned(store: AuthorStore, proposal: Proposal, actor: str) -> str:
+def _recover_owned(repo: Repository, store: AuthorStore, proposal: Proposal, actor: str) -> str:
     state = store.authoring_state(proposal.lineage_id, proposal.spec_digest)
     if state.phase is not TaskPhase.APPROVING:
         raise AuthorError("not_approving", f"nothing to recover: the task is {state.phase.value}")
@@ -417,17 +424,43 @@ def _recover_owned(store: AuthorStore, proposal: Proposal, actor: str) -> str:
         store.save_authoring_state(state.released())
         store.log_event(tid, "freeze-recover", f"{actor} rolled-back")
         return "rolled_back"
-    if store.load_fingerprints(tid) is None:
-        # Published but the DLP fingerprints are missing: finishing here would freeze
-        # without them. The approval itself rebuilds them, so that is the only way out.
-        raise AuthorError(
-            "approval_incomplete",
-            "the task is published without fingerprints; run the approval again to finish it",
-        )
+    _verify_published(repo, store, proposal)
     store.set_active(tid)
     store.save_authoring_state(state.frozen())
     store.log_event(tid, "freeze-recover", f"{actor} finished")
     return "finished"
+
+
+def _verify_published(repo: Repository, store: AuthorStore, proposal: Proposal) -> None:
+    """Refuse to finish unless the published task and its fingerprints are whole.
+
+    The trusted store is not trusted here: the task is fully reloaded (schema, digest) and
+    the fingerprints are rebuilt from the frozen acceptance tree and compared."""
+    tid = proposal.proposal_id
+
+    def refuse(why: str) -> AuthorError:
+        return AuthorError(
+            "approval_incomplete",
+            f"{why}; the task stays sealed. Run the approval again to rebuild it",
+        )
+
+    try:
+        frozen, _ = store.load_task(tid)
+        stored = store.load_fingerprints(tid)
+    except StoreError as exc:
+        raise refuse(f"the published task is not valid ({exc})") from exc
+    if frozen.task.task_id != tid or frozen.acceptance_tree != proposal.acceptance_tree:
+        raise refuse("the published task is not the one that was proposed")
+    if stored is None:
+        raise refuse("the task is published without fingerprints")
+    try:
+        rebuilt, why = rebuild_fingerprints(repo, frozen, _trusted_head(repo))
+    except RepositoryError as exc:
+        raise refuse(f"the task cannot be re-derived from the repository ({exc})") from exc
+    if rebuilt is None:
+        raise refuse(why)
+    if stored != rebuilt:
+        raise refuse("the stored fingerprints are incomplete or do not match the frozen tree")
 
 
 def _trusted_head(repo: Repository) -> str:
