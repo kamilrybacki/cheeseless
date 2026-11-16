@@ -216,6 +216,13 @@ class GitRepository:
         ]
         return self._write_tree(kept)
 
+    def replace_subtree(self, tree: str, prefix: str, source_tree: str, keep: str) -> str:
+        rel_path(prefix)
+        rel_path(keep)
+        kept = [(e.mode, e.oid, e.path) for e in self._entries(tree) if not under(e.path, prefix)]
+        kept += [(e.mode, e.oid, e.path) for e in self._entries(source_tree) if under(e.path, keep)]
+        return self._write_tree(kept)
+
     def snapshot(self, worktree: Path) -> str:
         listed = self._untracked_listing(worktree)
         entries: list[tuple[str, str, str]] = []

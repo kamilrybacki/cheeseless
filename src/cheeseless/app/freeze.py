@@ -91,17 +91,15 @@ def _hidden_contents(
     return [(blob.path, repo.show(commit, blob.path)) for blob in blobs]
 
 
-def _public_contents(
-    repo: Repository, commit: str, projection_tree: str
+def _projection_contents(
+    repo: Repository, baseline: str, source: str, projection_tree: str
 ) -> list[tuple[bytes, bytes]]:
-    """Agent-visible projection blobs as ``(path, content)`` pairs.
-
-    A file name is as visible as its content, so callers scan the path bytes too.
-    """
-    return [
-        (blob.path.encode(), repo.show(commit, blob.path))
-        for blob in repo.blobs_under(projection_tree, "")
-    ]
+    """Projection blobs; baseline paths are read from the baseline, the contract from source."""
+    out = []
+    for blob in repo.blobs_under(projection_tree, ""):
+        origin = source if blob.path.startswith("acceptance/contract/") else baseline
+        out.append((blob.path.encode(), repo.show(origin, blob.path)))
+    return out
 
 
 def _contained_run(
@@ -154,10 +152,12 @@ def prepare(
     if source is None:
         source = baseline_commit
     contract = read_contract(repo, source)
-    baseline_tree = repo.tree_of(source)
     acceptance_tree = repo.tree_of(source, "acceptance")
-    # The whole public contract directory is projected, spec.md and public tests included.
-    projection_tree = repo.tree_without(baseline_tree, "acceptance", "acceptance/contract")
+    # The candidate is the baseline code, never ``source``: the digest names the baseline.
+    # Only the public contract (spec.md and public tests) is taken from ``source``.
+    projection_tree = repo.replace_subtree(
+        repo.tree_of(baseline_commit), "acceptance", repo.tree_of(source), "acceptance/contract"
+    )
     hidden_blobs = tuple(
         HiddenBlob(path=f"acceptance/{b.path}", oid=b.oid)
         for b in repo.blobs_under(acceptance_tree, "")
@@ -165,7 +165,7 @@ def prepare(
     )
 
     hidden_contents = _hidden_contents(repo, source, hidden_blobs)
-    projection_blobs = _public_contents(repo, source, projection_tree)
+    projection_blobs = _projection_contents(repo, baseline_commit, source, projection_tree)
     public_contents = [content for _, content in projection_blobs]
     public_surfaces = [content for _, content in projection_blobs] + [
         path for path, _ in projection_blobs

@@ -80,6 +80,28 @@ def test_tree_without_keeps_only_the_contract(repo: GitRepository, tmp_path: Pat
     assert (dest / "src" / "toy" / "__main__.py").read_text() == BASELINE_MAIN
 
 
+def test_replace_subtree_takes_the_prefix_from_another_tree(tmp_path: Path) -> None:
+    root = make_repo(tmp_path / "r2", {"src/a.py": "base\n", "acceptance/contract/s.md": "old\n"})
+    repo = GitRepository(root)
+    base = repo.tree_of(repo.head_commit())
+    write_files(
+        root,
+        {
+            "src/a.py": "moved\n",
+            "acceptance/contract/s.md": "new\n",
+            "acceptance/hidden/h.py": "h\n",
+        },
+    )
+    other = repo.tree_of(commit_all(root))
+    merged = repo.replace_subtree(base, "acceptance", other, "acceptance/contract")
+    dest = tmp_path / "m"
+    dest.mkdir()
+    repo.export(merged, dest)
+    assert (dest / "src" / "a.py").read_text() == "base\n"
+    assert (dest / "acceptance" / "contract" / "s.md").read_text() == "new\n"
+    assert not (dest / "acceptance" / "hidden").exists()
+
+
 def test_export_only_and_exclude(repo: GitRepository, tmp_path: Path) -> None:
     tree = repo.tree_of(repo.head_commit())
     only = tmp_path / "only"

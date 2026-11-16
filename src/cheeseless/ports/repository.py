@@ -49,6 +49,10 @@ class Repository(Protocol):
         """``tree`` minus everything under ``prefix`` except ``keep``."""
         ...
 
+    def replace_subtree(self, tree: str, prefix: str, source_tree: str, keep: str) -> str:
+        """``tree`` minus everything under ``prefix``, plus ``source_tree``'s ``keep`` entries."""
+        ...
+
     def snapshot(self, worktree: Path) -> str:
         """Write the worktree (tracked and untracked, not ignored) as a tree."""
         ...
