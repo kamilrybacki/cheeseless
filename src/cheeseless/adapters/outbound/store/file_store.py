@@ -145,7 +145,9 @@ class FileStore:
         results = self._root / "results"
         line = codec.encode_result(result, operator_cause=operator_cause, time=self._clock())
         with _fs.locked(self._root / "store.lock"):
-            if self._blocked(task_id, self._records()):
+            # A signed BLOCKED result (egress DLP hit) is security evidence: it is kept
+            # even after a dispute, so a dispute cannot hide a leak attempt.
+            if result.status is not Status.BLOCKED and self._blocked(task_id, self._records()):
                 raise SessionDisputedError("the session ended in a dispute")
             _fs.append_line(results / f"{task_id}.jsonl", line)
             _fs.write_atomic(results / f"{task_id}.json", codec.encode_result(result))

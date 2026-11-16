@@ -195,3 +195,17 @@ def test_unknown_task_is_refused(store: FileStore) -> None:
     store.set_dispute_policy(ON)
     with pytest.raises(StoreError):
         store.file_dispute("9" * 64, "toy", "normalize", DisputeCode.OTHER, "")
+
+
+def test_signed_blocked_result_is_kept_after_a_dispute(store: FileStore) -> None:
+    """An egress DLP hit is security evidence: a dispute must not suppress it."""
+    store.set_dispute_policy(ON)
+    _file(store)
+    blocked = sign(
+        Result(_task_id(), "5" * 40, "6" * 64, "local", "0.1.0", Status.BLOCKED, ()),
+        store.hmac_key(),
+    )
+    store.save_result(blocked, operator_cause="egress dlp")
+    assert store.latest_result(_task_id()) == blocked
+    with pytest.raises(SessionDisputedError):
+        store.save_result(sign(_result(_task_id()), store.hmac_key()), operator_cause="")

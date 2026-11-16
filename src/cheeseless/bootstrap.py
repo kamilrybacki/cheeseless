@@ -50,6 +50,7 @@ from cheeseless.app.dlp import scanner_for
 from cheeseless.app.egress_supervisor import EgressBlock, EgressSupervisor
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.egress_policy import EgressPolicy, PolicyError
+from cheeseless.ports.store import Store
 from cheeseless.session_files import copy_evidence, seed_home, write_projection_list
 from cheeseless.session_options import (
     SessionExtras,
@@ -349,24 +350,36 @@ def _link_or_copy(source: str, destination: str) -> str:
     return destination
 
 
-def _mcp_shim_source(python: str, site: Path, socket_path: Path, task_id: str) -> str:
+def _disputes_enabled(store: Store) -> bool:
+    """The host's dispute switch, read from the trusted store; any error means off."""
+    try:
+        return store.dispute_policy().enabled
+    except Exception:  # noqa: BLE001 - fail closed: an unreadable policy hides the tool
+        return False
+
+
+def _mcp_shim_source(
+    python: str, site: Path, socket_path: Path, task_id: str, *, disputes: bool = False
+) -> str:
     """The staged MCP stdio shim; socket and task are quoted literals, never env.
 
     A client that filters ``CHEESELESS_SOCKET``/``CHEESELESS_TASK`` out of the MCP
     server environment, or that sets conflicting values, still reaches the one verifier
     UDS this session created for the one frozen task. Nothing mutable (the projection or
-    the environment) can redirect it.
+    the environment) can redirect it. The dispute switch is a literal too, so the
+    agent cannot make ``gate_dispute`` appear; the verifier still enforces the policy.
     """
     return (
         f"#!{python}\n"
         "import sys\n"
         f"sys.path.insert(0, {str(site)!r})\n"
         "from cheeseless.bootstrap import serve_mcp\n"
-        f"raise SystemExit(serve_mcp({str(socket_path)!r}, task_id={task_id!r}))\n"
+        f"raise SystemExit(serve_mcp({str(socket_path)!r}, task_id={task_id!r}, "
+        f"disputes={bool(disputes)!r}))\n"
     )
 
 
-def _stage_runtime(socket_path: Path, task_id: str) -> TrustedRuntime:
+def _stage_runtime(socket_path: Path, task_id: str, *, disputes: bool = False) -> TrustedRuntime:
     """Stage the agent client runtime outside the repo; the sandbox mounts it read-only.
 
     The sandbox mounts only this staging directory, never the repository, the venv
@@ -405,7 +418,7 @@ def _stage_runtime(socket_path: Path, task_id: str) -> TrustedRuntime:
     mcp = bin_dir / "cheeseless-mcp"
     python = os.path.realpath(sys.executable)
     mcp.write_text(
-        _mcp_shim_source(python, site, socket_path, task_id),
+        _mcp_shim_source(python, site, socket_path, task_id, disputes=disputes),
         encoding="utf-8",
     )
     os.chmod(mcp, 0o500)
@@ -504,12 +517,13 @@ def serve_mcp(
     *,
     task_id: str | None = None,
     timeout: float = 10.0,
+    disputes: bool = False,
 ) -> int:
     """MCP stdio server. It needs only the verifier socket and task, never a store."""
     if uds_socket is None:
         raise ValueError("uds_socket is required")
     client = UdsVerifierClient(uds_socket, task_id=task_id, timeout=timeout)
-    run_stdio(build_mcp_server(client))
+    run_stdio(build_mcp_server(client, disputes=disputes))
     return 0
 
 
@@ -568,6 +582,7 @@ def main(argv: list[str] | None = None) -> int:
             uds_socket=getattr(args, "uds_socket", None),
             task_id=getattr(args, "task", None),
             timeout=getattr(args, "timeout", 10.0),
+            disputes=bool(getattr(args, "disputes", False)),
         )
     if args.command == "session":
         return _run_session_command(args, agent)
@@ -693,7 +708,7 @@ def host_session(
         if _within(egress_dir, projection_dir) or _within(egress_dir, socket_dir_path):
             raise RuntimeError("egress directory must be separate from the session paths")
         egress_socket = egress_dir / "egress.sock"
-        runtime = _stage_runtime(socket_path, task_id)
+        runtime = _stage_runtime(socket_path, task_id, disputes=_disputes_enabled(ctx.store))
 
         ctx.repo.create_projection(frozen.projection_tree, projection_dir)
         strays = ctx.repo.stray_hidden(projection_dir, frozen.hidden_blobs)

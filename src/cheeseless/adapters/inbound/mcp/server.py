@@ -1,4 +1,8 @@
-"""MCP adapter exposing ``gate_run`` and ``gate_status`` over a verifier client."""
+"""MCP adapter exposing ``gate_run`` and ``gate_status`` over a verifier client.
+
+``gate_dispute`` is listed only when the host enabled disputes for the session, so the
+default agent-visible tool set stays ``gate_run`` and ``gate_status``.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +19,9 @@ from cheeseless.domain.errors import ErrorCode, GateError, gate_error
 from cheeseless.ports.verifier import VerifierClient
 
 
-def build_mcp_server(client: VerifierClient, *, name: str = "cheeseless") -> MCPServer:
+def build_mcp_server(
+    client: VerifierClient, *, name: str = "cheeseless", disputes: bool = False
+) -> MCPServer:
     server = MCPServer(name)
 
     def _view_payload(view: AgentView) -> dict[str, Any]:
@@ -49,11 +55,20 @@ def build_mcp_server(client: VerifierClient, *, name: str = "cheeseless") -> MCP
             view = AgentView(gate_error(ErrorCode.INFRA_ERROR), ())
         return _call_result(view)
 
+    if disputes:
+        _register_dispute(server, client)
+    return server
+
+
+_CODE_LIST = ", ".join(c.value for c in DisputeCode)
+
+
+def _register_dispute(server: MCPServer, client: VerifierClient) -> None:
     @server.tool(
         name="gate_dispute",
         description=(
-            "Dispute a public criterion as contradicting the spec, untestable, ambiguous or "
-            "other. This ends the session: no further runs are possible. "
+            "Dispute a public criterion. `code` must be exactly one of: "
+            f"{_CODE_LIST}. This ends the session: no further runs are possible. "
             f"The note is at most {NOTE_LIMIT} characters of plain text."
         ),
     )
@@ -75,8 +90,6 @@ def build_mcp_server(client: VerifierClient, *, name: str = "cheeseless") -> MCP
             structured_content=body,
             is_error=False,
         )
-
-    return server
 
 
 def run_stdio(server: MCPServer) -> None:

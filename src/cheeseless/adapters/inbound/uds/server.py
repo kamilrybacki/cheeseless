@@ -519,7 +519,15 @@ class UdsVerifierServer:
             self._write_error(wfile, 429, "run in progress")
             return
         try:
-            if self._session_disputed():
+            try:
+                disputed = self._session_disputed()
+            except Exception:
+                # Fail closed: an unreadable dispute ledger must not look like "no dispute".
+                agent_view = AgentView(gate_error(ErrorCode.INFRA_ERROR), ())
+                data = serialize_status_response(agent_view_to_status_response(agent_view))
+                self._write_response(wfile, 200, data)
+                return
+            if disputed:
                 agent_view = AgentView(gate_error(ErrorCode.SESSION_DISPUTED), ())
                 data = serialize_status_response(agent_view_to_status_response(agent_view))
                 self._write_response(wfile, 200, data)
@@ -546,10 +554,7 @@ class UdsVerifierServer:
         task_id = self.session.task_id
         if task_id is None:
             return False
-        try:
-            return self.session.store.session_disputed(task_id)
-        except Exception:
-            return False
+        return self.session.store.session_disputed(task_id)
 
     def _task_matches(self, client_task_id: str, wfile: Any) -> bool:
         configured = self.session.task_id

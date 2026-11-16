@@ -19,7 +19,7 @@ from cheeseless.app.gate_run import gate_run
 from cheeseless.app.promote import PromoteRejected, promote
 from cheeseless.app.status import status
 from cheeseless.domain.budget import Pool
-from cheeseless.domain.dispute import DisputeRecord
+from cheeseless.domain.dispute import DEFAULT_CAP, DisputeRecord
 from cheeseless.domain.result import Result
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.runner import SuiteRunner
@@ -150,6 +150,11 @@ def build_parser() -> argparse.ArgumentParser:
     mcp.add_argument("--uds-socket", type=Path, required=True)
     mcp.add_argument("--task", default=None)
     mcp.add_argument("--timeout", type=float, default=10.0)
+    mcp.add_argument(
+        "--disputes",
+        action="store_true",
+        help="List gate_dispute (the verifier still enforces the host's dispute policy).",
+    )
 
     export = sub.add_parser("ci-export", help="Write the secret CI bundle (0600, never printed).")
     export.add_argument("--out", type=Path, required=True)
@@ -330,6 +335,21 @@ def _cmd_doctor(args: argparse.Namespace, ctx: Context) -> int:
     return 1 if strays else 0
 
 
+def _current_cap(store: Store) -> int:
+    """The stored cap, or the default when the policy is unreadable.
+
+    The operator must be able to rewrite (for example disable) a corrupt policy.
+    """
+    try:
+        return store.dispute_policy().cap
+    except StoreError as exc:
+        print(
+            f"warning: stored dispute policy unreadable ({exc}); using cap {DEFAULT_CAP}",
+            file=sys.stderr,
+        )
+        return DEFAULT_CAP
+
+
 def _dispute_to_dict(rec: DisputeRecord, *, show_note: bool) -> dict[str, object]:
     out: dict[str, object] = {
         "id": rec.dispute_id,
@@ -375,7 +395,7 @@ def _cmd_dispute(args: argparse.Namespace, ctx: Context) -> int:
             return 0
         if args.dispute_command == "config":
             enabled = bool(args.enable)
-            cap = args.cap if args.cap is not None else ctx.store.dispute_policy().cap
+            cap = args.cap if args.cap is not None else _current_cap(ctx.store)
             policy = configure_disputes(ctx.store, enabled=enabled, cap=cap)
             if args.json:
                 _print_json({"enabled": policy.enabled, "cap": policy.cap})

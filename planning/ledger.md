@@ -658,7 +658,7 @@ ADR 0009 accepted after round 2.
 
 | # | Decision or gap | Choice |
 |---|-----------------|--------|
-| G1 | Where policy lives | `dispute-policy.json` in the trusted store, never the agent-writable worktree; absent or corrupt means disabled (fail closed). Host sets it with `cheeseless dispute config --enable/--disable [--cap N]`. Default off, cap 3, hard maximum 100. |
+| G1 | Where policy lives | `dispute-policy.json` in the trusted store, never the agent-writable worktree. Absent means disabled. A corrupt policy fails closed: the gate answers `INFRA_ERROR` (not `dispute_disabled`) and the MCP shim hides `gate_dispute`. Host sets it with `cheeseless dispute config --enable/--disable [--cap N]`; without `--cap` an unreadable policy falls back to the default cap with a warning, so the host can always rewrite it. Default off, cap 3, hard maximum 100. |
 | G2 | Where session state lives | `disputes.json` (`{"records": [...]}`, ids `d-<n>`) beside the results. DISPUTED is derived per task: a task is closed while any of its records is open or upheld. It is not a `Result` status, so the v1 Result proto and HMAC bytes are unchanged (pinned by `test_result_encoding_pin`). |
 | G3 | Race with an in-flight run | `save_result` refuses under the same lock with `SessionDisputedError`, and `gate_run` checks early. A run that finishes after a dispute publishes nothing; the run charge stays. |
 | G4 | Refusal order | disabled, then cap, then holds a PASS (`dispute_not_allowed`), then already closed (`session_disputed`). Nothing is recorded on any refusal. |
@@ -670,5 +670,19 @@ ADR 0009 accepted after round 2.
 | G10 | Cap scope | Per lineage name, counting every record whatever its status. It survives a re-freeze of the same lineage and resets if the lineage is renamed. Rejected disputes still count. |
 | G11 | Host CLI | `disputes [--json] [--show-note]` (note labelled untrusted, only with the flag) and `dispute resolve <id> --upheld\|--rejected --as <actor>`; second resolution refused. No list, resolve or config route exists on the UDS server or MCP. |
 | G12 | Upheld / rejected wiring | Upheld keeps the task closed; the operator re-freezes the lineage with the existing `freeze`. Rejected reopens the task. Gap: a rejected task's old attempt budget is not reset and there is no role-bound fresh-session command yet. Both wait for stage (c) role-bound sessions; no new subsystem was added. |
-| G13 | CI | The CI bundle is a snapshot with no store. `judge(..., disputed=True)` returns FAIL with reason `session_disputed` before any run or charge, and `ci-export` refuses a disputed task. A dispute filed after export is not seen by that bundle (gap, host must re-export). |
-| G14 | Tool visibility | `gate_dispute` is always listed by the MCP server and refused with `dispute_disabled` when the policy is off, so a disabled call gets a clear code rather than "unknown tool". `study/` and `demo/` neither pin nor allow-list the tool set (`study/prompt.py` only names `gate_run`), so with dispute off their behaviour is unchanged apart from one extra listed tool a study agent could call and have refused without effect. |
+| G13 | CI | The CI bundle is a snapshot with no store, so `judge` has no dispute input. `ci-export` refuses a disputed task. A dispute filed after export is not seen by that bundle (gap, host must re-export). |
+| G14 | Tool visibility | `gate_dispute` is listed only when the host's trusted-store policy enables disputes at session start. The host bakes the switch into the read-only MCP shim as a literal (like the socket and task id), so the agent cannot make the tool appear, and an unreadable policy hides it (fail closed). With disputes off, the agent-visible tool set stays `gate_run` and `gate_status`, so the pre-registered study and the demo see exactly the tools they saw before. A policy change during a running session does not change its listing; the verifier enforces the current policy on every call. An earlier draft listed the tool unconditionally; it was rejected because it changed the study's agent-visible environment. |
+
+### Stage (g) review resolution
+
+Reviewer: claude-opus-5-5 (independent session, code review). Verdict: approve after fixes.
+
+| # | Finding | Resolution |
+|---|---------|------------|
+| R1 | `judge(..., disputed=True)` is never set in production; G13 overstated it. | Fixed: parameter, `JudgeReason.DISPUTED` and its test removed; G13 corrected. |
+| R2 | `save_result` refused the signed BLOCKED result (egress DLP hit) after a dispute. | Fixed: BLOCKED results bypass the dispute check; store test added. |
+| R3 | `gate_dispute` did not list the allowed codes. | Fixed: description names every `DisputeCode` value. A `Literal` type was rejected: it turns a bad code into a schema error instead of `DISPUTE_INVALID`. |
+| R4 | No test for the `gate_run` `SessionDisputedError` branch. | Fixed: a runner files a dispute mid-run; nothing is published. |
+| R5 | Weak race-test assertion. | Accepted as is (low value). |
+| R6 | Corrupt policy gives `INFRA_ERROR`, not `dispute_disabled`; `dispute config` could not rewrite it. | Fixed: G1 wording; `dispute config` falls back to the default cap. |
+| R7 | UDS `/status` treated an unreadable dispute ledger as "no dispute". | Fixed: fails closed with `INFRA_ERROR`; test added. |

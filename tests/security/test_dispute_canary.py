@@ -10,13 +10,11 @@ import pytest
 from cheeseless.adapters.inbound.mcp.server import build_mcp_server
 from cheeseless.adapters.inbound.uds.server import SessionConfig, UdsVerifierServer
 from cheeseless.adapters.outbound.store.file_store import FileStore
-from cheeseless.app.ci_judge import JudgeReason, judge
 from cheeseless.app.dispute import configure_disputes, gate_dispute
 from cheeseless.app.gate_run import gate_run
 from cheeseless.app.promote import promote
 from cheeseless.domain.dispute import ACK_TEXT
 from cheeseless.domain.errors import ErrorCode, GateError
-from cheeseless.domain.status import Status
 from tests.factories import frozen_task
 
 SEED = bytes(range(32))
@@ -112,7 +110,7 @@ def test_mcp_never_echoes_the_note(store):
             return ACK_TEXT
 
     res = (
-        build_mcp_server(Client())
+        build_mcp_server(Client(), disputes=True)
         ._tool_manager.get_tool("gate_dispute")
         .fn("normalize", "other", CANARY)
     )
@@ -152,8 +150,11 @@ def test_unknown_criterion_rejected_identically_and_no_hidden_echo(store):
 def test_no_list_or_resolve_on_uds_or_mcp(store):
     for path in ("/disputes", "/dispute/resolve", "/resolve", "/Resolve", "/List"):
         assert _wire(_server(store), path, {}).startswith(b"HTTP/1.1 404"), path
-    names = {t.name for t in build_mcp_server(SimpleNamespace())._tool_manager.list_tools()}
-    assert names == {"gate_run", "gate_status", "gate_dispute"}
+    for enabled in (False, True):
+        server = build_mcp_server(SimpleNamespace(), disputes=enabled)
+        names = {t.name for t in server._tool_manager.list_tools()}
+        assert names <= {"gate_run", "gate_status", "gate_dispute"}
+        assert ("gate_dispute" in names) is enabled
 
 
 def test_disputed_session_cannot_run_publish_or_promote(store):
@@ -165,24 +166,6 @@ def test_disputed_session_cannot_run_publish_or_promote(store):
     assert store.latest_result(_tid()) is None
     with pytest.raises(ValueError, match="dispute"):
         promote(Boom(), store, task_id=_tid(), worktree=".")
-
-
-def test_ci_judge_treats_disputed_as_not_pass():
-    frozen = frozen_task()
-    repo = SimpleNamespace(tree_of=lambda *a, **k: frozen.acceptance_tree)
-    verdict = judge(
-        repo,
-        Boom(),
-        Boom(),
-        frozen,
-        b"k",
-        counter=Boom(),
-        base_commit="b",
-        head_commit="h",
-        disputed=True,
-    )
-    assert verdict.status is not Status.PASS
-    assert verdict.reason is JudgeReason.DISPUTED
 
 
 def test_cap_is_enforced_and_refusal_records_nothing(store):

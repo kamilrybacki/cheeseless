@@ -43,12 +43,21 @@ class FakeClient:
 
 
 def _tool(client: FakeClient):
-    return build_mcp_server(client)._tool_manager.get_tool("gate_dispute").fn
+    return build_mcp_server(client, disputes=True)._tool_manager.get_tool("gate_dispute").fn
 
 
-def test_mcp_registers_gate_dispute_but_no_host_tools() -> None:
-    names = {t.name for t in build_mcp_server(FakeClient(ACK_TEXT))._tool_manager.list_tools()}
-    assert names == {"gate_run", "gate_status", "gate_dispute"}
+def _names(**kwargs) -> set[str]:
+    server = build_mcp_server(FakeClient(ACK_TEXT), **kwargs)
+    return {t.name for t in server._tool_manager.list_tools()}
+
+
+def test_mcp_default_tool_set_is_unchanged_when_disputes_are_off() -> None:
+    assert _names() == {"gate_run", "gate_status"}
+    assert _names(disputes=False) == {"gate_run", "gate_status"}
+
+
+def test_mcp_registers_gate_dispute_only_when_enabled_and_no_host_tools() -> None:
+    assert _names(disputes=True) == {"gate_run", "gate_status", "gate_dispute"}
 
 
 def test_mcp_ack_is_fixed_text() -> None:
@@ -205,3 +214,31 @@ def test_cli_config_enable_cap_and_bad_cap(store: FileStore, capsys) -> None:
     assert _cli(store, ["dispute", "config", "--disable"]) == 0
     assert not store.dispute_policy().enabled
     assert "disabled" in capsys.readouterr().out
+
+
+def test_mcp_gate_dispute_description_names_every_code() -> None:
+    server = build_mcp_server(FakeClient(ACK_TEXT), disputes=True)
+    description = server._tool_manager.get_tool("gate_dispute").description
+    for code in DisputeCode:
+        assert code.value in description
+
+
+class _BrokenLedger(FileStore):
+    def session_disputed(self, task_id: str) -> bool:
+        raise OSError("dispute ledger unreadable")
+
+
+def test_uds_status_fails_closed_when_the_dispute_ledger_is_unreadable(tmp_path: Path) -> None:
+    store = _BrokenLedger(tmp_path / "state")
+    store.save_task(frozen_task(), SEED)
+    _, st = _post(_server(store), "/status", {"taskId": _tid()})
+    assert b"INFRA_ERROR" in st and b"SESSION_DISPUTED" not in st
+
+
+def test_cli_config_can_rewrite_a_corrupt_policy(store: FileStore, tmp_path: Path, capsys) -> None:
+    (tmp_path / "state" / "dispute-policy.json").write_bytes(b'{"enabled": "yes"}')
+    assert _cli(store, ["dispute", "config", "--disable", "--json"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"enabled": False, "cap": 3}
+    assert "unreadable" in captured.err
+    assert store.dispute_policy().enabled is False

@@ -22,3 +22,25 @@ def test_hostile_quoting_cannot_break_out_of_the_literals(tmp_path):
     assert repr(str(socket_path)) in source
     assert repr(task_id) in source
     compile(source, "cheeseless-mcp", "exec")
+
+
+def test_shim_bakes_the_dispute_switch_as_a_literal(tmp_path):
+    socket_path = tmp_path / "v.sock"
+    off = _mcp_shim_source("/usr/bin/python3", tmp_path, socket_path, "a" * 64)
+    on = _mcp_shim_source("/usr/bin/python3", tmp_path, socket_path, "a" * 64, disputes=True)
+    assert "disputes=False" in off
+    assert "disputes=True" in on
+    compile(on, "cheeseless-mcp", "exec")
+
+
+def test_host_reads_the_dispute_switch_from_the_trusted_store_fail_closed(tmp_path):
+    from cheeseless.adapters.outbound.store.file_store import FileStore
+    from cheeseless.app.dispute import configure_disputes
+    from cheeseless.bootstrap import _disputes_enabled
+
+    store = FileStore(tmp_path / "store")
+    assert _disputes_enabled(store) is False
+    configure_disputes(store, enabled=True, cap=3)
+    assert _disputes_enabled(store) is True
+    (tmp_path / "store" / "dispute-policy.json").write_text("{not json", encoding="utf-8")
+    assert _disputes_enabled(store) is False
