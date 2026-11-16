@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from cheeseless.domain import ids
-from cheeseless.domain.task import Criterion, Example
+from cheeseless.domain.task import SPEC_LIMIT, Criterion, Example, check_public_text
 
 CONTRACT_DIR = "acceptance/contract"
 CONTRACT_PATH = f"{CONTRACT_DIR}/criteria.yaml"
@@ -39,6 +39,8 @@ class Contract:
     def __post_init__(self) -> None:
         if self.spec is not None and not isinstance(self.spec, str):
             raise ValueError("spec must be text")
+        if self.spec is not None:
+            check_public_text(self.spec, SPEC_LIMIT, "spec.md")
         ids.lineage_id(self.lineage_id)
         if not self.criteria:
             raise ValueError("the contract needs at least one criterion")

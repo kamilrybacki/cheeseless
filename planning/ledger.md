@@ -641,3 +641,14 @@ ADR 0009 accepted after round 2.
 | Each optional `examples` list contains mappings with exactly `input` and `expected_output`, both strings (empty/multiline allowed); no coercion or executable fields. Explicit `[]` is preserved in canonical bytes. | Minimal public text examples, independent of the candidate language or runner. Omission preserves legacy canonical bytes. |
 | Optional UTF-8 `spec.md` text is a separate contract field, included only when present in canonical bytes and persisted alongside criteria data. Empty files remain distinct from absence. | Bind the public specification without introducing filesystem access into the domain or changing legacy digests. |
 | Project only `criteria.yaml` and a present `spec.md` under `acceptance/`; mount the projected acceptance directory read-only in the agent sandbox. | Public examples remain readable; smoke tests, private notes and hidden tests stay outside the projection. Promote's existing acceptance-path denial remains unchanged. |
+
+#### Stage (a) review (claude-sonnet-5-5, ACCEPT WITH CHANGES)
+
+| # | Finding | Resolution |
+|---|---------|------------|
+| A1 | Smuggling shapes of `spec.md` untested | Accepted: symlink and non-UTF-8 `spec.md` tests added (symlink was already refused). |
+| A2 | Spec and examples skip the description guards | Accepted: spec capped at 64 KiB, example texts at 2000 chars, 20 examples per criterion; `.py::` node ids refused (plain `::` stays legal). |
+| A3 | Non-UTF-8 spec raised a bare `UnicodeDecodeError` | Accepted: now a `FreezeError`. |
+| A4 | Read-only mount skipped when `projection/acceptance` is absent | Rejected for now: the agent profile also serves projections without a contract; `criteria.yaml` always projects for frozen tasks. |
+| A5 | Read-only probe covers overwrite only | Deferred to stage (c), where the author/implementer sandbox profiles get their own probes. |
+| A6 | Other files in `acceptance/contract/` are no longer projected | Accepted as intended: only `criteria.yaml` and `spec.md` are public. |

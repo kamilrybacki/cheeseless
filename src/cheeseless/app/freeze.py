@@ -66,7 +66,12 @@ def _read_contract(repo: Repository, commit: str) -> Contract:
     raw = repo.show(commit, CONTRACT_PATH)
     data = yaml.safe_load(raw.decode("utf-8"))
     paths = {b.path for b in repo.blobs_under(repo.tree_of(commit), "acceptance/contract")}
-    spec = repo.show(commit, SPEC_PATH).decode("utf-8") if SPEC_PATH in paths else None
+    spec = None
+    if SPEC_PATH in paths:
+        try:
+            spec = repo.show(commit, SPEC_PATH).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise FreezeError([f"{SPEC_PATH} must be UTF-8 text"]) from exc
     return parse_contract(data, spec=spec)
 
 

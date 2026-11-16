@@ -1,10 +1,23 @@
 """A frozen task: its freeze digest, budget lineage and public criteria (Q27, I5)."""
 
+import re
 from dataclasses import dataclass
 
 from cheeseless.domain import ids
 
 DESCRIPTION_LIMIT = 500
+SPEC_LIMIT = 64 * 1024
+EXAMPLE_TEXT_LIMIT = 2000
+EXAMPLES_PER_CRITERION = 20
+_NODE_ID = re.compile(r"\.py::")
+
+
+def check_public_text(text: str, limit: int, what: str) -> None:
+    """Public spec/example text: bounded and never naming a test node id (Q44)."""
+    if len(text) > limit:
+        raise ValueError(f"{what} exceeds {limit} characters")
+    if _NODE_ID.search(text):
+        raise ValueError(f"{what} may not name test node ids (Q44)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +30,8 @@ class Example:
     def __post_init__(self) -> None:
         if not isinstance(self.input, str) or not isinstance(self.expected_output, str):
             raise ValueError("examples input and expected_output must be strings")
+        check_public_text(self.input, EXAMPLE_TEXT_LIMIT, "example input")
+        check_public_text(self.expected_output, EXAMPLE_TEXT_LIMIT, "example expected_output")
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +48,8 @@ class Criterion:
             or not all(isinstance(e, Example) for e in self.examples)
         ):
             raise ValueError("examples must be a tuple of Example values")
+        if self.examples is not None and len(self.examples) > EXAMPLES_PER_CRITERION:
+            raise ValueError(f"at most {EXAMPLES_PER_CRITERION} examples per criterion")
         ids.criterion_id(self.id)
         d = self.description
         if not isinstance(d, str) or not d.strip() or len(d) > DESCRIPTION_LIMIT:

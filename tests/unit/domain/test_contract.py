@@ -181,3 +181,36 @@ def test_explicit_empty_examples_are_in_digest() -> None:
     absent = parse_contract(GOOD)
     present = parse_contract(_with(criteria=[{**GOOD["criteria"][0], "examples": []}]))
     assert canonical_contract_bytes(absent) != canonical_contract_bytes(present)
+
+
+def _example(text: str) -> dict[str, object]:
+    return {"input": text, "expected_output": "ok"}
+
+
+def _criterion_with(examples: list[object]) -> dict[str, object]:
+    return {"id": "normalize", "description": "CLI normalises input", "examples": examples}
+
+
+@pytest.mark.parametrize(
+    "examples",
+    [
+        [_example("see tests/test_x.py::test_hidden")],
+        [{"input": "x", "expected_output": "acceptance/t.py::test_case"}],
+        [_example("x" * 2001)],
+        [_example("x")] * 21,
+    ],
+)
+def test_examples_are_capped_and_may_not_name_node_ids(examples: list[object]) -> None:
+    with pytest.raises(ValueError):
+        parse_contract(_with(criteria=[_criterion_with(examples)]))
+
+
+def test_examples_may_use_double_colons_outside_node_ids() -> None:
+    contract = parse_contract(_with(criteria=[_criterion_with([_example("std::vec")])]))
+    assert contract.criteria[0].examples is not None
+
+
+@pytest.mark.parametrize("spec", ["run tests/x.py::test_hidden", "x" * (64 * 1024 + 1)])
+def test_spec_is_capped_and_may_not_name_node_ids(spec: str) -> None:
+    with pytest.raises(ValueError):
+        parse_contract(GOOD, spec=spec)

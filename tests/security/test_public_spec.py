@@ -9,11 +9,12 @@ import pytest
 from cheeseless.adapters.outbound.git.repository import GitRepository
 from cheeseless.adapters.outbound.sandbox import profiles
 from cheeseless.adapters.outbound.store.file_store import FileStore
-from cheeseless.app.freeze import commit, prepare
+from cheeseless.app.freeze import FreezeError, commit, prepare
 from cheeseless.app.promote import PromoteRejected, promote
 from cheeseless.domain.evaluation import TestOutcome
 from cheeseless.domain.result import CriterionResult, Result, sign
 from cheeseless.domain.status import Status
+from cheeseless.ports.repository import SnapshotRejected
 from tests.requirements import needs
 from tests.security.test_projection_canary import _all_objects, _worktree_bytes
 from tests.toy import CANARY, CRITERIA_YAML, commit_all, write_files
@@ -140,3 +141,20 @@ def test_spec_named_directory_cannot_smuggle_hidden_content(toy_repo: Path, tmp_
     repo.create_projection(prepared.projection_tree, dest)
     assert CANARY.encode() not in _all_objects(dest)
     assert not (dest / "acceptance/contract/spec.md").exists()
+
+
+def test_symlinked_spec_is_refused_at_freeze(toy_repo: Path, tmp_path: Path) -> None:
+    write_files(toy_repo, {"acceptance/contract/target.txt": CANARY})
+    (toy_repo / "acceptance/contract/spec.md").symlink_to("target.txt")
+    commit_all(toy_repo)
+    repo = GitRepository(toy_repo)
+    with pytest.raises((SnapshotRejected, FreezeError)):
+        prepare(repo, _FakeRunner([_suite(TestOutcome.FAILED)]), _FakeSandbox(tmp_path))
+
+
+def test_non_utf8_spec_is_a_freeze_error(toy_repo: Path, tmp_path: Path) -> None:
+    (toy_repo / "acceptance/contract/spec.md").write_bytes(b"\xff\xfe broken")
+    commit_all(toy_repo)
+    repo = GitRepository(toy_repo)
+    with pytest.raises(FreezeError, match="UTF-8"):
+        prepare(repo, _FakeRunner([_suite(TestOutcome.FAILED)]), _FakeSandbox(tmp_path))
