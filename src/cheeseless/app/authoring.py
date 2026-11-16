@@ -305,7 +305,7 @@ def approve_freeze(
             source=_trusted_head(repo),
         )
         if prepared.task_id != proposal.proposal_id:
-            raise AuthorError("not_merged", "the default branch no longer reproduces the proposed freeze")
+            raise AuthorError("not_merged", "the default branch no longer reproduces the freeze")
         result = commit(prepared, store, waiver=reason if no_reference else "")
     except BaseException:
         store.save_authoring_state(reserved.released())

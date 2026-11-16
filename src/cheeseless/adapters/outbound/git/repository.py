@@ -125,7 +125,7 @@ class GitRepository:
         return oid(found)
 
     def default_branch_commit(self) -> str:
-        """The remote default branch (``origin/HEAD``) when set, else local ``main``; fail closed."""
+        """The remote default branch (``origin/HEAD``) if set, else local ``main``; fail closed."""
         for spec in ("refs/remotes/origin/HEAD^{commit}", "refs/heads/main^{commit}"):
             found = self._resolve(spec)
             if found is not None:
