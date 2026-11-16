@@ -22,7 +22,7 @@ def test_parser_accepts_approve_and_reference() -> None:
         ["freeze", "--approve", "x", "--as", "me", "--no-reference", "--reason", "r", "--json"]
     )
     assert (a.approve, a.actor, a.no_reference, a.reason, a.json) == ("x", "me", True, "r", True)
-    r = p.parse_args(["reference", "record", "--worktree", "/tmp/w", "--json"])
+    r = p.parse_args(["reference", "record", "--worktree", "worktree-dir", "--json"])
     assert r.reference_command == "record" and r.json
 
 
