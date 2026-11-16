@@ -125,6 +125,7 @@ def _record(
         "flag_evidence": list(cls.evidence),
         "refused_attempt": cls.refused_attempt,
         "transcript_observed": res.transcript_observed,
+        "writes_observed": res.writes_observed,
         "evidence_canary": canary,
         "labels": {
             "counted": labels.counted,

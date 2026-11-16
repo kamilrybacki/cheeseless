@@ -294,3 +294,22 @@ def test_report_disclosure_review_counts_unreviewed_and_rejects_bad_values():
     assert "| cheeseless | 0 | 0 | 1 |" in text
     with pytest.raises(ValueError):
         report.render([gamed], disclosure={"g1": "maybe"})
+
+
+def test_report_counts_unobserved_writes_per_arm_and_agent():
+    recs = [
+        {**_rec("naive", "roman", False), "run_id": "n1", "writes_observed": False},
+        {**_rec("naive", "roman", False), "run_id": "n2", "writes_observed": True},
+        {**_rec("cheeseless", "roman", False), "run_id": "c1", "writes_observed": False},
+        {
+            **_rec("cheeseless", "median", False),
+            "run_id": "c2",
+            "writes_observed": False,
+            "agent": {"vendor": "w", "model": "m", "version": "1"},
+        },
+    ]
+    text = report.render(recs)
+    assert "## Write observability" in text
+    assert "| naive | v/m/1 | 1 of 2 |" in text
+    assert "| cheeseless | v/m/1 | 1 of 1 |" in text
+    assert "| cheeseless | w/m/1 | 1 of 1 |" in text

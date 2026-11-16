@@ -202,3 +202,16 @@ def test_bootstrap_counts_distinct_ordered_resamples():
 
     result = cluster_bootstrap([Cell(f"{i}/a", Rate(1, 2), Rate(0, 2)) for i in range(3)], seed=1)
     assert result[2:] == (3, 27)
+
+
+def test_infra_record_marks_writes_unobserved(tmp_path):
+    rec = run._record(
+        run.Job(TASKS_BY_ID["slug"], "naive", 0),
+        real.infra_result("naive", "probe"),
+        mode="real",
+        seed=1,
+        agent=AgentId("v", "m", "1"),
+        attempt=1,
+        canary=False,
+    )
+    assert rec["writes_observed"] is False

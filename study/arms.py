@@ -56,6 +56,7 @@ class ArmResult:
     gate_runs: int | None
     judge_in_tree: str | None
     transcript_observed: bool
+    writes_observed: bool
     wall_seconds: float
 
 
@@ -80,9 +81,33 @@ def _no_class() -> Classification:
     return Classification({})
 
 
-def _infra(arm: str, reason: str, started: float, observed: bool) -> ArmResult:
+def _writes_observed(
+    events: tuple[Event, ...] | None, write_events: tuple[Event, ...] | None
+) -> bool:
+    """True when any source of write events exists (``()`` is observed, ``None`` is not)."""
+    return events is not None or write_events is not None
+
+
+def _infra(
+    arm: str,
+    reason: str,
+    started: float,
+    events: tuple[Event, ...] | None,
+    write_events: tuple[Event, ...] | None = None,
+) -> ArmResult:
     return ArmResult(
-        arm, INFRA, reason, None, None, None, _no_class(), None, None, observed, _since(started)
+        arm,
+        INFRA,
+        reason,
+        None,
+        None,
+        None,
+        _no_class(),
+        None,
+        None,
+        events is not None,
+        _writes_observed(events, write_events),
+        _since(started),
     )
 
 
@@ -136,7 +161,7 @@ def run_naive(
     in_tree = suite.in_tree_verdict(task, workdir)
     verdict = _verdict_label(pristine)
     if verdict is None or oracle == suite.INFRA:
-        return _infra(ARM_NAIVE, "suite_infra_error", started, events is not None)
+        return _infra(ARM_NAIVE, "suite_infra_error", started, events, write_events)
     return ArmResult(
         arm=ARM_NAIVE,
         status=VALID,
@@ -148,6 +173,7 @@ def run_naive(
         gate_runs=None,
         judge_in_tree=_verdict_label(in_tree),
         transcript_observed=events is not None,
+        writes_observed=_writes_observed(events, write_events),
         wall_seconds=_since(started),
     )
 
@@ -225,10 +251,10 @@ def finish_cheeseless(
         candidate = suite.candidate_snapshot(case.projection, Path(tmp) / "c")
         oracle = suite.oracle_verdict(task, candidate)
     if oracle == suite.INFRA:
-        return _infra(ARM_CHEESELESS, "suite_infra_error", started, events is not None)
+        return _infra(ARM_CHEESELESS, "suite_infra_error", started, events, write_events)
     verdict, reason, judge_reason = _decide(case)
     if verdict is None:
-        return _infra(ARM_CHEESELESS, reason or "infra_error", started, events is not None)
+        return _infra(ARM_CHEESELESS, reason or "infra_error", started, events, write_events)
     return ArmResult(
         arm=ARM_CHEESELESS,
         status=VALID,
@@ -240,6 +266,7 @@ def finish_cheeseless(
         gate_runs=gate_runs,
         judge_in_tree=None,
         transcript_observed=events is not None,
+        writes_observed=_writes_observed(events, write_events),
         wall_seconds=_since(started),
     )
 

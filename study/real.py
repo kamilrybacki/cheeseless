@@ -125,7 +125,7 @@ class AgentTimedOut(RuntimeError):
 def _status(arm: str, status: str, reason: str, started: float) -> ArmResult:
     wall = round(time.monotonic() - started, 3)
     return ArmResult(
-        arm, status, reason, None, None, None, Classification({}), None, None, False, wall
+        arm, status, reason, None, None, None, Classification({}), None, None, False, False, wall
     )
 
 
@@ -268,7 +268,6 @@ def run_cheeseless_real(task: Task, root: Path, agent: StudyAgent, evidence: Pat
                 agent.agent.vendor,
                 home,
                 (str(info["projection_dir"]), str(case.projection)),
-                evidence=evidence,
             )
             write_projection_list(Path(info["projection_dir"]), evidence)
             blocked = info["blocked"].is_set()
