@@ -278,6 +278,37 @@ def test_approve_refuses_when_the_tree_is_not_merged(world):
     assert caught.value.kind == "not_merged"
 
 
+def test_approve_refuses_a_tree_merged_only_into_a_feature_checkout(world):
+    from tests.toy import commit_all, git
+
+    repo, store, tmp = world
+    git(repo.root, "checkout", "-q", "-b", "feature")
+    (repo.root / "acceptance" / "hidden" / "test_extra.py").write_text(
+        "import pytest\n\n\n@pytest.mark.criterion('normalize')\ndef test_x(candidate):\n    pass\n"
+    )
+    commit_all(repo.root, "feature acceptance")
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo), baseline_commit=repo.head_commit())
+    with pytest.raises(AuthorError) as caught:
+        _approve(repo, store, tmp, proposal)
+    assert caught.value.kind == "not_merged"
+
+
+def test_approve_fails_closed_without_a_default_branch(world):
+    from tests.toy import git
+
+    repo, store, tmp = world
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+    git(repo.root, "checkout", "-q", "-b", "work")
+    git(repo.root, "branch", "-q", "-D", "main")
+    with pytest.raises(AuthorError) as caught:
+        _approve(repo, store, tmp, proposal)
+    assert caught.value.kind == "not_merged"
+
+
 def test_approve_requires_a_red_baseline(world):
     repo, store, tmp = world
     _record(repo, store)

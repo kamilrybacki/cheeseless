@@ -33,7 +33,7 @@ from cheeseless.domain.dlp import redact_sentinels, sentinel_problems
 from cheeseless.domain.evaluation import SuiteRun, TestOutcome, freeze_problems
 from cheeseless.domain.freeze import freeze_digest
 from cheeseless.ports.authoring import AuthoringStore
-from cheeseless.ports.repository import Repository
+from cheeseless.ports.repository import Repository, RepositoryError
 from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
 from cheeseless.ports.store import Store
 
@@ -302,10 +302,10 @@ def approve_freeze(
             sandbox,
             author_sandbox=author_sandbox,
             baseline_commit=proposal.baseline_commit,
-            source=repo.head_commit(),
+            source=_trusted_head(repo),
         )
         if prepared.task_id != proposal.proposal_id:
-            raise AuthorError("not_merged", "HEAD no longer reproduces the proposed freeze")
+            raise AuthorError("not_merged", "the default branch no longer reproduces the proposed freeze")
         result = commit(prepared, store, waiver=reason if no_reference else "")
     except BaseException:
         store.save_authoring_state(reserved.released())
@@ -317,10 +317,20 @@ def approve_freeze(
     return result
 
 
+def _trusted_head(repo: Repository) -> str:
+    """The default branch, not whichever checkout the host happens to have open."""
+    try:
+        return repo.default_branch_commit()
+    except RepositoryError as exc:
+        raise AuthorError("not_merged", str(exc)) from exc
+
+
 def _ready(repo: Repository, store: AuthoringStore, proposal: Proposal, no_reference: bool) -> None:
-    head = repo.head_commit()
+    head = _trusted_head(repo)
     if repo.tree_of(head, "acceptance") != proposal.acceptance_tree:
-        raise AuthorError("not_merged", "the proposed acceptance tree is not merged into HEAD")
+        raise AuthorError(
+            "not_merged", "the proposed acceptance tree is not merged into the default branch"
+        )
     if not no_reference:
         problem = _crosscheck_problem(repo, store, proposal)
         if problem is not None:

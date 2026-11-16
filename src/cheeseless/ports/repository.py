@@ -33,6 +33,10 @@ class Repository(Protocol):
 
     def head_commit(self) -> str: ...
 
+    def default_branch_commit(self) -> str:
+        """Commit of the trusted default branch; ``RepositoryError`` if it cannot be resolved."""
+        ...
+
     def tree_of(self, commit: str, path: str = "") -> str:
         """Tree oid of ``path`` in ``commit`` ("" means the root tree)."""
         ...

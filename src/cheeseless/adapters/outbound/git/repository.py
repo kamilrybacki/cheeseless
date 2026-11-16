@@ -124,6 +124,14 @@ class GitRepository:
             raise RepositoryError("the repository has no commit at HEAD")
         return oid(found)
 
+    def default_branch_commit(self) -> str:
+        """The remote default branch (``origin/HEAD``) when set, else local ``main``; fail closed."""
+        for spec in ("refs/remotes/origin/HEAD^{commit}", "refs/heads/main^{commit}"):
+            found = self._resolve(spec)
+            if found is not None:
+                return oid(found)
+        raise RepositoryError("the default branch cannot be resolved (no origin/HEAD or main)")
+
     def tree_of(self, commit: str, path: str = "") -> str:
         spec = f"{oid(commit)}:{rel_path(path)}" if path else f"{oid(commit)}^{{tree}}"
         found = self._resolve(spec)
