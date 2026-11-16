@@ -523,7 +523,7 @@ class UdsVerifierServer:
         if sandbox is None:
             return gate_error(ErrorCode.INFRA_ERROR)
         if kind == "check":
-            return gate_author_check(s.repo, sandbox, s.worktree)
+            return gate_author_check(s.repo, sandbox, store, s.worktree)
         return gate_author_crosscheck(s.repo, sandbox, store, s.worktree)
 
     def _dispute(self, wfile: Any, body: bytes) -> None:

@@ -368,8 +368,9 @@ def test_a_reference_swapped_after_the_reservation_is_refused_and_rolled_back(ho
     proposal = uc.freeze_propose(repo, store, _source(repo))
 
     def swap():
-        (repo.root / "ref_extra.txt").write_text("swapped reference\n")
-        _record(repo, store)
+        # A writer that passed its closure check before the reservation: straight to the store.
+        contract = uc.read_contract(repo, _source(repo))
+        store.save_reference(contract.lineage_id, uc.spec_of(contract), "e" * 40)
 
     store.after_reserve = swap
     with pytest.raises(AuthorError) as caught:
@@ -433,3 +434,44 @@ def test_approve_runs_the_suite_only_in_the_author_sandbox(world):
     # collection/RED run plus the flakiness re-run, both contained
     assert len(sandbox.calls) == 2
     assert all(c[1] is not None and "run" in c[2] for c in sandbox.calls)
+
+
+def _frozen_world(world):
+    repo, store, tmp = world
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+    _approve(repo, store, tmp, proposal)
+    return repo, store
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda repo, store: uc.author_check(
+            repo, FakeAuthorSandbox(_line()), _source(repo), store=store
+        ),
+        lambda repo, store: uc.record_reference(repo, store, repo.root, _source(repo)),
+        lambda repo, store: uc.author_crosscheck(
+            repo, FakeAuthorSandbox(_line()), store, _source(repo)
+        ),
+        lambda repo, store: uc.reference_failed(store, uc.read_contract(repo, _source(repo))),
+        lambda repo, store: uc.start_reference(store, uc.read_contract(repo, _source(repo))),
+        lambda repo, store: uc.freeze_propose(repo, store, _source(repo)),
+    ],
+    ids=["check", "record", "crosscheck", "failed", "retry", "propose"],
+)
+def test_every_author_operation_is_closed_after_the_freeze(world, op):
+    repo, store = _frozen_world(world)
+    with pytest.raises(uc.AuthorError) as err:
+        op(repo, store)
+    assert err.value.kind == "frozen"
+
+
+def test_the_gate_maps_a_closed_check_to_author_refused(world):
+    from cheeseless.app import author_gate
+    from cheeseless.domain.errors import ErrorCode, GateError
+
+    repo, store = _frozen_world(world)
+    out = author_gate.gate_author_check(repo, FakeAuthorSandbox(_line()), store, repo.root)
+    assert isinstance(out, GateError) and out.code is ErrorCode.AUTHOR_REFUSED

@@ -113,7 +113,7 @@ def test_author_failures_do_not_leak_hidden_content(monkeypatch) -> None:
     monkeypatch.setattr(author_gate, "freeze_propose", boom)
     repo = SimpleNamespace(snapshot=lambda w: "a" * 40)
     for out in (
-        author_gate.gate_author_check(repo, object(), "wt"),
+        author_gate.gate_author_check(repo, object(), object(), "wt"),
         author_gate.gate_freeze_propose(repo, object(), "wt"),
     ):
         assert CANARY not in repr(out)

@@ -35,10 +35,10 @@ def _blocked(repo: Repository, store: AuthorStore, source: str) -> bool:
 
 
 def gate_author_check(
-    repo: Repository, sandbox: AuthorSandbox, worktree: Path
+    repo: Repository, sandbox: AuthorSandbox, store: AuthorStore, worktree: Path
 ) -> AuthorCheckResult | GateError:
     try:
-        return author_check(repo, sandbox, repo.snapshot(worktree))
+        return author_check(repo, sandbox, repo.snapshot(worktree), store=store)
     except AuthorError:
         return gate_error(ErrorCode.AUTHOR_REFUSED)
     except Exception:  # noqa: BLE001

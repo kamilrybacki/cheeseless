@@ -61,6 +61,14 @@ def spec_of(contract: Contract) -> str:
     return spec_digest(canonical_contract_bytes(contract))
 
 
+def _require_open(store: AuthoringStore, contract: Contract) -> AuthoringState:
+    """The authoring state, or a refusal when the task is frozen or being frozen."""
+    state = store.authoring_state(contract.lineage_id, spec_of(contract))
+    if state.sealed:
+        raise AuthorError("frozen", "the task is frozen; author operations are closed")
+    return state
+
+
 def _baseline(repo: Repository, baseline_commit: str | None) -> str:
     return baseline_commit or repo.head_commit()
 
@@ -108,12 +116,20 @@ def _hidden_and_public(
     return hidden, public
 
 
-def author_check(repo: Repository, sandbox: AuthorSandbox, source: str) -> AuthorCheckResult:
+def author_check(
+    repo: Repository,
+    sandbox: AuthorSandbox,
+    source: str,
+    *,
+    store: AuthoringStore | None = None,
+) -> AuthorCheckResult:
     """Collect the author's tree and check it against the contract (stage d, advisory)."""
     try:
         contract = read_contract(repo, source)
     except (FreezeError, ValueError, OSError) as exc:
         return AuthorCheckResult(False, (redact_sentinels(f"contract: {exc}"),), 0)
+    if store is not None:
+        _require_open(store, contract)
     hidden, public = _hidden_and_public(repo, source)
     problems = list(sentinel_problems(hidden, public))
     suite = _run_driver(repo, sandbox, source, "collect", None, ())
@@ -130,6 +146,7 @@ def author_check(repo: Repository, sandbox: AuthorSandbox, source: str) -> Autho
 def record_reference(repo: Repository, store: AuthoringStore, worktree: Path, source: str) -> str:
     """Snapshot the reference worktree and bind it to the current spec (host-side)."""
     contract = read_contract(repo, source)
+    _require_open(store, contract)
     tree = repo.snapshot(worktree)
     store.save_reference(contract.lineage_id, spec_of(contract), tree)
     return tree
@@ -150,6 +167,7 @@ def author_crosscheck(
     """
     contract = read_contract(repo, source)
     spec = spec_of(contract)
+    _require_open(store, contract)
     saved = store.load_reference(contract.lineage_id)
     if saved is None or saved[0] != spec:
         raise AuthorError("no_reference", "no reference snapshot is bound to the current spec")
@@ -185,14 +203,14 @@ def author_crosscheck(
 def reference_failed(store: AuthoringStore, contract: Contract) -> AuthoringState:
     """A reference session failed: the task is blocked and the author can see it."""
     spec = spec_of(contract)
-    state = store.authoring_state(contract.lineage_id, spec).reference_failed(spec)
+    state = _require_open(store, contract).reference_failed(spec)
     store.save_authoring_state(state)
     return state
 
 
 def start_reference(store: AuthoringStore, contract: Contract) -> AuthoringState:
     """Start a reference retry; refused (``AuthoringError``) after two retries."""
-    state = store.authoring_state(contract.lineage_id, spec_of(contract))
+    state = _require_open(store, contract)
     if state.phase is not TaskPhase.REFERENCE_BLOCKED:
         return state
     state = state.retry_started()
@@ -205,9 +223,7 @@ def freeze_propose(
 ) -> Proposal:
     contract = read_contract(repo, source)
     spec = spec_of(contract)
-    state = store.authoring_state(contract.lineage_id, spec)
-    if state.sealed:
-        raise AuthorError("frozen", "the task is frozen; author operations are closed")
+    state = _require_open(store, contract)
     if state.phase is TaskPhase.PROPOSED:
         state = state.stale()
     baseline = _baseline(repo, baseline_commit)

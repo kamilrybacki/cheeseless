@@ -76,7 +76,7 @@ def test_author_routes_call_the_gate(monkeypatch):
     monkeypatch.setattr(
         uds_server,
         "gate_author_check",
-        lambda repo, sandbox, wt: AuthorCheckResult(False, ("bad",), 2),
+        lambda repo, sandbox, store, wt: AuthorCheckResult(False, ("bad",), 2),
     )
     monkeypatch.setattr(
         uds_server,

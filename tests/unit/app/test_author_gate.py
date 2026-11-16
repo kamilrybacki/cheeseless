@@ -21,7 +21,7 @@ def _boom(kind):
 def test_check_returns_the_result(monkeypatch):
     result = AuthorCheckResult(True, (), 3)
     monkeypatch.setattr(author_gate, "author_check", lambda *a, **k: result)
-    assert author_gate.gate_author_check(_Repo(), object(), "wt") == result
+    assert author_gate.gate_author_check(_Repo(), object(), object(), "wt") == result
 
 
 @pytest.mark.parametrize("kind", ["frozen", "not_proposed", "no_reference"])
@@ -50,6 +50,6 @@ def test_unexpected_failures_are_infra_errors(monkeypatch):
         raise RuntimeError("secret detail")
 
     monkeypatch.setattr(author_gate, "author_check", raiser)
-    out = author_gate.gate_author_check(_Repo(), object(), "wt")
+    out = author_gate.gate_author_check(_Repo(), object(), object(), "wt")
     assert isinstance(out, GateError) and out.code is ErrorCode.INFRA_ERROR
     assert "secret" not in repr(out)
