@@ -594,3 +594,31 @@ a human or an agent.
 | T7 | Refinement of T4 (advisor review): the reference lives in the trusted store as a snapshot tree bound to the spec digest, not in `acceptance/reference/`, because an author-writable reference could be forged to agree with the tests and a repo copy would add a hidden artifact class. The reference session gets the implementer projection plus `spec.md`, no tests, no gate tools; feedback only from public `examples`. |
 | T8 | Dispute is opt-in per repo, default off, because the study imports this checkout and a new implementer tool would change its treatment arm. |
 | T6 | ADR written by claude-opus-5-5; cross-vendor review by Codex; implementation delegated in TDD stages with `tests/security/` canaries. |
+
+### ADR 0009 review round 1 (2026-11-16)
+
+Reviewers: gpt-6.1-sol (Codex, other vendor; verdict REJECT) and claude-haiku-5-5 (verdict
+ACCEPT WITH CHANGES). Every finding is addressed in the revised ADR or in
+`planning/two-sided-gate.md`; none is rejected.
+
+| # | Source | Finding | Resolution |
+|---|--------|---------|------------|
+| R1 | Codex B1 | Author tests run in the unsandboxed host runner before approval | Accepted: author checks run the suite in a runner sandbox (no network, no store, no repo write); output is advisory, test-strength review stays the control. |
+| R2 | Codex M2 | Branch prefixes do not authenticate roles; implementer could call author endpoints | Accepted: role is host-bound per session; the UDS server serves only that role's operations. CI rejects unknown branch classes. |
+| R3 | Codex M3, Haiku M3 | Digests for reference and crosscheck undefined | Accepted: spec digest = contract bytes; crosscheck record binds acceptance tree, contract, baseline and reference snapshot; test-only change needs a fresh crosscheck only. |
+| R4 | Codex M4 | `--no-reference` read as waiving baseline RED | Accepted: it waives only the crosscheck; needs `--reason`; ADR 0005 preconditions stay. |
+| R5 | Codex M5 | DISPUTED vs stored PASS, in-flight runs, restart | Accepted: dispute under the task lock; disputed session publishes nothing and cannot promote; a session holding a PASS cannot dispute; never resumes. |
+| R6 | Codex M6 | No resolution operation; false disclosure claim | Accepted: `cheeseless dispute resolve --upheld/--rejected`; public criterion only; uniform ack; consequence reworded. |
+| R7 | Codex M7 | DISPUTED would break the v1 Result encoding | Accepted: DISPUTED is a session state beside results, not a `Result` status. |
+| R8 | Codex M8 | CI judge has no author path | Accepted: separate author CI job on `spec/` PRs, no implementation verdict; approve requires the tree merged on the default branch, so drift checks stay unchanged. |
+| R9 | Haiku B1 | Approver separation unenforced (same UID) | Accepted: approve/resolve/grant need the trusted store, which no sandbox mounts; `--as <actor>` logged; security canary required. |
+| R10 | Haiku B2 | Free-text dispute reason is a prompt-injection path to the orchestrator | Accepted: closed enum code is the machine field; capped note only with `--show-note`, labelled untrusted. |
+| R11 | Haiku M4 | No state machine or sequencing | Accepted: `planning/two-sided-gate.md` (working material, not ADR). |
+| R12 | Haiku M5 | Reference failure leaves only `--no-reference` | Accepted: reference failure is an author-visible BLOCKED state, retries capped; waiver needs a reason. |
+| R13 | Haiku M6 | Repeated dispute/re-freeze is a holdout oracle | Accepted: disputes capped per lineage (default 3); budget stays lineage-wide. |
+| R14 | Haiku M7 | Crosscheck boundary unstated | Accepted with R1. |
+| R15 | Haiku m8 | Author promote precondition unnamed | Accepted: `author_check` pass on the same tree. |
+| R16 | Haiku m9 | Implementer never sees `spec.md` | Accepted: `spec.md` and examples projected read-only to implementer and reference. |
+| R17 | Haiku m10 | Post-freeze crosscheck budget | Accepted: author tools are refused after approval. |
+| R18 | Haiku m11 | `reviewers` empty | Accepted: filled in. |
+| R19 | Codex note | 31 lines, template followed | No change needed; revision is 34 lines. |
