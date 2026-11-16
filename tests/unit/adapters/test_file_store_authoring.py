@@ -213,3 +213,20 @@ def test_reference_and_crosscheck_publication_is_conditional_on_the_state_versio
     current = store.authoring_state("demo", SPEC)
     store.save_reference("demo", SPEC, OID, expected_version=current.version)
     assert store.load_reference("demo") == (SPEC, OID)
+
+
+def test_a_waiver_reason_of_none_is_not_the_absence_of_a_waiver(store: FileStore) -> None:
+    import dataclasses
+    import json
+
+    from tests.factories import frozen_task
+
+    plain = frozen_task()
+    store.save_task(dataclasses.replace(plain, waiver="none"), bytes(range(32)))
+    path = store.root / "tasks" / f"{plain.task.task_id}.json"
+    assert store.load_task(plain.task.task_id)[0].waiver == "none"
+    data = json.loads(path.read_bytes())
+    del data["waiver"]
+    path.write_bytes(json.dumps(data).encode())
+    with pytest.raises(StoreError, match="waiver"):
+        store.load_task(plain.task.task_id)

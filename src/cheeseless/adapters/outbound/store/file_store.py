@@ -90,7 +90,7 @@ class FileStore(AuthoringStoreMixin):
 
         The MAC covers a versioned envelope that also states the *absence* of a waiver, so
         deleting a waiver (or the whole field) from a record cannot pass as "no waiver"."""
-        body = f"waiver:v1:{waiver}" if waiver else "waiver:v1:none"
+        body = f"waiver:v1:present:{len(waiver)}:{waiver}" if waiver else "waiver:v1:absent"
         message = b"cheeseless-waiver-v1\0" + task_id.encode() + b"\0" + body.encode()
         return hmac.new(self.hmac_key(), message, hashlib.sha256).hexdigest()
 
