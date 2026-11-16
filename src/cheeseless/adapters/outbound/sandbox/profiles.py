@@ -13,6 +13,7 @@ read-only system directories and the paths a profile names are visible.
 import os
 import re
 import secrets
+import stat
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -170,14 +171,25 @@ def build(
     ]
 
 
-def _acceptance_dir(projection: Path) -> Path:
-    """The projected ``acceptance/`` tree, or SandboxError: the mount fails closed."""
+def open_acceptance(projection: Path) -> int:
+    """An O_PATH fd on the projected ``acceptance/`` directory, or SandboxError (fail closed).
+
+    The caller owns the fd and closes it. Mounting through the fd, not the path, closes the
+    window in which a path could be swapped for a symlink between the check and the mount.
+    """
     acceptance = projection / "acceptance"
-    if acceptance.is_symlink() or not acceptance.is_dir():
-        raise SandboxError(
-            f"the projection has no acceptance/ directory to mount read-only: {acceptance}"
-        )
-    return acceptance
+    message = f"the projection has no acceptance/ directory to mount read-only: {acceptance}"
+    try:
+        fd = os.open(acceptance, os.O_PATH | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError as exc:  # missing, a symlink (ELOOP) or not a directory (ENOTDIR)
+        raise SandboxError(message) from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise SandboxError(message)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 def agent(
@@ -189,19 +201,20 @@ def agent(
     read_only: Sequence[Path],
     env: Sequence[tuple[str, str]],
     command: Sequence[str],
+    acceptance_fd: int,
     pinned_read_only: Sequence[tuple[int, str]] = (),
     seccomp_fd: int | None = None,
     info_fd: int | None = None,
 ) -> list[str]:
     """The coding agent: it sees the projection and talks only through the sockets."""
-    acceptance = _acceptance_dir(projection)
+    acceptance = projection / "acceptance"
     args = [bwrap, *_NAMESPACES, *_system(), *_try_binds((*ETC_ALLOW, *AGENT_ETC_ALLOW))]
     args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", SANDBOX_TMP]
     for path in (projection, home, *sockets):
         args += ["--bind", str(path), str(path)]
-    # Applied after the writable projection bind, so it lands on top of it. A plain
-    # --ro-bind (never -try): bwrap refuses to start if the source disappears.
-    args += ["--ro-bind", str(acceptance), str(acceptance)]
+    # Applied after the writable projection bind, so it lands on top of it. Bound by the fd
+    # opened with O_NOFOLLOW (see open_acceptance), so a swapped path cannot redirect it.
+    args += ["--ro-bind-fd", str(acceptance_fd), str(acceptance)]
     for path in read_only:
         args += ["--ro-bind", str(path), str(path)]
     for fd, destination in pinned_read_only:

@@ -79,15 +79,27 @@ def rename_mount():
     os.rename(acc, root / "acceptance-old")
 
 
+(root / "src.py").write_text("writable")
+
+
+def link_in():
+    os.link(root / "src.py", acc / "contract/linked.py")
+
+
+def overwrite_canary():
+    (acc / "notes.txt").write_text("tampered")
+
+
 for fn in (
     overwrite, append, create, delete, rename_within, rename_out,
-    chmod, mkdir, rmdir_mount, rename_mount,
+    chmod, mkdir, rmdir_mount, rename_mount, link_in, overwrite_canary,
 ):
     attempt(fn.__name__, fn)
-(root / "src.py").write_text("writable")
 (root / "src").mkdir()
 (root / "src/mod.py").write_text("writable")
 results["readable"] = (acc / "contract/spec.md").read_text()
+# The canary is read back inside the sandbox after every attempt; it is never printed.
+results["canary_intact"] = (acc / "notes.txt").read_text() == sys.argv[1]
 print(json.dumps(results))
 """
 
@@ -114,7 +126,7 @@ def _projection(tmp_path: Path) -> tuple[Path, Path]:
     return projection, home
 
 
-def _argv(projection: Path, home: Path, command: tuple[str, ...]) -> list[str]:
+def _argv(projection: Path, home: Path, command: tuple[str, ...], fd: int) -> list[str]:
     return profiles.agent(
         bwrap=BWRAP,
         projection=projection,
@@ -123,31 +135,35 @@ def _argv(projection: Path, home: Path, command: tuple[str, ...]) -> list[str]:
         read_only=(),
         env=(),
         command=command,
+        acceptance_fd=fd,
     )
 
 
 def test_argv_binds_acceptance_read_only_after_the_projection(tmp_path: Path) -> None:
     projection, home = _projection(tmp_path)
-    argv = _argv(projection, home, ("true",))
+    fd = profiles.open_acceptance(projection)
+    try:
+        argv = _argv(projection, home, ("true",), fd)
+    finally:
+        os.close(fd)
     acceptance = str(projection / "acceptance")
     ro = [
-        i for i in range(len(argv) - 2) if argv[i : i + 3] == ["--ro-bind", acceptance, acceptance]
+        i for i in range(len(argv) - 2) if argv[i : i + 3] == ["--ro-bind-fd", str(fd), acceptance]
     ]
     bind = ["--bind", str(projection), str(projection)]
     rw = [i for i in range(len(argv) - 2) if argv[i : i + 3] == bind]
     assert len(ro) == 1
     assert rw
     assert rw[0] < ro[0]
-    assert ["--ro-bind-try", acceptance, acceptance] not in [
-        argv[i : i + 3] for i in range(len(argv))
-    ]
+    plain = [argv[i : i + 3] for i in range(len(argv) - 2) if argv[i].startswith("--ro-bind")]
+    assert not [a for a in plain if a[0] != "--ro-bind-fd" and acceptance in a[1:]]
 
 
 def test_missing_acceptance_fails_closed(tmp_path: Path) -> None:
     projection = tmp_path / "projection"
     projection.mkdir()
     with pytest.raises(SandboxError, match="acceptance"):
-        _argv(projection, tmp_path / "home", ("true",))
+        profiles.open_acceptance(projection)
 
 
 def test_acceptance_that_is_a_file_fails_closed(tmp_path: Path) -> None:
@@ -155,7 +171,7 @@ def test_acceptance_that_is_a_file_fails_closed(tmp_path: Path) -> None:
     projection.mkdir()
     (projection / "acceptance").write_text("not a directory")
     with pytest.raises(SandboxError, match="acceptance"):
-        _argv(projection, tmp_path / "home", ("true",))
+        profiles.open_acceptance(projection)
 
 
 def test_symlinked_acceptance_fails_closed(tmp_path: Path) -> None:
@@ -165,7 +181,7 @@ def test_symlinked_acceptance_fails_closed(tmp_path: Path) -> None:
     elsewhere.mkdir()
     (projection / "acceptance").symlink_to(elsewhere)
     with pytest.raises(SandboxError, match="acceptance"):
-        _argv(projection, tmp_path / "home", ("true",))
+        profiles.open_acceptance(projection)
 
 
 @needs(os.access(BWRAP, os.X_OK), "needs bubblewrap")
@@ -174,11 +190,18 @@ def test_every_mutation_of_acceptance_is_refused_and_the_canary_is_untouched(
 ) -> None:
     projection, home = _projection(tmp_path)
     before = _tree_digest(projection / "acceptance")
-    argv = _argv(projection, home, ("/usr/bin/python3", "-c", _PROBE))
-    done = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)  # noqa: S603
+    fd = profiles.open_acceptance(projection)
+    try:
+        argv = _argv(projection, home, ("/usr/bin/python3", "-c", _PROBE, CANARY), fd)
+        done = subprocess.run(  # noqa: S603
+            argv, capture_output=True, text=True, timeout=60, check=False, pass_fds=(fd,)
+        )
+    finally:
+        os.close(fd)
     assert done.returncode == 0, done.stderr
     results = json.loads(done.stdout)
     assert results.pop("readable") == "public spec"
+    assert results.pop("canary_intact") is True
     refused = {
         "overwrite",
         "append",
@@ -190,6 +213,8 @@ def test_every_mutation_of_acceptance_is_refused_and_the_canary_is_untouched(
         "mkdir",
         "rmdir_mount",
         "rename_mount",
+        "link_in",
+        "overwrite_canary",
     }
     assert set(results) == refused
     assert all(code != 0 for code in results.values()), results
@@ -199,4 +224,6 @@ def test_every_mutation_of_acceptance_is_refused_and_the_canary_is_untouched(
     assert _tree_digest(projection / "acceptance") == before
     assert not (projection / "escaped.md").exists()
     assert not (projection / "acceptance-old").exists()
+    assert not (projection / "acceptance/contract/linked.py").exists()
+    assert (projection / "acceptance/notes.txt").read_text() == CANARY
     assert CANARY not in done.stdout + done.stderr

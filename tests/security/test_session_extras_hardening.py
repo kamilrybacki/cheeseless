@@ -152,6 +152,7 @@ def test_mount_parent_symlink_swap_agent_sees_pinned_tree(tmp_path: Path) -> Non
     home = tmp_path / "home"
     home.mkdir()
     probe = "import sys; print(open(sys.argv[1] + '/data.txt', encoding='utf-8').read(), end='')"
+    acceptance_fd = profiles.open_acceptance(projection)
     argv = profiles.agent(
         bwrap="/usr/bin/bwrap",
         projection=projection,
@@ -161,17 +162,19 @@ def test_mount_parent_symlink_swap_agent_sees_pinned_tree(tmp_path: Path) -> Non
         pinned_read_only=[(mount.fd, str(mounted))],
         env=(),
         command=["/usr/bin/python3", "-c", probe, str(mounted)],
+        acceptance_fd=acceptance_fd,
     )
     try:
         done = subprocess.run(  # noqa: S603 - argv built from validated parts
             argv,
-            pass_fds=(mount.fd,),
+            pass_fds=(mount.fd, acceptance_fd),
             capture_output=True,
             text=True,
             timeout=60,
             check=False,
         )
     finally:
+        os.close(acceptance_fd)
         _close(extras.read_only)
     assert done.returncode == 0, done.stderr
     assert done.stdout == "original"

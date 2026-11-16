@@ -653,6 +653,7 @@ def host_session(
     proc: subprocess.Popen[Any] | None = None
     ns_fd: int | None = None
     seccomp_fd: int | None = None
+    acceptance_fd: int | None = None
     ready_path: Path | None = None
     egress_ready: Path | None = None
     blocked = threading.Event()
@@ -802,6 +803,8 @@ def host_session(
         command = _bridge_command(python, ready_path, egress_ready, agent_args)
 
         seccomp_fd = seccomp.program_fd()
+        acceptance_fd = profiles.open_acceptance(projection_dir)
+        pinned_acceptance = acceptance_fd
         env = _merge_env(agent_env, egress_ready_env, extras.env)
 
         pinned_read_only = tuple((mount.fd, str(mount.path)) for mount in extras.read_only)
@@ -813,6 +816,7 @@ def host_session(
                 sockets=[socket_path, egress_socket],
                 home=home_dir,
                 read_only=[runtime.root, python_root, proxy.ca_cert_path],
+                acceptance_fd=pinned_acceptance,
                 pinned_read_only=pinned_read_only,
                 env=env,
                 command=command,
@@ -821,10 +825,14 @@ def host_session(
             )
 
         mount_fds = tuple(mount.fd for mount in extras.read_only)
-        proc, ns_fd = _launch_agent(build_argv, (*mount_fds, seccomp_fd), stdio=agent_stdio)
+        proc, ns_fd = _launch_agent(
+            build_argv, (*mount_fds, seccomp_fd, acceptance_fd), stdio=agent_stdio
+        )
         holder["proc"] = proc
         os.close(seccomp_fd)
         seccomp_fd = None
+        os.close(acceptance_fd)
+        acceptance_fd = None
         session.expected_pidns_fd = ns_fd
         _wait_for_bridge(egress_ready, proc)
         ready_path.write_text("ready\n", encoding="ascii")
@@ -861,11 +869,12 @@ def host_session(
         if session is not None:
             session.close_namespace_fds()
         ns_fd = None
-        if seccomp_fd is not None:
-            try:
-                os.close(seccomp_fd)
-            except OSError:
-                pass
+        for leftover in (seccomp_fd, acceptance_fd):
+            if leftover is not None:
+                try:
+                    os.close(leftover)
+                except OSError:
+                    pass
         if home_dir is not None:
             force_remove(home_dir)
         if egress_dir is not None:

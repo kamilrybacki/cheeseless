@@ -1,6 +1,7 @@
 """Sandbox adapter: the seccomp program and the bwrap profiles (ADR 0003, ledger I2)."""
 
 import json
+import os
 import struct
 import sys
 from pathlib import Path
@@ -119,15 +120,20 @@ def test_agent_profile_binds_projection_and_sockets(tmp_path: Path) -> None:
     (proj / "acceptance").mkdir(parents=True)
     sock = tmp_path / "run" / "verifier.sock"
     egress = tmp_path / "run" / "egress.sock"
-    argv = profiles.agent(
-        bwrap="/usr/bin/bwrap",
-        projection=proj,
-        sockets=(sock, egress),
-        home=tmp_path / "home",
-        read_only=(Path("/opt/agent"),),
-        env=(("CHEESELESS_SOCKET", str(sock)),),
-        command=("agent",),
-    )
+    fd = profiles.open_acceptance(proj)
+    try:
+        argv = profiles.agent(
+            bwrap="/usr/bin/bwrap",
+            projection=proj,
+            sockets=(sock, egress),
+            home=tmp_path / "home",
+            read_only=(Path("/opt/agent"),),
+            env=(("CHEESELESS_SOCKET", str(sock)),),
+            command=("agent",),
+            acceptance_fd=fd,
+        )
+    finally:
+        os.close(fd)
     binds = _pairs(argv, "--bind", 2)
     assert (str(proj), str(proj)) in binds
     assert (str(sock), str(sock)) in binds
@@ -135,9 +141,30 @@ def test_agent_profile_binds_projection_and_sockets(tmp_path: Path) -> None:
     assert (str(tmp_path / "home"), str(tmp_path / "home")) in binds
     assert ("/opt/agent", "/opt/agent") in _pairs(argv, "--ro-bind", 2)
     accept = str(proj / "acceptance")
-    assert (accept, accept) in _pairs(argv, "--ro-bind", 2)
+    assert (str(fd), accept) in _pairs(argv, "--ro-bind-fd", 2)
+    assert accept not in [dest for _src, dest in _pairs(argv, "--ro-bind", 2)]
     assert "--unshare-net" in argv
     assert ("HOME", str(tmp_path / "home")) in _pairs(argv, "--setenv", 2)
+
+
+def test_agent_profile_refuses_symlinked_acceptance(tmp_path: Path) -> None:
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (proj / "acceptance").symlink_to(elsewhere)
+    with pytest.raises(SandboxError, match="acceptance"):
+        profiles.open_acceptance(proj)
+
+
+def test_agent_profile_refuses_missing_or_non_directory_acceptance(tmp_path: Path) -> None:
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    with pytest.raises(SandboxError, match="acceptance"):
+        profiles.open_acceptance(proj)
+    (proj / "acceptance").write_text("not a directory")
+    with pytest.raises(SandboxError, match="acceptance"):
+        profiles.open_acceptance(proj)
 
 
 def test_profiles_refuse_reserved_env() -> None:
