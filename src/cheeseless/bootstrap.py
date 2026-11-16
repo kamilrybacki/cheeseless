@@ -482,6 +482,7 @@ def serve_uds(
     expected_pidns_inode: int | None = None,
     expected_pidns_fd: int | None = None,
     namespace_fd: int | None = None,
+    role: str = "implementer",
 ) -> int:
     ctx = build_context(state_dir, cwd)
     if task_id is None:
@@ -508,6 +509,8 @@ def serve_uds(
         expected_pidns_inode=expected_pidns_inode,
         expected_pidns_fd=expected_pidns_fd,
         namespace_fd=namespace_fd,
+        role=role,
+        author_sandbox=ctx.sandbox if role == "author" else None,  # type: ignore[arg-type]
     )
     server = UdsVerifierServer(socket_path, session, socket_dir_owned=dir_owned)
     try:
@@ -523,12 +526,13 @@ def serve_mcp(
     task_id: str | None = None,
     timeout: float = 10.0,
     disputes: bool = False,
+    author: bool = False,
 ) -> int:
     """MCP stdio server. It needs only the verifier socket and task, never a store."""
     if uds_socket is None:
         raise ValueError("uds_socket is required")
     client = UdsVerifierClient(uds_socket, task_id=task_id, timeout=timeout)
-    run_stdio(build_mcp_server(client, disputes=disputes))
+    run_stdio(build_mcp_server(client, disputes=disputes, author=author))
     return 0
 
 
@@ -581,6 +585,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout=getattr(args, "timeout", 300.0),
             tool_version=getattr(args, "tool_version", "0.1.0"),
             expected_pidns_fd=getattr(args, "pidns_fd", None),
+            role=getattr(args, "role", "implementer"),
         )
     if args.command == "serve-mcp":
         return serve_mcp(
@@ -588,6 +593,7 @@ def main(argv: list[str] | None = None) -> int:
             task_id=getattr(args, "task", None),
             timeout=getattr(args, "timeout", 10.0),
             disputes=bool(getattr(args, "disputes", False)),
+            author=bool(getattr(args, "author", False)),
         )
     if args.command == "session":
         return _run_session_command(args, agent)

@@ -140,6 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
     uds.add_argument("--timeout", type=float, default=300.0)
     uds.add_argument("--tool-version", default="0.1.0")
     uds.add_argument(
+        "--role",
+        choices=("implementer", "author"),
+        default="implementer",
+        help="Session role; an author session serves only the author routes.",
+    )
+    uds.add_argument(
         "--pidns-fd",
         type=int,
         default=None,
@@ -154,6 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--disputes",
         action="store_true",
         help="List gate_dispute (the verifier still enforces the host's dispute policy).",
+    )
+    mcp.add_argument(
+        "--author",
+        action="store_true",
+        help="List the author tools (check, crosscheck, propose); never approve.",
     )
 
     export = sub.add_parser("ci-export", help="Write the secret CI bundle (0600, never printed).")

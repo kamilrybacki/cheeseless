@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from cheeseless.adapters.inbound.proto import error_pb2, result_pb2, verifier_pb2
 from cheeseless.domain.disclosure import AgentView
 from cheeseless.domain.dispute import ACK_TEXT, DisputeCode
@@ -373,6 +375,71 @@ def dispute_response_to_outcome(msg: verifier_pb2.DisputeResponse) -> str | Gate
 
 
 def serialize_dispute_response(msg: verifier_pb2.DisputeResponse) -> bytes:
+    from google.protobuf import json_format
+
+    return json_format.MessageToJson(msg).encode("utf-8")  # type: ignore[no-any-return]
+
+
+# -- author role (ADR 0009): check, crosscheck, propose ------------------------------------
+
+_AUTHOR_REQUESTS = {
+    "check": verifier_pb2.AuthorCheckRequest,
+    "crosscheck": verifier_pb2.AuthorCrosscheckRequest,
+    "propose": verifier_pb2.FreezeProposeRequest,
+}
+_AUTHOR_RESPONSES = {
+    "check": verifier_pb2.AuthorCheckResponse,
+    "crosscheck": verifier_pb2.AuthorCrosscheckResponse,
+    "propose": verifier_pb2.FreezeProposeResponse,
+}
+
+
+def parse_author_request(kind: str, body: bytes) -> str:
+    """The ``task_id`` of an author request; every other field is rejected."""
+    from google.protobuf import json_format
+
+    msg = _AUTHOR_REQUESTS[kind]()
+    text = body.decode("utf-8")
+    if len(text) > 65536:
+        raise MappingError("request too large")
+    try:
+        json_format.Parse(text, msg, ignore_unknown_fields=False)
+    except json_format.ParseError as exc:
+        raise MappingError("malformed author request") from exc
+    return str(msg.task_id)  # type: ignore[attr-defined]
+
+
+def author_outcome_to_response(kind: str, outcome: object) -> Any:
+    """Map an app outcome (or a ``GateError``) to the proto response for ``kind``."""
+    resp = _AUTHOR_RESPONSES[kind]()
+    if isinstance(outcome, GateError):
+        resp.error.CopyFrom(gate_error_to_proto(outcome))  # type: ignore[attr-defined]
+    elif kind == "check":
+        resp.check.ok = outcome.ok  # type: ignore[attr-defined]
+        resp.check.problems.extend(outcome.problems)  # type: ignore[attr-defined]
+        resp.check.tests = outcome.tests  # type: ignore[attr-defined]
+    elif kind == "crosscheck":
+        resp.crosscheck.green = outcome.green  # type: ignore[attr-defined]
+        resp.crosscheck.red_criteria.extend(outcome.red_criteria)  # type: ignore[attr-defined]
+    else:
+        resp.proposal.proposal_id = outcome.proposal_id  # type: ignore[attr-defined]
+    return resp
+
+
+def author_response_to_outcome(kind: str, msg: Any) -> object:
+    which = msg.WhichOneof("outcome")
+    if which == "error":
+        return gate_error_from_proto(msg.error)
+    if which == "check" and kind == "check":
+        return {"ok": msg.check.ok, "problems": list(msg.check.problems), "tests": msg.check.tests}
+    if which == "crosscheck" and kind == "crosscheck":
+        return {"green": msg.crosscheck.green, "red_criteria": list(msg.crosscheck.red_criteria)}
+    if which == "proposal" and kind == "propose":
+        return {"proposal_id": msg.proposal.proposal_id}
+    raise MappingError("missing or unexpected outcome oneof")
+
+
+def serialize_author_response(msg: Any) -> bytes:
     from google.protobuf import json_format
 
     return json_format.MessageToJson(msg).encode("utf-8")  # type: ignore[no-any-return]

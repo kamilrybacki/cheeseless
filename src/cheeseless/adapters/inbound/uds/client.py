@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import socket
 from pathlib import Path
+from typing import Any
 
 from google.protobuf import json_format  # type: ignore[import-untyped]
 
 from cheeseless.adapters.inbound.proto import verifier_pb2
 from cheeseless.adapters.inbound.uds.mapping import (
     MappingError,
+    author_response_to_outcome,
     dispute_code_to_proto,
     dispute_response_to_outcome,
     run_response_to_agent_view,
@@ -69,6 +71,27 @@ class UdsVerifierClient:
             return dispute_response_to_outcome(msg)
         except (MappingError, UnicodeDecodeError, ValueError, json_format.ParseError):
             return gate_error(ErrorCode.INFRA_ERROR)
+
+    def author_check(self) -> dict[str, object] | GateError:
+        return self._author("check", "/author-check", verifier_pb2.AuthorCheckResponse)
+
+    def author_crosscheck(self) -> dict[str, object] | GateError:
+        return self._author(
+            "crosscheck", "/author-crosscheck", verifier_pb2.AuthorCrosscheckResponse
+        )
+
+    def freeze_propose(self) -> dict[str, object] | GateError:
+        return self._author("propose", "/freeze-propose", verifier_pb2.FreezeProposeResponse)
+
+    def _author(self, kind: str, path: str, response_type: Any) -> dict[str, object] | GateError:
+        data = self._post(path, self._request_body())
+        try:
+            msg = response_type()
+            json_format.Parse(data.decode("utf-8"), msg, ignore_unknown_fields=False)
+            outcome = author_response_to_outcome(kind, msg)
+        except (MappingError, UnicodeDecodeError, ValueError, json_format.ParseError):
+            return gate_error(ErrorCode.INFRA_ERROR)
+        return outcome  # type: ignore[return-value]
 
     def _request_body(self) -> bytes:
         if not self.task_id:

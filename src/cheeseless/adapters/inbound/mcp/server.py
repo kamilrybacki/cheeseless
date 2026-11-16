@@ -7,6 +7,7 @@ default agent-visible tool set stays ``gate_run`` and ``gate_status``.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -20,7 +21,11 @@ from cheeseless.ports.verifier import VerifierClient
 
 
 def build_mcp_server(
-    client: VerifierClient, *, name: str = "cheeseless", disputes: bool = False
+    client: VerifierClient,
+    *,
+    name: str = "cheeseless",
+    disputes: bool = False,
+    author: bool = False,
 ) -> MCPServer:
     server = MCPServer(name)
 
@@ -57,6 +62,8 @@ def build_mcp_server(
 
     if disputes:
         _register_dispute(server, client)
+    if author:
+        _register_author(server, client)
     return server
 
 
@@ -90,6 +97,48 @@ def _register_dispute(server: MCPServer, client: VerifierClient) -> None:
             structured_content=body,
             is_error=False,
         )
+
+
+def _register_author(server: MCPServer, client: VerifierClient) -> None:
+    """Author-session tools. There is deliberately no approve, reference or retry tool."""
+
+    def _result(kind: str, call: Callable[[], object]) -> CallToolResult:
+        try:
+            outcome = call()
+        except Exception:  # noqa: BLE001
+            outcome = gate_error(ErrorCode.INFRA_ERROR)
+        if isinstance(outcome, GateError):
+            body: dict[str, Any] = {
+                "outcome": {"kind": "error", "error": gate_error_to_dict(outcome)}
+            }
+        else:
+            body = {"outcome": {"kind": kind, **dict(outcome)}}  # type: ignore[call-overload]
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(body, sort_keys=True))],
+            structured_content=body,
+            is_error=False,
+        )
+
+    @server.tool(
+        name="author_check",
+        description="Check the acceptance tree of this author session (deterministic).",
+    )
+    def author_check_tool() -> CallToolResult:
+        return _result("check", client.author_check)
+
+    @server.tool(
+        name="author_crosscheck",
+        description="Record the crosscheck of the acceptance tree against the reference snapshot.",
+    )
+    def author_crosscheck_tool() -> CallToolResult:
+        return _result("crosscheck", client.author_crosscheck)
+
+    @server.tool(
+        name="freeze_propose",
+        description="Propose the acceptance tree for freezing. A human or host approves it.",
+    )
+    def freeze_propose_tool() -> CallToolResult:
+        return _result("propose", client.freeze_propose)
 
 
 def run_stdio(server: MCPServer) -> None:

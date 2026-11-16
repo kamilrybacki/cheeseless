@@ -14,6 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cheeseless.app.author_gate import (
+    gate_author_check,
+    gate_author_crosscheck,
+    gate_freeze_propose,
+)
 from cheeseless.app.dispute import gate_dispute
 from cheeseless.app.gate_run import gate_run
 from cheeseless.app.status import status as app_status
@@ -24,19 +29,22 @@ from cheeseless.domain.errors import ErrorCode, gate_error
 from cheeseless.domain.task import Task
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.runner import SuiteRunner
-from cheeseless.ports.sandbox import Sandbox
+from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
 from cheeseless.ports.store import Store
 
 from .mapping import (
     MappingError,
     agent_view_to_run_response,
     agent_view_to_status_response,
+    author_outcome_to_response,
     dispute_outcome_to_response,
     dispute_request_fields,
+    parse_author_request,
     parse_dispute_request,
     parse_run_request,
     parse_status_request,
     run_request_to_task_id,
+    serialize_author_response,
     serialize_dispute_response,
     serialize_run_response,
     serialize_status_response,
@@ -107,6 +115,31 @@ def _peer_pidns_inode(conn: socket.socket) -> int | None:
             pass
 
 
+def _paths(slug: str, rpc: str) -> tuple[str, str, str]:
+    return (f"/{slug}", f"/cheeseless.v1.Verifier/{rpc}", f"/{rpc}")
+
+
+_AUTHOR_ROUTES = {
+    path: kind
+    for kind, slug, rpc in (
+        ("check", "author-check", "AuthorCheck"),
+        ("crosscheck", "author-crosscheck", "AuthorCrosscheck"),
+        ("propose", "freeze-propose", "FreezePropose"),
+    )
+    for path in _paths(slug, rpc)
+}
+_AUTHOR_KINDS = frozenset(_AUTHOR_ROUTES.values())
+_IMPLEMENTER_ROUTES = {
+    path: kind
+    for kind, slug, rpc in (
+        ("run", "run", "Run"),
+        ("status", "status", "Status"),
+        ("dispute", "dispute", "Dispute"),
+    )
+    for path in _paths(slug, rpc)
+}
+
+
 @dataclass
 class SessionConfig:
     task_id: str | None
@@ -124,6 +157,9 @@ class SessionConfig:
     expected_pidns_fd: int | None = None
     namespace_fd: int | None = None
     pidns_fd: int | None = None
+    # ``implementer`` (run, status, dispute) or ``author`` (check, crosscheck, propose).
+    role: str = "implementer"
+    author_sandbox: AuthorSandbox | None = None
 
     def namespace_fds(self) -> tuple[int, ...]:
         return tuple(
@@ -432,14 +468,63 @@ class UdsVerifierServer:
 
     def _route(self, wfile: Any, path: str, body: bytes) -> None:
         path = path.split("?", 1)[0]
-        if path in ("/run", "/cheeseless.v1.Verifier/Run", "/Run"):
-            self._run(wfile, body)
-        elif path in ("/status", "/cheeseless.v1.Verifier/Status", "/Status"):
-            self._status(wfile, body)
-        elif path in ("/dispute", "/cheeseless.v1.Verifier/Dispute", "/Dispute"):
-            self._dispute(wfile, body)
+        author_kind = _AUTHOR_ROUTES.get(path)
+        implementer_kind = _IMPLEMENTER_ROUTES.get(path)
+        if author_kind is not None:
+            if self.session.role != "author":
+                self._role_refused(wfile, author_kind)
+            else:
+                self._author(wfile, body, author_kind)
+        elif implementer_kind is not None:
+            if self.session.role == "author":
+                self._role_refused(wfile, implementer_kind)
+            else:
+                getattr(self, "_" + implementer_kind)(wfile, body)
         else:
             self._write_error(wfile, 404, "not found")
+
+    def _role_refused(self, wfile: Any, kind: str) -> None:
+        err = gate_error(ErrorCode.ROLE_NOT_ALLOWED)
+        if kind in _AUTHOR_KINDS:
+            data = serialize_author_response(author_outcome_to_response(kind, err))
+        elif kind == "run":
+            data = serialize_run_response(agent_view_to_run_response(AgentView(err, ())))
+        elif kind == "status":
+            data = serialize_status_response(agent_view_to_status_response(AgentView(err, ())))
+        else:
+            data = serialize_dispute_response(dispute_outcome_to_response(err))
+        self._write_response(wfile, 200, data)
+
+    def _author(self, wfile: Any, body: bytes, kind: str) -> None:
+        try:
+            task_id = parse_author_request(kind, body)
+        except (MappingError, UnicodeDecodeError, ValueError):
+            self._write_error(wfile, 400, "bad request")
+            return
+        if not self._task_matches(task_id, wfile):
+            return
+        if not self._run_lock.acquire(blocking=False):
+            self._write_error(wfile, 429, "run in progress")
+            return
+        try:
+            outcome = self._author_outcome(kind)
+            self._write_response(
+                wfile, 200, serialize_author_response(author_outcome_to_response(kind, outcome))
+            )
+        finally:
+            self._run_lock.release()
+
+    def _author_outcome(self, kind: str) -> object:
+        s = self.session
+        sandbox = s.author_sandbox
+        store: Any = s.store
+        if kind == "propose":
+            return gate_freeze_propose(s.repo, store, s.worktree)
+        if sandbox is None:
+            return gate_error(ErrorCode.INFRA_ERROR)
+        if kind == "check":
+            return gate_author_check(s.repo, sandbox, s.worktree)
+        return gate_author_crosscheck(s.repo, sandbox, store, s.worktree)
 
     def _dispute(self, wfile: Any, body: bytes) -> None:
         try:
