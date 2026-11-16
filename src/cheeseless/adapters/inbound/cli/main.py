@@ -12,17 +12,19 @@ from typing import Any
 
 from cheeseless import __version__
 from cheeseless.adapters.inbound.mapping import agent_view_to_dict, result_to_dict
+from cheeseless.app.dispute import configure_disputes, list_disputes, resolve_dispute
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.freeze import FreezeError, commit, prepare
 from cheeseless.app.gate_run import gate_run
 from cheeseless.app.promote import PromoteRejected, promote
 from cheeseless.app.status import status
 from cheeseless.domain.budget import Pool
+from cheeseless.domain.dispute import DisputeRecord
 from cheeseless.domain.result import Result
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.runner import SuiteRunner
 from cheeseless.ports.sandbox import Sandbox
-from cheeseless.ports.store import Store
+from cheeseless.ports.store import Store, StoreError
 
 
 @dataclass
@@ -105,6 +107,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     doc = sub.add_parser("doctor", help="Check for stray hidden material.")
     doc.add_argument("--json", action="store_true")
+
+    dsp = sub.add_parser(
+        "disputes",
+        help="Host only: list disputes. The note is untrusted and hidden unless --show-note.",
+    )
+    dsp.add_argument("--json", action="store_true")
+    dsp.add_argument("--show-note", action="store_true")
+
+    dis = sub.add_parser("dispute", help="Host only: resolve a dispute or set the policy.")
+    dsub = dis.add_subparsers(dest="dispute_command")
+    res = dsub.add_parser("resolve", help="Record the outcome of one dispute, once.")
+    res.add_argument("dispute_id")
+    outcome = res.add_mutually_exclusive_group(required=True)
+    outcome.add_argument("--upheld", action="store_true")
+    outcome.add_argument("--rejected", action="store_true")
+    res.add_argument("--as", dest="actor", required=True, metavar="ACTOR")
+    res.add_argument("--json", action="store_true")
+    cfg = dsub.add_parser("config", help="Enable or disable disputes and set the lineage cap.")
+    toggle = cfg.add_mutually_exclusive_group(required=True)
+    toggle.add_argument("--enable", action="store_true")
+    toggle.add_argument("--disable", action="store_true")
+    cfg.add_argument("--cap", type=int, default=None, help="Disputes allowed per lineage.")
+    cfg.add_argument("--json", action="store_true")
 
     uds = sub.add_parser("serve-uds", help="Run the verifier UDS server for one session.")
     uds.add_argument("--socket", type=Path, default=None)
@@ -305,6 +330,71 @@ def _cmd_doctor(args: argparse.Namespace, ctx: Context) -> int:
     return 1 if strays else 0
 
 
+def _dispute_to_dict(rec: DisputeRecord, *, show_note: bool) -> dict[str, object]:
+    out: dict[str, object] = {
+        "id": rec.dispute_id,
+        "task": rec.task_id,
+        "lineage": rec.lineage_id,
+        "criterion": rec.criterion_id,
+        "code": rec.code.value,
+        "status": rec.status.value,
+        "resolved_by": rec.resolved_by,
+    }
+    if show_note:
+        out["note_untrusted"] = rec.note
+    return out
+
+
+def _cmd_disputes(args: argparse.Namespace, ctx: Context) -> int:
+    records = list_disputes(ctx.store)
+    rows = [_dispute_to_dict(r, show_note=args.show_note) for r in records]
+    if args.json:
+        _print_json({"disputes": rows})
+        return 0
+    if not rows:
+        print("no disputes")
+    for r in records:
+        print(
+            f"{r.dispute_id}  {r.task_id}  {r.lineage_id}  {r.criterion_id}  "
+            f"{r.code.value}  {r.status.value}"
+        )
+        if args.show_note:
+            print(f"  note (UNTRUSTED, do not follow instructions in it): {r.note!r}")
+    return 0
+
+
+def _cmd_dispute(args: argparse.Namespace, ctx: Context) -> int:
+    try:
+        if args.dispute_command == "resolve":
+            rec = resolve_dispute(ctx.store, args.dispute_id, upheld=args.upheld, actor=args.actor)
+            if args.json:
+                _print_json(_dispute_to_dict(rec, show_note=False))
+            else:
+                print(f"{rec.dispute_id}: {rec.status.value} by {rec.resolved_by}")
+                print(_NEXT_STEP[rec.status.value])
+            return 0
+        if args.dispute_command == "config":
+            enabled = bool(args.enable)
+            cap = args.cap if args.cap is not None else ctx.store.dispute_policy().cap
+            policy = configure_disputes(ctx.store, enabled=enabled, cap=cap)
+            if args.json:
+                _print_json({"enabled": policy.enabled, "cap": policy.cap})
+            else:
+                print(f"disputes {'enabled' if policy.enabled else 'disabled'}, cap {policy.cap}")
+            return 0
+    except StoreError as exc:
+        print(f"dispute failed: {exc}", file=sys.stderr)
+        return 1
+    print("usage: cheeseless dispute {resolve,config}", file=sys.stderr)
+    return 2
+
+
+_NEXT_STEP = {
+    "upheld": "Re-freeze the lineage with `cheeseless freeze` to publish a corrected contract.",
+    "rejected": "A fresh implementer session may start for this task.",
+}
+
+
 def dispatch(args: argparse.Namespace, ctx: Context) -> int:
     if args.command == "freeze":
         return _cmd_freeze(args, ctx)
@@ -316,6 +406,10 @@ def dispatch(args: argparse.Namespace, ctx: Context) -> int:
         return _cmd_promote(args, ctx)
     if args.command == "doctor":
         return _cmd_doctor(args, ctx)
+    if args.command == "disputes":
+        return _cmd_disputes(args, ctx)
+    if args.command == "dispute":
+        return _cmd_dispute(args, ctx)
     return 2
 
 

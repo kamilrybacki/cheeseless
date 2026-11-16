@@ -8,9 +8,10 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
 
-from cheeseless.adapters.inbound.mapping import agent_view_to_dict
+from cheeseless.adapters.inbound.mapping import agent_view_to_dict, gate_error_to_dict
 from cheeseless.domain.disclosure import AgentView
-from cheeseless.domain.errors import ErrorCode, gate_error
+from cheeseless.domain.dispute import ACK_TEXT, NOTE_LIMIT, DisputeCode
+from cheeseless.domain.errors import ErrorCode, GateError, gate_error
 from cheeseless.ports.verifier import VerifierClient
 
 
@@ -47,6 +48,33 @@ def build_mcp_server(client: VerifierClient, *, name: str = "cheeseless") -> MCP
         except Exception:  # noqa: BLE001
             view = AgentView(gate_error(ErrorCode.INFRA_ERROR), ())
         return _call_result(view)
+
+    @server.tool(
+        name="gate_dispute",
+        description=(
+            "Dispute a public criterion as contradicting the spec, untestable, ambiguous or "
+            "other. This ends the session: no further runs are possible. "
+            f"The note is at most {NOTE_LIMIT} characters of plain text."
+        ),
+    )
+    def gate_dispute_tool(criterion_id: str, code: str, note: str) -> CallToolResult:
+        try:
+            outcome: str | GateError = client.dispute(criterion_id, DisputeCode(code), note)
+        except ValueError:
+            outcome = gate_error(ErrorCode.DISPUTE_INVALID)
+        except Exception:  # noqa: BLE001
+            outcome = gate_error(ErrorCode.INFRA_ERROR)
+        if isinstance(outcome, GateError):
+            body: dict[str, Any] = {
+                "outcome": {"kind": "error", "error": gate_error_to_dict(outcome)}
+            }
+        else:
+            body = {"outcome": {"kind": "ack", "message": ACK_TEXT}}
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(body, sort_keys=True))],
+            structured_content=body,
+            is_error=False,
+        )
 
     return server
 

@@ -1,4 +1,4 @@
-"""Verifier UDS server: only ``run`` and ``status``, host-configured session."""
+"""Verifier UDS server: only ``run``, ``status`` and ``dispute``, host-configured session."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cheeseless.app.dispute import gate_dispute
 from cheeseless.app.gate_run import gate_run
 from cheeseless.app.status import status as app_status
 from cheeseless.domain.budget import Pool
@@ -30,9 +31,13 @@ from .mapping import (
     MappingError,
     agent_view_to_run_response,
     agent_view_to_status_response,
+    dispute_outcome_to_response,
+    dispute_request_fields,
+    parse_dispute_request,
     parse_run_request,
     parse_status_request,
     run_request_to_task_id,
+    serialize_dispute_response,
     serialize_run_response,
     serialize_status_response,
     status_request_to_task_id,
@@ -431,8 +436,42 @@ class UdsVerifierServer:
             self._run(wfile, body)
         elif path in ("/status", "/cheeseless.v1.Verifier/Status", "/Status"):
             self._status(wfile, body)
+        elif path in ("/dispute", "/cheeseless.v1.Verifier/Dispute", "/Dispute"):
+            self._dispute(wfile, body)
         else:
             self._write_error(wfile, 404, "not found")
+
+    def _dispute(self, wfile: Any, body: bytes) -> None:
+        try:
+            req = parse_dispute_request(body)
+        except (MappingError, UnicodeDecodeError, ValueError):
+            self._write_error(wfile, 400, "bad request")
+            return
+        task_id, criterion_id, code, note = dispute_request_fields(req)
+        if not self._task_matches(task_id, wfile):
+            return
+        configured = self.session.task_id
+        if configured is None:
+            self._write_error(wfile, 400, "bad request")
+            return
+        if not self._run_lock.acquire(blocking=False):
+            self._write_error(wfile, 429, "run in progress")
+            return
+        try:
+            try:
+                outcome = gate_dispute(
+                    self.session.store,
+                    task_id=configured,
+                    criterion_id=criterion_id,
+                    code=code,
+                    note=note,
+                )
+            except Exception:
+                outcome = gate_error(ErrorCode.INFRA_ERROR)
+            data = serialize_dispute_response(dispute_outcome_to_response(outcome))
+            self._write_response(wfile, 200, data)
+        finally:
+            self._run_lock.release()
 
     def _run(self, wfile: Any, body: bytes) -> None:
         try:
@@ -480,6 +519,11 @@ class UdsVerifierServer:
             self._write_error(wfile, 429, "run in progress")
             return
         try:
+            if self._session_disputed():
+                agent_view = AgentView(gate_error(ErrorCode.SESSION_DISPUTED), ())
+                data = serialize_status_response(agent_view_to_status_response(agent_view))
+                self._write_response(wfile, 200, data)
+                return
             try:
                 result = app_status(
                     self.session.store,
@@ -497,6 +541,15 @@ class UdsVerifierServer:
             self._write_response(wfile, 200, data)
         finally:
             self._run_lock.release()
+
+    def _session_disputed(self) -> bool:
+        task_id = self.session.task_id
+        if task_id is None:
+            return False
+        try:
+            return self.session.store.session_disputed(task_id)
+        except Exception:
+            return False
 
     def _task_matches(self, client_task_id: str, wfile: Any) -> bool:
         configured = self.session.task_id

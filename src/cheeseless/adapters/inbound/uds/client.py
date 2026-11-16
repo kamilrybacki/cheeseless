@@ -11,11 +11,14 @@ from google.protobuf import json_format  # type: ignore[import-untyped]
 from cheeseless.adapters.inbound.proto import verifier_pb2
 from cheeseless.adapters.inbound.uds.mapping import (
     MappingError,
+    dispute_code_to_proto,
+    dispute_response_to_outcome,
     run_response_to_agent_view,
     status_response_to_agent_view,
 )
 from cheeseless.domain.disclosure import AgentView
-from cheeseless.domain.errors import ErrorCode, gate_error
+from cheeseless.domain.dispute import DisputeCode
+from cheeseless.domain.errors import ErrorCode, GateError, gate_error
 
 MAX_RESPONSE_BYTES = 1 << 20
 MAX_HEADER_BYTES = 16 * 1024
@@ -51,6 +54,21 @@ class UdsVerifierClient:
             return status_response_to_agent_view(msg)
         except (MappingError, UnicodeDecodeError, ValueError, json_format.ParseError):
             return AgentView(gate_error(ErrorCode.INFRA_ERROR), ())
+
+    def dispute(self, criterion_id: str, code: DisputeCode, note: str) -> str | GateError:
+        request = verifier_pb2.DisputeRequest(
+            task_id=self.task_id or "",
+            criterion_id=criterion_id,
+            code=dispute_code_to_proto(code),
+            note=note,
+        )
+        data = self._post("/dispute", json_format.MessageToJson(request).encode("utf-8"))
+        try:
+            msg = verifier_pb2.DisputeResponse()
+            json_format.Parse(data.decode("utf-8"), msg, ignore_unknown_fields=False)
+            return dispute_response_to_outcome(msg)
+        except (MappingError, UnicodeDecodeError, ValueError, json_format.ParseError):
+            return gate_error(ErrorCode.INFRA_ERROR)
 
     def _request_body(self) -> bytes:
         if not self.task_id:

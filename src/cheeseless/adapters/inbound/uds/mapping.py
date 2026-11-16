@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from cheeseless.adapters.inbound.proto import error_pb2, result_pb2, verifier_pb2
 from cheeseless.domain.disclosure import AgentView
+from cheeseless.domain.dispute import ACK_TEXT, DisputeCode
 from cheeseless.domain.errors import (
     CATALOGUE,
     ErrorCode,
@@ -305,6 +306,67 @@ def serialize_run_response(msg: verifier_pb2.RunResponse) -> bytes:
 
 
 def serialize_status_response(msg: verifier_pb2.StatusResponse) -> bytes:
+    from google.protobuf import json_format
+
+    return json_format.MessageToJson(msg).encode("utf-8")  # type: ignore[no-any-return]
+
+
+_DISPUTE_CODE_TO_PROTO: dict[DisputeCode, verifier_pb2.DisputeCode] = {
+    DisputeCode.CONTRADICTS_SPEC: verifier_pb2.DISPUTE_CODE_CONTRADICTS_SPEC,
+    DisputeCode.UNTESTABLE: verifier_pb2.DISPUTE_CODE_UNTESTABLE,
+    DisputeCode.AMBIGUOUS_SPEC: verifier_pb2.DISPUTE_CODE_AMBIGUOUS_SPEC,
+    DisputeCode.OTHER: verifier_pb2.DISPUTE_CODE_OTHER,
+}
+_DISPUTE_CODE_FROM_PROTO = {v: k for k, v in _DISPUTE_CODE_TO_PROTO.items()}
+
+
+def dispute_code_to_proto(code: DisputeCode) -> verifier_pb2.DisputeCode:
+    return _DISPUTE_CODE_TO_PROTO[code]
+
+
+def parse_dispute_request(body: bytes) -> verifier_pb2.DisputeRequest:
+    from google.protobuf import json_format
+
+    msg = verifier_pb2.DisputeRequest()
+    text = body.decode("utf-8")
+    if len(text) > 65536:
+        raise MappingError("request too large")
+    json_format.Parse(text, msg, ignore_unknown_fields=False)
+    return msg
+
+
+def dispute_request_fields(msg: verifier_pb2.DisputeRequest) -> tuple[str, str, str, str]:
+    """``(task_id, criterion_id, code, note)`` as plain strings for the use case.
+
+    An unspecified or unknown enum value maps to ``""``, which the use case rejects
+    as invalid input like any other malformed code.
+    """
+    code = _DISPUTE_CODE_FROM_PROTO.get(msg.code)
+    return msg.task_id, msg.criterion_id, code.value if code else "", msg.note
+
+
+def dispute_outcome_to_response(outcome: str | GateError) -> verifier_pb2.DisputeResponse:
+    resp = verifier_pb2.DisputeResponse()
+    if isinstance(outcome, GateError):
+        resp.error.CopyFrom(gate_error_to_proto(outcome))
+    else:
+        # Fixed text, never the caller's input and never per-dispute data.
+        resp.ack.message = ACK_TEXT
+    return resp
+
+
+def dispute_response_to_outcome(msg: verifier_pb2.DisputeResponse) -> str | GateError:
+    which = msg.WhichOneof("outcome")
+    if which == "ack":
+        if msg.ack.message != ACK_TEXT:
+            raise MappingError("unexpected acknowledgement")
+        return ACK_TEXT
+    if which == "error":
+        return gate_error_from_proto(msg.error)
+    raise MappingError("missing outcome oneof")
+
+
+def serialize_dispute_response(msg: verifier_pb2.DisputeResponse) -> bytes:
     from google.protobuf import json_format
 
     return json_format.MessageToJson(msg).encode("utf-8")  # type: ignore[no-any-return]
