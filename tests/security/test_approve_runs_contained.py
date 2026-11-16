@@ -168,3 +168,30 @@ def test_the_hostile_probes_really_execute_inside_the_sandbox(host):
     assert "read=blocked" in text and "write=blocked" in text and "net=blocked" in text
     assert "LEAK" not in text and host.key.decode("latin-1") not in text
     assert host.accepted == []
+
+
+@needs_bwrap
+def test_the_test_body_probe_executes_contained_in_a_real_run(host):
+    """A run with a reference executes test bodies; their probes are blocked too."""
+    import json
+    import sys
+    import tempfile
+
+    sandbox = host.sandbox()
+    repo = host.repo
+    with tempfile.TemporaryDirectory(prefix="cheeseless-probe-") as tmp:
+        acceptance = Path(tmp) / "acceptance"
+        reference = Path(tmp) / "reference"
+        reference.mkdir()
+        repo.export(repo.tree_of(_source(repo), "acceptance"), acceptance)
+        command = (sys.executable, "-I", "-B", "-c", DRIVER, "run", json.dumps([sys.executable]))
+        outcome = sandbox.author_run(acceptance, reference, command, env=(), timeout=120.0)
+    text = outcome.stdout + outcome.stderr_tail
+    assert "PROBE-EXECUTED import" in text and "PROBE-EXECUTED body" in text
+    body = [line for line in text.splitlines() if line.startswith("PROBE-EXECUTED body")]
+    assert body and all(
+        "read=blocked" in ln and "write=blocked" in ln and "net=blocked" in ln for ln in body
+    )
+    assert "LEAK" not in text and host.key.decode("latin-1") not in text
+    assert not (host.store.root / "planted").exists() and not (host.home / "planted").exists()
+    assert host.accepted == []
