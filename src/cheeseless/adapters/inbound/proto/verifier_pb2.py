@@ -26,15 +26,15 @@ from . import error_pb2 as cheeseless_dot_v1_dot_error__pb2
 from . import result_pb2 as cheeseless_dot_v1_dot_result__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x63heeseless/v1/verifier.proto\x12\rcheeseless.v1\x1a\x19\x63heeseless/v1/error.proto\x1a\x1a\x63heeseless/v1/result.proto\"\x1d\n\nRunRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"\x9a\x01\n\x0bRunResponse\x12\'\n\x06result\x18\x01 \x01(\x0b\x32\x15.cheeseless.v1.ResultH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x12\x30\n\x12\x63riterion_failures\x18\x03 \x03(\x0b\x32\x14.cheeseless.v1.ErrorB\t\n\x07outcome\" \n\rStatusRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"\x9d\x01\n\x0eStatusResponse\x12\'\n\x06result\x18\x01 \x01(\x0b\x32\x15.cheeseless.v1.ResultH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x12\x30\n\x12\x63riterion_failures\x18\x03 \x03(\x0b\x32\x14.cheeseless.v1.ErrorB\t\n\x07outcome\"o\n\x0e\x44isputeRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x14\n\x0c\x63riterion_id\x18\x02 \x01(\t\x12(\n\x04\x63ode\x18\x03 \x01(\x0e\x32\x1a.cheeseless.v1.DisputeCode\x12\x0c\n\x04note\x18\x04 \x01(\t\"\x1d\n\nDisputeAck\x12\x0f\n\x07message\x18\x01 \x01(\t\"m\n\x0f\x44isputeResponse\x12(\n\x03\x61\x63k\x18\x01 \x01(\x0b\x32\x19.cheeseless.v1.DisputeAckH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x42\t\n\x07outcome*\xa4\x01\n\x0b\x44isputeCode\x12\x1c\n\x18\x44ISPUTE_CODE_UNSPECIFIED\x10\x00\x12!\n\x1d\x44ISPUTE_CODE_CONTRADICTS_SPEC\x10\x01\x12\x1b\n\x17\x44ISPUTE_CODE_UNTESTABLE\x10\x02\x12\x1f\n\x1b\x44ISPUTE_CODE_AMBIGUOUS_SPEC\x10\x03\x12\x16\n\x12\x44ISPUTE_CODE_OTHER\x10\x04\x32\xd9\x01\n\x08Verifier\x12<\n\x03Run\x12\x19.cheeseless.v1.RunRequest\x1a\x1a.cheeseless.v1.RunResponse\x12\x45\n\x06Status\x12\x1c.cheeseless.v1.StatusRequest\x1a\x1d.cheeseless.v1.StatusResponse\x12H\n\x07\x44ispute\x12\x1d.cheeseless.v1.DisputeRequest\x1a\x1e.cheeseless.v1.DisputeResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x63heeseless/v1/verifier.proto\x12\rcheeseless.v1\x1a\x19\x63heeseless/v1/error.proto\x1a\x1a\x63heeseless/v1/result.proto\"\x1d\n\nRunRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"\x9a\x01\n\x0bRunResponse\x12\'\n\x06result\x18\x01 \x01(\x0b\x32\x15.cheeseless.v1.ResultH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x12\x30\n\x12\x63riterion_failures\x18\x03 \x03(\x0b\x32\x14.cheeseless.v1.ErrorB\t\n\x07outcome\" \n\rStatusRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"\x9d\x01\n\x0eStatusResponse\x12\'\n\x06result\x18\x01 \x01(\x0b\x32\x15.cheeseless.v1.ResultH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x12\x30\n\x12\x63riterion_failures\x18\x03 \x03(\x0b\x32\x14.cheeseless.v1.ErrorB\t\n\x07outcome\"o\n\x0e\x44isputeRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x14\n\x0c\x63riterion_id\x18\x02 \x01(\t\x12(\n\x04\x63ode\x18\x03 \x01(\x0e\x32\x1a.cheeseless.v1.DisputeCode\x12\x0c\n\x04note\x18\x04 \x01(\t\"\x1d\n\nDisputeAck\x12\x0f\n\x07message\x18\x01 \x01(\t\"m\n\x0f\x44isputeResponse\x12(\n\x03\x61\x63k\x18\x01 \x01(\x0b\x32\x19.cheeseless.v1.DisputeAckH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x42\t\n\x07outcome\"%\n\x12\x41uthorCheckRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"=\n\x0e\x41uthorCheckAck\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x10\n\x08problems\x18\x02 \x03(\t\x12\r\n\x05tests\x18\x03 \x01(\r\"w\n\x13\x41uthorCheckResponse\x12.\n\x05\x63heck\x18\x01 \x01(\x0b\x32\x1d.cheeseless.v1.AuthorCheckAckH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x42\t\n\x07outcome\"*\n\x17\x41uthorCrosscheckRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\":\n\x13\x41uthorCrosscheckAck\x12\r\n\x05green\x18\x01 \x01(\x08\x12\x14\n\x0cred_criteria\x18\x02 \x03(\t\"\x86\x01\n\x18\x41uthorCrosscheckResponse\x12\x38\n\ncrosscheck\x18\x01 \x01(\x0b\x32\".cheeseless.v1.AuthorCrosscheckAckH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x42\t\n\x07outcome\"\'\n\x14\x46reezeProposeRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"\'\n\x10\x46reezeProposeAck\x12\x13\n\x0bproposal_id\x18\x01 \x01(\t\"~\n\x15\x46reezeProposeResponse\x12\x33\n\x08proposal\x18\x01 \x01(\x0b\x32\x1f.cheeseless.v1.FreezeProposeAckH\x00\x12%\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.cheeseless.v1.ErrorH\x00\x42\t\n\x07outcome*\xa4\x01\n\x0b\x44isputeCode\x12\x1c\n\x18\x44ISPUTE_CODE_UNSPECIFIED\x10\x00\x12!\n\x1d\x44ISPUTE_CODE_CONTRADICTS_SPEC\x10\x01\x12\x1b\n\x17\x44ISPUTE_CODE_UNTESTABLE\x10\x02\x12\x1f\n\x1b\x44ISPUTE_CODE_AMBIGUOUS_SPEC\x10\x03\x12\x16\n\x12\x44ISPUTE_CODE_OTHER\x10\x04\x32\xf0\x03\n\x08Verifier\x12<\n\x03Run\x12\x19.cheeseless.v1.RunRequest\x1a\x1a.cheeseless.v1.RunResponse\x12\x45\n\x06Status\x12\x1c.cheeseless.v1.StatusRequest\x1a\x1d.cheeseless.v1.StatusResponse\x12H\n\x07\x44ispute\x12\x1d.cheeseless.v1.DisputeRequest\x1a\x1e.cheeseless.v1.DisputeResponse\x12T\n\x0b\x41uthorCheck\x12!.cheeseless.v1.AuthorCheckRequest\x1a\".cheeseless.v1.AuthorCheckResponse\x12\x63\n\x10\x41uthorCrosscheck\x12&.cheeseless.v1.AuthorCrosscheckRequest\x1a\'.cheeseless.v1.AuthorCrosscheckResponse\x12Z\n\rFreezePropose\x12#.cheeseless.v1.FreezeProposeRequest\x1a$.cheeseless.v1.FreezeProposeResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'cheeseless.v1.verifier_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_DISPUTECODE']._serialized_start=740
-  _globals['_DISPUTECODE']._serialized_end=904
+  _globals['_DISPUTECODE']._serialized_start=1414
+  _globals['_DISPUTECODE']._serialized_end=1578
   _globals['_RUNREQUEST']._serialized_start=102
   _globals['_RUNREQUEST']._serialized_end=131
   _globals['_RUNRESPONSE']._serialized_start=134
@@ -49,6 +49,24 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_DISPUTEACK']._serialized_end=626
   _globals['_DISPUTERESPONSE']._serialized_start=628
   _globals['_DISPUTERESPONSE']._serialized_end=737
-  _globals['_VERIFIER']._serialized_start=907
-  _globals['_VERIFIER']._serialized_end=1124
+  _globals['_AUTHORCHECKREQUEST']._serialized_start=739
+  _globals['_AUTHORCHECKREQUEST']._serialized_end=776
+  _globals['_AUTHORCHECKACK']._serialized_start=778
+  _globals['_AUTHORCHECKACK']._serialized_end=839
+  _globals['_AUTHORCHECKRESPONSE']._serialized_start=841
+  _globals['_AUTHORCHECKRESPONSE']._serialized_end=960
+  _globals['_AUTHORCROSSCHECKREQUEST']._serialized_start=962
+  _globals['_AUTHORCROSSCHECKREQUEST']._serialized_end=1004
+  _globals['_AUTHORCROSSCHECKACK']._serialized_start=1006
+  _globals['_AUTHORCROSSCHECKACK']._serialized_end=1064
+  _globals['_AUTHORCROSSCHECKRESPONSE']._serialized_start=1067
+  _globals['_AUTHORCROSSCHECKRESPONSE']._serialized_end=1201
+  _globals['_FREEZEPROPOSEREQUEST']._serialized_start=1203
+  _globals['_FREEZEPROPOSEREQUEST']._serialized_end=1242
+  _globals['_FREEZEPROPOSEACK']._serialized_start=1244
+  _globals['_FREEZEPROPOSEACK']._serialized_end=1283
+  _globals['_FREEZEPROPOSERESPONSE']._serialized_start=1285
+  _globals['_FREEZEPROPOSERESPONSE']._serialized_end=1411
+  _globals['_VERIFIER']._serialized_start=1581
+  _globals['_VERIFIER']._serialized_end=2077
 # @@protoc_insertion_point(module_scope)

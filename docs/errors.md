@@ -175,3 +175,30 @@ This session was closed by a dispute.
 - **Retryable:** no
 - **Stderr tail (pre-hidden stage):** no
 - **Wire:** `ERROR_CODE_SESSION_DISPUTED` = 19
+
+### `ROLE_NOT_ALLOWED`
+
+This operation is not available to this session's role.
+
+- **What to do:** Use only the operations your role is given. The operator holds the rest.
+- **Retryable:** no
+- **Stderr tail (pre-hidden stage):** no
+- **Wire:** `ERROR_CODE_ROLE_NOT_ALLOWED` = 20
+
+### `REFERENCE_BLOCKED`
+
+The reference session could not satisfy the spec as written.
+
+- **What to do:** Clarify or fix the spec, then ask the operator to retry the reference.
+- **Retryable:** no
+- **Stderr tail (pre-hidden stage):** no
+- **Wire:** `ERROR_CODE_REFERENCE_BLOCKED` = 21
+
+### `AUTHOR_REFUSED`
+
+The author operation was refused in the task's current state.
+
+- **What to do:** Check the task phase: a frozen task is closed, and a proposal needs a spec.
+- **Retryable:** no
+- **Stderr tail (pre-hidden stage):** no
+- **Wire:** `ERROR_CODE_AUTHOR_REFUSED` = 22

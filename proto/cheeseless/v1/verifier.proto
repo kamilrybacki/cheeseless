@@ -64,8 +64,64 @@ message DisputeResponse {
   }
 }
 
+// Author-role operations (ADR 0009). Reachable only by an author session, never by
+// an implementer; refused with ROLE_NOT_ALLOWED otherwise and closed once frozen.
+// Approval, reference recording and retries are host CLI only and absent here.
+message AuthorCheckRequest {
+  string task_id = 1;
+}
+
+message AuthorCheckAck {
+  bool ok = 1;
+  // Public, redacted problems found in the author's acceptance tree.
+  repeated string problems = 2;
+  uint32 tests = 3;
+}
+
+message AuthorCheckResponse {
+  oneof outcome {
+    AuthorCheckAck check = 1;
+    Error error = 2;
+  }
+}
+
+message AuthorCrosscheckRequest {
+  string task_id = 1;
+}
+
+message AuthorCrosscheckAck {
+  bool green = 1;
+  // Public criterion ids that failed against the reference.
+  repeated string red_criteria = 2;
+}
+
+message AuthorCrosscheckResponse {
+  oneof outcome {
+    AuthorCrosscheckAck crosscheck = 1;
+    Error error = 2;
+  }
+}
+
+message FreezeProposeRequest {
+  string task_id = 1;
+}
+
+message FreezeProposeAck {
+  string proposal_id = 1;
+}
+
+message FreezeProposeResponse {
+  oneof outcome {
+    FreezeProposeAck proposal = 1;
+    Error error = 2;
+  }
+}
+
 service Verifier {
   rpc Run(RunRequest) returns (RunResponse);
   rpc Status(StatusRequest) returns (StatusResponse);
   rpc Dispute(DisputeRequest) returns (DisputeResponse);
+  rpc AuthorCheck(AuthorCheckRequest) returns (AuthorCheckResponse);
+  rpc AuthorCrosscheck(AuthorCrosscheckRequest) returns (AuthorCrosscheckResponse);
+  rpc FreezePropose(FreezeProposeRequest) returns (FreezeProposeResponse);
 }

@@ -28,6 +28,9 @@ enum ErrorCode {
   ERROR_CODE_DISPUTE_INVALID = 17;
   ERROR_CODE_DISPUTE_NOT_ALLOWED = 18;
   ERROR_CODE_SESSION_DISPUTED = 19;
+  ERROR_CODE_ROLE_NOT_ALLOWED = 20;
+  ERROR_CODE_REFERENCE_BLOCKED = 21;
+  ERROR_CODE_AUTHOR_REFUSED = 22;
 }
 
 // Run budget as the agent may see it. Explicit presence: an unset count must not

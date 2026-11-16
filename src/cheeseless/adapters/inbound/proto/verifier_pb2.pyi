@@ -79,3 +79,69 @@ class DisputeResponse(_message.Message):
     ack: DisputeAck
     error: _error_pb2.Error
     def __init__(self, ack: _Optional[_Union[DisputeAck, _Mapping]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ...) -> None: ...
+
+class AuthorCheckRequest(_message.Message):
+    __slots__ = ("task_id",)
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    def __init__(self, task_id: _Optional[str] = ...) -> None: ...
+
+class AuthorCheckAck(_message.Message):
+    __slots__ = ("ok", "problems", "tests")
+    OK_FIELD_NUMBER: _ClassVar[int]
+    PROBLEMS_FIELD_NUMBER: _ClassVar[int]
+    TESTS_FIELD_NUMBER: _ClassVar[int]
+    ok: bool
+    problems: _containers.RepeatedScalarFieldContainer[str]
+    tests: int
+    def __init__(self, ok: _Optional[bool] = ..., problems: _Optional[_Iterable[str]] = ..., tests: _Optional[int] = ...) -> None: ...
+
+class AuthorCheckResponse(_message.Message):
+    __slots__ = ("check", "error")
+    CHECK_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    check: AuthorCheckAck
+    error: _error_pb2.Error
+    def __init__(self, check: _Optional[_Union[AuthorCheckAck, _Mapping]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ...) -> None: ...
+
+class AuthorCrosscheckRequest(_message.Message):
+    __slots__ = ("task_id",)
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    def __init__(self, task_id: _Optional[str] = ...) -> None: ...
+
+class AuthorCrosscheckAck(_message.Message):
+    __slots__ = ("green", "red_criteria")
+    GREEN_FIELD_NUMBER: _ClassVar[int]
+    RED_CRITERIA_FIELD_NUMBER: _ClassVar[int]
+    green: bool
+    red_criteria: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, green: _Optional[bool] = ..., red_criteria: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class AuthorCrosscheckResponse(_message.Message):
+    __slots__ = ("crosscheck", "error")
+    CROSSCHECK_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    crosscheck: AuthorCrosscheckAck
+    error: _error_pb2.Error
+    def __init__(self, crosscheck: _Optional[_Union[AuthorCrosscheckAck, _Mapping]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ...) -> None: ...
+
+class FreezeProposeRequest(_message.Message):
+    __slots__ = ("task_id",)
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    def __init__(self, task_id: _Optional[str] = ...) -> None: ...
+
+class FreezeProposeAck(_message.Message):
+    __slots__ = ("proposal_id",)
+    PROPOSAL_ID_FIELD_NUMBER: _ClassVar[int]
+    proposal_id: str
+    def __init__(self, proposal_id: _Optional[str] = ...) -> None: ...
+
+class FreezeProposeResponse(_message.Message):
+    __slots__ = ("proposal", "error")
+    PROPOSAL_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    proposal: FreezeProposeAck
+    error: _error_pb2.Error
+    def __init__(self, proposal: _Optional[_Union[FreezeProposeAck, _Mapping]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ...) -> None: ...

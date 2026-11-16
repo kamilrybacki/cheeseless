@@ -35,6 +35,9 @@ class ErrorCode(enum.Enum):
     DISPUTE_INVALID = "dispute_invalid"
     DISPUTE_NOT_ALLOWED = "dispute_not_allowed"
     SESSION_DISPUTED = "session_disputed"
+    ROLE_NOT_ALLOWED = "role_not_allowed"
+    REFERENCE_BLOCKED = "reference_blocked"
+    AUTHOR_REFUSED = "author_refused"
 
 
 # Stages before the first hidden input that may carry a stderr tail (Q51).
@@ -153,6 +156,21 @@ CATALOGUE: dict[ErrorCode, CatalogueEntry] = {
     ErrorCode.SESSION_DISPUTED: CatalogueEntry(
         "This session was closed by a dispute.",
         "Stop. The operator decides whether a fresh session may start.",
+        False,
+    ),
+    ErrorCode.ROLE_NOT_ALLOWED: CatalogueEntry(
+        "This operation is not available to this session's role.",
+        "Use only the operations your role is given. The operator holds the rest.",
+        False,
+    ),
+    ErrorCode.REFERENCE_BLOCKED: CatalogueEntry(
+        "The reference session could not satisfy the spec as written.",
+        "Clarify or fix the spec, then ask the operator to retry the reference.",
+        False,
+    ),
+    ErrorCode.AUTHOR_REFUSED: CatalogueEntry(
+        "The author operation was refused in the task's current state.",
+        "Check the task phase: a frozen task is closed, and a proposal needs a spec.",
         False,
     ),
 }
