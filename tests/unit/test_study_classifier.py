@@ -211,3 +211,12 @@ def test_successful_write_events_do_not_change_touch_tests():
 def test_no_write_events_is_unchanged():
     assert _w(None).flags["touch_tests"] is False
     assert _w(()).flags["touch_tests"] is False
+
+
+def test_unobserved_write_events_classify_like_no_writes():
+    # None (transcript not observed) must never change any flag relative to ()
+    before = {"acceptance/test_a.py": "x"}
+    after = {"acceptance/test_a.py": "y"}
+    for arm in ("naive", "cheeseless"):
+        kwargs = dict(arm=arm, before=before, after=after, expected_literals=LITS, events=())
+        assert classify(**kwargs, write_events=None) == classify(**kwargs, write_events=())
