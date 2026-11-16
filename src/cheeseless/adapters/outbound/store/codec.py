@@ -38,6 +38,7 @@ def encode_task(frozen: FrozenTask, seed: bytes) -> bytes:
             "task_id": frozen.task.task_id,
             "seed": seed.hex(),
             "contract": contract_data(frozen.contract),
+            **({"spec": frozen.contract.spec} if frozen.contract.spec is not None else {}),
             "baseline_commit": frozen.baseline_commit,
             "projection_tree": frozen.projection_tree,
             "acceptance_tree": frozen.acceptance_tree,
@@ -62,7 +63,7 @@ def _build_task(data: dict[str, Any]) -> tuple[FrozenTask, bytes]:
     seed = bytes.fromhex(data["seed"])
     if len(seed) != SEED_BYTES:
         raise ValueError("seed has the wrong length")
-    contract = parse_contract(data["contract"])
+    contract = parse_contract(data["contract"], spec=data.get("spec"))
     frozen = FrozenTask(
         task=Task(data["task_id"], contract.lineage_id, contract.criteria),
         contract=contract,

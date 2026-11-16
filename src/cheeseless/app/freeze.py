@@ -30,6 +30,7 @@ from cheeseless.ports.sandbox import Sandbox
 from cheeseless.ports.store import Store
 
 CONTRACT_PATH = "acceptance/contract/criteria.yaml"
+SPEC_PATH = "acceptance/contract/spec.md"
 HOLDOUT_SEED_BYTES = 32
 
 
@@ -64,7 +65,9 @@ class FreezeError(Exception):
 def _read_contract(repo: Repository, commit: str) -> Contract:
     raw = repo.show(commit, CONTRACT_PATH)
     data = yaml.safe_load(raw.decode("utf-8"))
-    return parse_contract(data)
+    paths = {b.path for b in repo.blobs_under(repo.tree_of(commit), "acceptance/contract")}
+    spec = repo.show(commit, SPEC_PATH).decode("utf-8") if SPEC_PATH in paths else None
+    return parse_contract(data, spec=spec)
 
 
 def _observations(run: SuiteRun) -> tuple[object, ...]:
@@ -109,7 +112,8 @@ def prepare(
     contract = _read_contract(repo, baseline_commit)
     baseline_tree = repo.tree_of(baseline_commit)
     acceptance_tree = repo.tree_of(baseline_commit, "acceptance")
-    projection_tree = repo.tree_without(baseline_tree, "acceptance", "acceptance/contract")
+    public_paths = (CONTRACT_PATH, SPEC_PATH) if contract.spec is not None else (CONTRACT_PATH,)
+    projection_tree = repo.tree_without(baseline_tree, "acceptance", public_paths)
     hidden_blobs = tuple(
         HiddenBlob(path=f"acceptance/{b.path}", oid=b.oid)
         for b in repo.blobs_under(acceptance_tree, "")

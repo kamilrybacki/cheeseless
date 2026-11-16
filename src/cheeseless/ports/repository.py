@@ -45,7 +45,7 @@ class Repository(Protocol):
 
     def show(self, commit: str, path: str) -> bytes: ...
 
-    def tree_without(self, tree: str, prefix: str, keep: str) -> str:
+    def tree_without(self, tree: str, prefix: str, keep: str | Sequence[str]) -> str:
         """``tree`` minus everything under ``prefix`` except ``keep``."""
         ...
 

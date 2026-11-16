@@ -8,13 +8,31 @@ DESCRIPTION_LIMIT = 500
 
 
 @dataclass(frozen=True, slots=True)
+class Example:
+    """Public text input and expected output; never an executable test."""
+
+    input: str
+    expected_output: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.input, str) or not isinstance(self.expected_output, str):
+            raise ValueError("examples input and expected_output must be strings")
+
+
+@dataclass(frozen=True, slots=True)
 class Criterion:
     """A public acceptance criterion. The description is shown to the agent."""
 
     id: str
     description: str
+    examples: tuple[Example, ...] | None = None
 
     def __post_init__(self) -> None:
+        if self.examples is not None and (
+            not isinstance(self.examples, tuple)
+            or not all(isinstance(e, Example) for e in self.examples)
+        ):
+            raise ValueError("examples must be a tuple of Example values")
         ids.criterion_id(self.id)
         d = self.description
         if not isinstance(d, str) or not d.strip() or len(d) > DESCRIPTION_LIMIT:

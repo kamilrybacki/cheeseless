@@ -204,13 +204,15 @@ class GitRepository:
                 self._git.run("update-index", "-z", "--index-info", input=info, index=index)
             return oid(self._git.text("write-tree", index=index))
 
-    def tree_without(self, tree: str, prefix: str, keep: str) -> str:
+    def tree_without(self, tree: str, prefix: str, keep: str | Sequence[str]) -> str:
         rel_path(prefix)
-        rel_path(keep)
+        keep_paths = (keep,) if isinstance(keep, str) else tuple(keep)
+        for path in keep_paths:
+            rel_path(path)
         kept = [
             (e.mode, e.oid, e.path)
             for e in self._entries(tree)
-            if not under(e.path, prefix) or under(e.path, keep)
+            if not under(e.path, prefix) or any(under(e.path, path) for path in keep_paths)
         ]
         return self._write_tree(kept)
 

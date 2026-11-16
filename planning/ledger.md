@@ -633,3 +633,11 @@ gpt-6.1-sol re-check of 9cec7a0: R1–R19 resolved except R6 (partial); verdict 
 | R21 | "ADR 0003 profile" ambiguous; ADR 0003 keeps tests outside every sandbox | Accepted: named a third profile, the author runner, for unapproved suites only; the approved runner stays outside every sandbox as ADR 0003 states. |
 
 ADR 0009 accepted after round 2.
+
+### ADR 0009 implementation, stage (a)
+
+| Choice | Reason |
+|--------|--------|
+| Each optional `examples` list contains mappings with exactly `input` and `expected_output`, both strings (empty/multiline allowed); no coercion or executable fields. Explicit `[]` is preserved in canonical bytes. | Minimal public text examples, independent of the candidate language or runner. Omission preserves legacy canonical bytes. |
+| Optional UTF-8 `spec.md` text is a separate contract field, included only when present in canonical bytes and persisted alongside criteria data. Empty files remain distinct from absence. | Bind the public specification without introducing filesystem access into the domain or changing legacy digests. |
+| Project only `criteria.yaml` and a present `spec.md` under `acceptance/`; mount the projected acceptance directory read-only in the agent sandbox. | Public examples remain readable; smoke tests, private notes and hidden tests stay outside the projection. Promote's existing acceptance-path denial remains unchanged. |

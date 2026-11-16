@@ -188,6 +188,10 @@ def agent(
     args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", SANDBOX_TMP]
     for path in (projection, home, *sockets):
         args += ["--bind", str(path), str(path)]
+    # Protect the public contract even though the candidate source is writable.
+    acceptance = projection / "acceptance"
+    if acceptance.is_dir():
+        args += ["--ro-bind", str(acceptance), str(acceptance)]
     for path in read_only:
         args += ["--ro-bind", str(path), str(path)]
     for fd, destination in pinned_read_only:

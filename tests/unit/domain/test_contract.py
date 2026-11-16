@@ -101,3 +101,83 @@ def test_canonical_bytes_ignore_input_order() -> None:
     two = parse_contract({**base, "env": {"A": "1", "B": "2"}})
     assert canonical_contract_bytes(one) == canonical_contract_bytes(two)
     assert canonical_contract_bytes(one) != canonical_contract_bytes(parse_contract(base))
+
+
+def test_spec_and_examples_are_bound_to_canonical_bytes() -> None:
+    from cheeseless.domain.freeze import freeze_digest
+
+    data = _with(
+        criteria=[
+            {
+                "id": "normalize",
+                "description": "CLI normalises input",
+                "examples": [{"input": "Hello\n", "expected_output": "hello\n"}],
+            }
+        ]
+    )
+    old = canonical_contract_bytes(parse_contract(GOOD))
+    contract = parse_contract(data, spec="# Public spec\n")
+    assert contract.spec == "# Public spec\n"
+    assert contract.criteria[0].examples[0].input == "Hello\n"
+    assert contract.criteria[0].examples[0].expected_output == "hello\n"
+    assert parse_contract(contract_data(contract), spec=contract.spec) == contract
+    encodings = [
+        old,
+        canonical_contract_bytes(parse_contract(data)),
+        canonical_contract_bytes(contract),
+        canonical_contract_bytes(parse_contract(data, spec="")),
+        canonical_contract_bytes(parse_contract(data, spec="changed")),
+    ]
+    assert len(set(encodings)) == len(encodings)
+    assert len({freeze_digest("1" * 40, "2" * 40, b) for b in encodings}) == len(encodings)
+
+
+@pytest.mark.parametrize(
+    "examples",
+    [
+        None,
+        {},
+        "text",
+        [None],
+        [{}],
+        [{"input": "x"}],
+        [{"input": "x", "expected_output": 1}],
+        [{"input": [], "expected_output": "x"}],
+        [{"input": "x", "expected_output": "y", "hidden": "z"}],
+    ],
+)
+def test_rejects_malformed_examples(examples: object) -> None:
+    with pytest.raises(ValueError, match="examples"):
+        parse_contract(
+            _with(
+                criteria=[
+                    {
+                        "id": "normalize",
+                        "description": "d",
+                        "examples": examples,
+                    }
+                ]
+            )
+        )
+
+
+def test_empty_examples_and_empty_text_are_supported() -> None:
+    for examples in ([], [{"input": "", "expected_output": ""}]):
+        contract = parse_contract(
+            _with(
+                criteria=[
+                    {
+                        "id": "normalize",
+                        "description": "d",
+                        "examples": examples,
+                    }
+                ]
+            )
+        )
+        assert parse_contract(contract_data(contract)) == contract
+
+
+def test_explicit_empty_examples_are_in_digest() -> None:
+    absent = parse_contract(GOOD)
+    present = parse_contract(_with(criteria=[{**GOOD["criteria"][0], "examples": []}]))
+    assert canonical_contract_bytes(absent) != canonical_contract_bytes(present)
