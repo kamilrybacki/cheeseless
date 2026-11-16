@@ -170,6 +170,16 @@ def build(
     ]
 
 
+def _acceptance_dir(projection: Path) -> Path:
+    """The projected ``acceptance/`` tree, or SandboxError: the mount fails closed."""
+    acceptance = projection / "acceptance"
+    if acceptance.is_symlink() or not acceptance.is_dir():
+        raise SandboxError(
+            f"the projection has no acceptance/ directory to mount read-only: {acceptance}"
+        )
+    return acceptance
+
+
 def agent(
     *,
     bwrap: str,
@@ -184,10 +194,14 @@ def agent(
     info_fd: int | None = None,
 ) -> list[str]:
     """The coding agent: it sees the projection and talks only through the sockets."""
+    acceptance = _acceptance_dir(projection)
     args = [bwrap, *_NAMESPACES, *_system(), *_try_binds((*ETC_ALLOW, *AGENT_ETC_ALLOW))]
     args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", SANDBOX_TMP]
     for path in (projection, home, *sockets):
         args += ["--bind", str(path), str(path)]
+    # Applied after the writable projection bind, so it lands on top of it. A plain
+    # --ro-bind (never -try): bwrap refuses to start if the source disappears.
+    args += ["--ro-bind", str(acceptance), str(acceptance)]
     for path in read_only:
         args += ["--ro-bind", str(path), str(path)]
     for fd, destination in pinned_read_only:

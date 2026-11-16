@@ -116,6 +116,7 @@ def test_build_profile_binds_only_the_workdir_writable(tmp_path: Path) -> None:
 
 def test_agent_profile_binds_projection_and_sockets(tmp_path: Path) -> None:
     proj = tmp_path / "proj"
+    (proj / "acceptance").mkdir(parents=True)
     sock = tmp_path / "run" / "verifier.sock"
     egress = tmp_path / "run" / "egress.sock"
     argv = profiles.agent(
@@ -133,6 +134,8 @@ def test_agent_profile_binds_projection_and_sockets(tmp_path: Path) -> None:
     assert (str(egress), str(egress)) in binds
     assert (str(tmp_path / "home"), str(tmp_path / "home")) in binds
     assert ("/opt/agent", "/opt/agent") in _pairs(argv, "--ro-bind", 2)
+    accept = str(proj / "acceptance")
+    assert (accept, accept) in _pairs(argv, "--ro-bind", 2)
     assert "--unshare-net" in argv
     assert ("HOME", str(tmp_path / "home")) in _pairs(argv, "--setenv", 2)
 

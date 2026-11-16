@@ -148,7 +148,7 @@ def test_mount_parent_symlink_swap_agent_sees_pinned_tree(tmp_path: Path) -> Non
     parent.symlink_to(evil)
 
     projection = tmp_path / "projection"
-    projection.mkdir()
+    (projection / "acceptance").mkdir(parents=True)
     home = tmp_path / "home"
     home.mkdir()
     probe = "import sys; print(open(sys.argv[1] + '/data.txt', encoding='utf-8').read(), end='')"
