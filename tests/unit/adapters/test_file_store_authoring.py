@@ -88,3 +88,44 @@ def test_waiver_reason_round_trips_and_old_tasks_decode(store: FileStore) -> Non
     waived = dataclasses.replace(plain, waiver="reference agent unavailable")
     store.save_task(waived, seed)
     assert store.load_task(plain.task.task_id)[0].waiver == "reference agent unavailable"
+
+
+def _waived(store: FileStore) -> tuple[str, Path]:
+    import dataclasses
+
+    from tests.factories import frozen_task
+
+    plain = frozen_task()
+    waived = dataclasses.replace(plain, waiver="reference agent unavailable")
+    store.save_task(waived, bytes(range(32)))
+    task_id = plain.task.task_id
+    return task_id, store.root / "tasks" / f"{task_id}.json"
+
+
+def test_editing_the_waiver_on_disk_is_detected(store: FileStore) -> None:
+    task_id, path = _waived(store)
+    path.write_bytes(path.read_bytes().replace(b"unavailable", b"inconvenient"))
+    with pytest.raises(StoreError, match="waiver"):
+        store.load_task(task_id)
+
+
+def test_removing_the_waiver_mac_or_adding_a_waiver_is_detected(store: FileStore) -> None:
+    import json
+
+    task_id, path = _waived(store)
+    data = json.loads(path.read_bytes())
+    stripped = {k: v for k, v in data.items() if k != "waiver_mac"}
+    path.write_bytes(json.dumps(stripped).encode())
+    with pytest.raises(StoreError, match="waiver"):
+        store.load_task(task_id)
+    # A MAC-less waiver injected into a task that had none is refused too.
+    from tests.factories import frozen_task
+
+    other = frozen_task()
+    store.save_task(other, bytes(range(32)))
+    p2 = store.root / "tasks" / f"{other.task.task_id}.json"
+    d2 = json.loads(p2.read_bytes())
+    d2["waiver"] = "forged"
+    p2.write_bytes(json.dumps(d2).encode())
+    with pytest.raises(StoreError, match="waiver"):
+        store.load_task(other.task.task_id)
