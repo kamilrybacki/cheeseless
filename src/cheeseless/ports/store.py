@@ -35,7 +35,15 @@ class Store(Protocol):
         """Return the key, creating it on first use."""
         ...
 
-    def save_task(self, frozen: FrozenTask, seed: bytes) -> None: ...
+    def save_task(self, frozen: FrozenTask, seed: bytes) -> None:
+        """Persist the immutable task and seed exactly once; ``StoreError`` if it exists."""
+        ...
+
+    def replace_task(self, frozen: FrozenTask, seed: bytes) -> None:
+        """Replace an existing task's seed and split (holdout rotation only)."""
+        ...
+
+    def has_task(self, task_id: str) -> bool: ...
 
     def load_task(self, task_id: str) -> tuple[FrozenTask, bytes]:
         """Raise ``StoreError`` if the task is unknown or unreadable."""

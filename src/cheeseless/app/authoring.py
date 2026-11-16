@@ -302,17 +302,23 @@ def approve_freeze(
     if proposal is None:
         raise AuthorError("unknown_proposal", "no such proposal")
     state = store.authoring_state(proposal.lineage_id, proposal.spec_digest)
-    if state.phase is not TaskPhase.PROPOSED:
+    # An approval that persisted the task and then failed leaves the state APPROVING with
+    # the task on disk: a retry resumes it (the seed is never regenerated).
+    resuming = state.phase is TaskPhase.APPROVING and store.has_task(proposal.proposal_id)
+    if state.phase is not TaskPhase.PROPOSED and not resuming:
         raise AuthorError("not_proposed", f"the task is {state.phase.value}")
     _ready(repo, store, proposal, no_reference)
-    # Reserve before the expensive, side-effecting part: one approver at a time, and only
-    # from the exact state version this approver validated.
-    try:
-        reserved = store.save_authoring_state(state.approving())
-    except AuthoringError as exc:
-        raise AuthorError(
-            "approval_conflict", f"another approval won the reservation: {exc}"
-        ) from exc
+    if resuming:
+        reserved = state
+    else:
+        # Reserve before the expensive, side-effecting part: one approver at a time, and
+        # only from the exact state version this approver validated.
+        try:
+            reserved = store.save_authoring_state(state.approving())
+        except AuthoringError as exc:
+            raise AuthorError(
+                "approval_conflict", f"another approval won the reservation: {exc}"
+            ) from exc
     try:
         # The reservation closed the author surface, so what is checked now is what is frozen.
         _ready(repo, store, proposal, no_reference)
@@ -327,7 +333,17 @@ def approve_freeze(
         if prepared.task_id != proposal.proposal_id:
             raise AuthorError("not_merged", "the default branch no longer reproduces the freeze")
         result = commit(prepared, store, waiver=reason if no_reference else "")
-    except BaseException:
+    except BaseException as exc:
+        if store.has_task(proposal.proposal_id):
+            # The immutable task is already published: releasing would let a retry race a
+            # half-finished freeze. Stay sealed; re-running the approval finishes it.
+            if isinstance(exc, Exception):
+                raise AuthorError(
+                    "approval_incomplete",
+                    f"the freeze was committed but not finished ({exc}); "
+                    "run the approval again to complete it",
+                ) from exc
+            raise
         store.save_authoring_state(reserved.released())
         raise
     store.save_authoring_state(reserved.frozen())

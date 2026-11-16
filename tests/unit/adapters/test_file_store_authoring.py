@@ -96,8 +96,9 @@ def test_waiver_reason_round_trips_and_old_tasks_decode(store: FileStore) -> Non
     on_disk = json.loads((store.root / "tasks" / f"{plain.task.task_id}.json").read_bytes())
     assert "waiver" not in on_disk and "waiver_mac" in on_disk
     waived = dataclasses.replace(plain, waiver="reference agent unavailable")
-    store.save_task(waived, seed)
-    assert store.load_task(plain.task.task_id)[0].waiver == "reference agent unavailable"
+    other = FileStore(store.root.parent / "other-state")
+    other.save_task(waived, seed)
+    assert other.load_task(plain.task.task_id)[0].waiver == "reference agent unavailable"
 
 
 def _waived(store: FileStore) -> tuple[str, Path]:
@@ -132,6 +133,7 @@ def test_removing_the_waiver_mac_or_adding_a_waiver_is_detected(store: FileStore
     from tests.factories import frozen_task
 
     other = frozen_task()
+    store = FileStore(store.root.parent / "other-state")  # same task id, separate store
     store.save_task(other, bytes(range(32)))
     p2 = store.root / "tasks" / f"{other.task.task_id}.json"
     d2 = json.loads(p2.read_bytes())
@@ -230,3 +232,14 @@ def test_a_waiver_reason_of_none_is_not_the_absence_of_a_waiver(store: FileStore
     path.write_bytes(json.dumps(data).encode())
     with pytest.raises(StoreError, match="waiver"):
         store.load_task(plain.task.task_id)
+
+
+def test_a_persisted_task_cannot_be_replaced(store: FileStore) -> None:
+    from tests.factories import frozen_task
+
+    plain = frozen_task()
+    store.save_task(plain, bytes(range(32)))
+    with pytest.raises(StoreError, match="already"):
+        store.save_task(plain, bytes(reversed(range(32))))
+    assert store.load_task(plain.task.task_id)[1] == bytes(range(32))
+    assert store.has_task(plain.task.task_id) and not store.has_task("f" * 64)

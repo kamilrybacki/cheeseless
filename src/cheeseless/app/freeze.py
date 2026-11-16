@@ -227,12 +227,19 @@ def commit(
     seed: bytes | None = None,
     waiver: str = "",
 ) -> FreezeCommitResult:
+    task_id = prepared.task_id
+    # Publication is exclusive and resumable: a task already persisted for this id keeps
+    # its seed, so a retry after a partial commit never regenerates the holdout split.
+    persisted = store.load_task(task_id) if store.has_task(task_id) else None
+    if persisted is not None:
+        if seed is not None and seed != persisted[1]:
+            raise FreezeError(["a different holdout seed is already persisted for this task"])
+        seed = persisted[1]
     if seed is None:
         seed = secrets.token_bytes(HOLDOUT_SEED_BYTES)
     if len(seed) != HOLDOUT_SEED_BYTES:
         raise ValueError("holdout seed must be exactly 32 bytes")
     split_result = holdout_split(seed, prepared.tests)
-    task_id = prepared.task_id
     expected = freeze_digest(
         prepared.baseline_commit,
         prepared.acceptance_tree,
@@ -252,7 +259,10 @@ def commit(
         holdout=dict(split_result.holdout),
         waiver=waiver,
     )
-    store.save_task(frozen, seed)
+    if persisted is None:
+        store.save_task(frozen, seed)
+    elif persisted[0] != frozen:
+        raise FreezeError(["the persisted task differs from the prepared freeze"])
     store.save_fingerprints(prepared.fingerprints)
     store.set_active(task_id)
     store.log_event(task_id, "freeze", "committed")

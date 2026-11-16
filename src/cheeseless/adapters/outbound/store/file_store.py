@@ -77,13 +77,30 @@ class FileStore(AuthoringStoreMixin):
         return self._root / "tasks" / f"{_task_id(task_id)}.json"
 
     def save_task(self, frozen: FrozenTask, seed: bytes) -> None:
+        self._write_task(frozen, seed, replace=False)
+
+    def replace_task(self, frozen: FrozenTask, seed: bytes) -> None:
+        self._write_task(frozen, seed, replace=True)
+
+    def _write_task(self, frozen: FrozenTask, seed: bytes, *, replace: bool) -> None:
         if len(seed) != SEED_BYTES:
             raise StoreError(f"holdout seed must be {SEED_BYTES} bytes")
         raw = codec.encode_task(frozen, seed)
         data = codec.loads(raw, "task")
         data["waiver_mac"] = self._waiver_mac(frozen.task.task_id, frozen.waiver)
         raw = codec.dumps(data)
-        _fs.write_atomic(self._task_path(frozen.task.task_id), raw)
+        path = self._task_path(frozen.task.task_id)
+        _fs.ensure_private_dir(path.parent)
+        with _fs.locked(self._root / "store.lock"):
+            exists = _fs.read_bytes(path) is not None
+            if exists and not replace:
+                raise StoreError(f"task {frozen.task.task_id} is already persisted")
+            if replace and not exists:
+                raise StoreError(f"task {frozen.task.task_id} is not persisted")
+            _fs.write_atomic(path, raw)
+
+    def has_task(self, task_id: str) -> bool:
+        return _fs.read_bytes(self._task_path(task_id)) is not None
 
     def _waiver_mac(self, task_id: str, waiver: str) -> str:
         """The waiver sits outside the freeze digest, so the host key authenticates it.

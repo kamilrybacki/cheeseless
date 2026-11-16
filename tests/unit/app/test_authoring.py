@@ -354,6 +354,13 @@ class _HookedStore(FileStore):
 
     after_read = None
     after_reserve = None
+    fail_set_active = False
+
+    def set_active(self, task_id):
+        if self.fail_set_active:
+            self.fail_set_active = False
+            raise OSError("injected failure after the task was persisted")
+        super().set_active(task_id)
 
     def authoring_state(self, lineage_id, spec_digest):
         state = super().authoring_state(lineage_id, spec_digest)
@@ -525,3 +532,24 @@ def test_the_gate_maps_a_closed_check_to_author_refused(world):
     repo, store = _frozen_world(world)
     out = author_gate.gate_author_check(repo, FakeAuthorSandbox(_line()), store, repo.root)
     assert isinstance(out, GateError) and out.code is ErrorCode.AUTHOR_REFUSED
+
+
+def test_a_failure_after_the_task_is_persisted_keeps_the_seed_on_retry(hooked):
+    repo, store, tmp = hooked
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+    contract = uc.read_contract(repo, _source(repo))
+    store.fail_set_active = True
+    with pytest.raises(AuthorError) as caught:
+        _approve(repo, store, tmp, proposal)
+    assert caught.value.kind == "approval_incomplete"
+    persisted_seed = store.load_task(proposal.proposal_id)[1]
+    state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
+    assert state.phase is TaskPhase.APPROVING  # sealed: the author cannot slip in meanwhile
+    result = _approve(repo, store, tmp, proposal)
+    assert result.seed == persisted_seed
+    assert store.load_task(proposal.proposal_id)[1] == persisted_seed
+    assert store.active_task_id() == result.task_id
+    state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
+    assert state.phase is TaskPhase.FROZEN

@@ -24,7 +24,7 @@ def rotate_holdout(store: Store, task_id: str, *, seed: bytes | None = None) -> 
         raise ValueError("the frozen task has no tests to split")
     result = split(seed, tests)
     rotated = replace(frozen, visible=dict(result.visible), holdout=dict(result.holdout))
-    store.save_task(rotated, seed)
+    store.replace_task(rotated, seed)
     store.log_event(task_id, "holdout", "rotated")
     return rotated
 
