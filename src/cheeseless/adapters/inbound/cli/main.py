@@ -12,12 +12,21 @@ from typing import Any
 
 from cheeseless import __version__
 from cheeseless.adapters.inbound.mapping import agent_view_to_dict, result_to_dict
+from cheeseless.app.authoring import (
+    AuthorError,
+    AuthorStore,
+    approve_freeze,
+    record_reference,
+    reference_failed,
+    start_reference,
+)
 from cheeseless.app.dispute import configure_disputes, list_disputes, resolve_dispute
 from cheeseless.app.dlp import scanner_for
-from cheeseless.app.freeze import FreezeError, commit, prepare
+from cheeseless.app.freeze import FreezeError, commit, prepare, read_contract
 from cheeseless.app.gate_run import gate_run
 from cheeseless.app.promote import PromoteRejected, promote
 from cheeseless.app.status import status
+from cheeseless.domain.authoring import AuthoringError
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.dispute import DEFAULT_CAP, DisputeRecord
 from cheeseless.domain.result import Result
@@ -86,6 +95,33 @@ def build_parser() -> argparse.ArgumentParser:
     freeze.add_argument("--timeout", type=float, default=300.0)
     freeze.add_argument("--yes", action="store_true", help="Skip the approval prompt.")
     freeze.add_argument("--tool-version", default="0.1.0")
+    freeze.add_argument(
+        "--approve",
+        metavar="PROPOSAL_ID",
+        default=None,
+        help="Host only: approve a proposed freeze (ADR 0009).",
+    )
+    freeze.add_argument("--as", dest="actor", default=None, help="Who approves (with --approve).")
+    freeze.add_argument(
+        "--no-reference",
+        action="store_true",
+        help="Waive the reference crosscheck; needs --reason.",
+    )
+    freeze.add_argument("--reason", default="", help="Why the crosscheck is waived.")
+    freeze.add_argument("--json", action="store_true")
+
+    ref = sub.add_parser("reference", help="Host only: reference-session bookkeeping.")
+    rsub = ref.add_subparsers(dest="reference_command")
+    for name, text in (
+        ("record", "Snapshot a reference worktree for the current spec."),
+        ("failed", "Record that a reference session failed (blocks the task)."),
+        ("retry", "Start a reference retry (at most two)."),
+    ):
+        rp = rsub.add_parser(name, help=text)
+        rp.add_argument("--source", default=None, help="Commit or tree with the contract.")
+        rp.add_argument("--json", action="store_true")
+        if name == "record":
+            rp.add_argument("--worktree", type=Path, required=True)
 
     run = sub.add_parser("run", help="Run the gate against a candidate worktree.")
     run.add_argument("--worktree", type=Path, default=None)
@@ -210,7 +246,88 @@ def _print_json(obj: object) -> None:
     print(json.dumps(obj, indent=2, sort_keys=True))
 
 
+def _author_store(ctx: Context) -> AuthorStore:
+    return ctx.store  # type: ignore[return-value]
+
+
+def _emit(args: argparse.Namespace, payload: dict[str, object], text: str) -> None:
+    if args.json:
+        _print_json(payload)
+    else:
+        print(text)
+
+
+def _cmd_approve(args: argparse.Namespace, ctx: Context) -> int:
+    if not args.actor:
+        print("--approve needs --as <actor>", file=sys.stderr)
+        return 2
+    try:
+        result = approve_freeze(
+            ctx.repo,
+            ctx.runner,
+            ctx.sandbox,
+            _author_store(ctx),
+            args.approve,
+            actor=args.actor,
+            no_reference=args.no_reference,
+            reason=args.reason,
+        )
+    except AuthorError as exc:
+        _emit(args, {"approved": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
+        return 1
+    except FreezeError as exc:
+        _emit(
+            args,
+            {"approved": False, "error": "freeze", "problems": list(exc.problems)},
+            f"freeze failed: {'; '.join(exc.problems)}",
+        )
+        return 1
+    task_id = result.task_id  # type: ignore[attr-defined]
+    _emit(
+        args,
+        {
+            "approved": True,
+            "task_id": task_id,
+            "actor": args.actor,
+            "no_reference": bool(args.no_reference),
+        },
+        f"frozen task: {task_id}",
+    )
+    return 0
+
+
+def _cmd_reference(args: argparse.Namespace, ctx: Context) -> int:
+    command = getattr(args, "reference_command", None)
+    if command is None:
+        print("usage: cheeseless reference {record,failed,retry}", file=sys.stderr)
+        return 2
+    source = args.source or ctx.repo.head_commit()
+    store = _author_store(ctx)
+    try:
+        if command == "record":
+            tree = record_reference(ctx.repo, store, args.worktree, source)
+            _emit(args, {"reference_tree": tree}, f"reference recorded: {tree}")
+            return 0
+        contract = read_contract(ctx.repo, source)
+        state = (reference_failed if command == "failed" else start_reference)(store, contract)
+    except (AuthoringError, FreezeError, StoreError) as exc:
+        _emit(args, {"ok": False, "message": str(exc)}, f"refused: {exc}")
+        return 1
+    _emit(
+        args,
+        {
+            "phase": state.phase.value,
+            "retries_left": state.retries_left,
+            "failures": state.reference_failures,
+        },
+        f"{state.phase.value}, {state.retries_left} retries left",
+    )
+    return 0
+
+
 def _cmd_freeze(args: argparse.Namespace, ctx: Context) -> int:
+    if args.approve:
+        return _cmd_approve(args, ctx)
     try:
         prepared = prepare(
             ctx.repo,
@@ -429,6 +546,8 @@ _NEXT_STEP = {
 def dispatch(args: argparse.Namespace, ctx: Context) -> int:
     if args.command == "freeze":
         return _cmd_freeze(args, ctx)
+    if args.command == "reference":
+        return _cmd_reference(args, ctx)
     if args.command == "run":
         return _cmd_run(args, ctx)
     if args.command == "status":
