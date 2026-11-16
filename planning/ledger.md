@@ -694,3 +694,17 @@ Reviewer: claude-opus-5-5 (independent session, code review). Verdict: approve a
 | R5 | Weak race-test assertion. | Accepted as is (low value). |
 | R6 | Corrupt policy gives `INFRA_ERROR`, not `dispute_disabled`; `dispute config` could not rewrite it. | Fixed: G1 wording; `dispute config` falls back to the default cap. |
 | R7 | UDS `/status` treated an unreadable dispute ledger as "no dispute". | Fixed: fails closed with `INFRA_ERROR`; test added. |
+
+### Stage (c) review resolution
+
+Reviewer: claude-opus-5-5 (independent session, code review). Verdict: approve after fixes.
+
+| # | Finding | Resolution |
+|---|---------|------------|
+| C1 | Any failed write counted as refused (`failed to` pattern), so a stale edit marked a test touch. | Fixed: only sandbox signals count; other failures are dropped; Codex multi-file refusals go only to named files. Tests per case. |
+| C2 | Unobserved runs were indistinguishable from "no write". | Fixed: `writes_observed` on `ArmResult` and the manifest; the report counts unobserved runs per arm and agent. |
+| C3 | `Path.glob` followed symlinked transcript directories and files. | Fixed: `os.walk(followlinks=False)`, `lstat` on every directory, symlinked files skipped, realpath kept under HOME, `O_NOFOLLOW` reads. |
+| C4 | Cheeseless-only TRUNCATED check made the arms differ. | Fixed: the parser alone decides unobserved, in both arms; the check and `evidence` argument are gone. |
+| C5 | TOCTOU between the `acceptance/` check and the bind. | Fixed: `open_acceptance` opens with `O_PATH\|O_NOFOLLOW\|O_DIRECTORY`, fstats it, and mounts with `--ro-bind-fd`; fails closed with `SandboxError`. |
+| C6 | Security probe never read the canary and did not try a hard link. | Fixed: the probe reads the canary back in the sandbox and attempts `os.link` and a canary overwrite; digest check kept. |
+| C7 | Amendment 7 described a state the code no longer had. | Fixed: rewritten to match the code. |
