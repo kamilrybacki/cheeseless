@@ -45,6 +45,7 @@ def encode_task(frozen: FrozenTask, seed: bytes) -> bytes:
             "hidden_blobs": [[b.path, b.oid] for b in frozen.hidden_blobs],
             "visible": dict(frozen.visible),
             "holdout": dict(frozen.holdout),
+            **({"waiver": frozen.waiver} if frozen.waiver else {}),
         }
     )
 
@@ -55,6 +56,12 @@ def _str_map(value: object) -> dict[str, str]:
     ):
         raise ValueError("expected a string mapping")
     return dict(value)
+
+
+def _waiver(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("waiver must be text")
+    return value
 
 
 def _build_task(data: dict[str, Any]) -> tuple[FrozenTask, bytes]:
@@ -73,6 +80,7 @@ def _build_task(data: dict[str, Any]) -> tuple[FrozenTask, bytes]:
         hidden_blobs=tuple(HiddenBlob(p, o) for p, o in data["hidden_blobs"]),
         visible=_str_map(data["visible"]),
         holdout=_str_map(data["holdout"]),
+        waiver=_waiver(data.get("waiver", "")),
     )
     digest = freeze_digest(
         frozen.baseline_commit, frozen.acceptance_tree, canonical_contract_bytes(contract)

@@ -34,6 +34,8 @@ class FrozenTask:
     hidden_blobs: tuple[HiddenBlob, ...]
     visible: Mapping[str, str]
     holdout: Mapping[str, str]
+    # Reason the reference crosscheck was waived at approval (ADR 0009). Not in the digest.
+    waiver: str = ""
 
     def __post_init__(self) -> None:
         ids.git_oid(self.baseline_commit)

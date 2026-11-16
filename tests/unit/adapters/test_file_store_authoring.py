@@ -73,3 +73,18 @@ def test_bad_ids_rejected(store: FileStore) -> None:
         store.load_proposal("../x")
     with pytest.raises(StoreError):
         store.authoring_state("../x", SPEC)
+
+
+def test_waiver_reason_round_trips_and_old_tasks_decode(store: FileStore) -> None:
+    import dataclasses
+
+    from tests.factories import frozen_task
+
+    seed = bytes(range(32))
+    plain = frozen_task()
+    store.save_task(plain, seed)
+    assert store.load_task(plain.task.task_id)[0].waiver == ""
+    assert b"waiver" not in (store.root / "tasks" / f"{plain.task.task_id}.json").read_bytes()
+    waived = dataclasses.replace(plain, waiver="reference agent unavailable")
+    store.save_task(waived, seed)
+    assert store.load_task(plain.task.task_id)[0].waiver == "reference agent unavailable"
