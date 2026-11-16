@@ -392,25 +392,44 @@ def test_interleaved_approvals_freeze_exactly_once(hooked):
     assert len(winners) == 1 and store.active_task_id() == winners[0].task_id
 
 
-def test_a_reference_swapped_after_the_reservation_is_refused_and_rolled_back(hooked):
+def test_a_reference_write_that_passed_the_open_check_loses_to_approval(hooked):
     repo, store, tmp = hooked
     _record(repo, store)
     _green(repo, store)
     proposal = uc.freeze_propose(repo, store, _source(repo))
+    contract = uc.read_contract(repo, _source(repo))
+    before = store.load_reference(contract.lineage_id)
+    late = tmp / "late-reference"
+    late.mkdir()
+    (late / "late.txt").write_text("a different reference\n")
+    winners = []
+    # The writer has passed its open check; approval completes before it publishes.
+    store.after_read = lambda: winners.append(_approve(repo, store, tmp, proposal))
+    with pytest.raises(AuthorError) as caught:
+        uc.record_reference(repo, store, late, _source(repo))
+    assert caught.value.kind in {"approval_conflict", "frozen"}
+    assert store.load_reference(contract.lineage_id) == before
+    assert len(winners) == 1 and store.active_task_id() == winners[0].task_id
+
+
+def test_a_late_reference_write_during_approval_cannot_publish(hooked):
+    repo, store, tmp = hooked
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+    contract = uc.read_contract(repo, _source(repo))
+    read = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
+    before = store.load_reference(contract.lineage_id)
 
     def swap():
-        # A writer that passed its closure check before the reservation: straight to the store.
-        contract = uc.read_contract(repo, _source(repo))
-        store.save_reference(contract.lineage_id, uc.spec_of(contract), "e" * 40)
+        with pytest.raises(AuthoringError):
+            store.save_reference(
+                contract.lineage_id, uc.spec_of(contract), "e" * 40, expected_version=read.version
+            )
 
     store.after_reserve = swap
-    with pytest.raises(AuthorError) as caught:
-        _approve(repo, store, tmp, proposal)
-    assert caught.value.kind == "crosscheck_stale"
-    assert store.active_task_id() is None
-    contract = uc.read_contract(repo, _source(repo))
-    state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
-    assert state.phase is TaskPhase.PROPOSED
+    _approve(repo, store, tmp, proposal)
+    assert store.load_reference(contract.lineage_id) == before
 
 
 def test_a_failed_approval_releases_the_reservation(world):

@@ -54,6 +54,19 @@ class AuthoringStoreMixin:
         with _fs.locked(self._root / "store.lock"):
             _fs.write_atomic(self._authoring_path(name), codec.dumps(data))
 
+    def _write_if_current(
+        self, lineage: str, expected_version: int, name: str, data: dict[str, Any]
+    ) -> None:
+        """Publish ``data`` only while the lifecycle is still at ``expected_version``.
+
+        The check and the write share the ``store.lock`` flock with the state CAS, so a
+        reservation that lands in between makes the late writer lose."""
+        _fs.ensure_private_dir(self._root / _DIR)
+        with _fs.locked(self._root / "store.lock"):
+            if self._stored_version(lineage) != expected_version:
+                raise AuthoringError("the authoring state changed since it was read")
+            _fs.write_atomic(self._authoring_path(name), codec.dumps(data))
+
     def _stored_version(self, lineage: str) -> int:
         data = self._read_authoring(f"state-{lineage}.json")
         if data is None:
@@ -137,9 +150,14 @@ class AuthoringStoreMixin:
 
     # -- reference snapshot --------------------------------------------------
 
-    def save_reference(self, lineage_id: str, spec_digest: str, tree: str) -> None:
-        self._write_authoring(
-            f"reference-{_lineage(lineage_id)}.json",
+    def save_reference(
+        self, lineage_id: str, spec_digest: str, tree: str, *, expected_version: int
+    ) -> None:
+        lineage = _lineage(lineage_id)
+        self._write_if_current(
+            lineage,
+            expected_version,
+            f"reference-{lineage}.json",
             {
                 "spec_digest": _digest(spec_digest, "spec digest"),
                 "tree": _checked(ids.git_oid, tree, "reference tree"),
@@ -161,9 +179,13 @@ class AuthoringStoreMixin:
 
     # -- crosscheck ----------------------------------------------------------
 
-    def save_crosscheck(self, proposal_id: str, record: CrosscheckRecord) -> None:
+    def save_crosscheck(
+        self, proposal_id: str, lineage_id: str, record: CrosscheckRecord, *, expected_version: int
+    ) -> None:
         pid = _digest(proposal_id, "proposal id")
-        self._write_authoring(
+        self._write_if_current(
+            _lineage(lineage_id),
+            expected_version,
             f"crosscheck-{pid}.json",
             {
                 "acceptance_tree": record.acceptance_tree,

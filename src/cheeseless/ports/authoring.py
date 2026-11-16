@@ -20,14 +20,23 @@ class AuthoringStore(Protocol):
 
     def load_proposal(self, proposal_id: str) -> Proposal | None: ...
 
-    def save_reference(self, lineage_id: str, spec_digest: str, tree: str) -> None:
-        """Bind a reference snapshot tree to the spec it was built from."""
+    def save_reference(
+        self, lineage_id: str, spec_digest: str, tree: str, *, expected_version: int
+    ) -> None:
+        """Bind a reference snapshot tree to the spec it was built from.
+
+        Conditional: refused (``AuthoringError``) unless the lifecycle is still at
+        ``expected_version``, checked atomically with the write."""
         ...
 
     def load_reference(self, lineage_id: str) -> tuple[str, str] | None:
         """``(spec_digest, tree)`` of the latest snapshot, or ``None``."""
         ...
 
-    def save_crosscheck(self, proposal_id: str, record: CrosscheckRecord) -> None: ...
+    def save_crosscheck(
+        self, proposal_id: str, lineage_id: str, record: CrosscheckRecord, *, expected_version: int
+    ) -> None:
+        """Conditional on the lifecycle version, like ``save_reference``."""
+        ...
 
     def load_crosscheck(self, proposal_id: str) -> CrosscheckRecord | None: ...

@@ -50,14 +50,14 @@ def test_proposal_round_trip_and_unknown(store: FileStore) -> None:
 
 def test_reference_snapshot_round_trip(store: FileStore) -> None:
     assert store.load_reference("demo") is None
-    store.save_reference("demo", SPEC, OID)
+    store.save_reference("demo", SPEC, OID, expected_version=0)
     assert store.load_reference("demo") == (SPEC, OID)
 
 
 def test_crosscheck_round_trip(store: FileStore) -> None:
     rec = CrosscheckRecord(OID, SPEC, OID, OID, False, ("c1",))
     assert store.load_crosscheck(PID) is None
-    store.save_crosscheck(PID, rec)
+    store.save_crosscheck(PID, "demo", rec, expected_version=0)
     assert store.load_crosscheck(PID) == rec
 
 
@@ -197,3 +197,19 @@ def test_an_unwaived_task_without_the_waiver_field_is_refused(store: FileStore) 
     path.write_bytes(json.dumps(data).encode())
     with pytest.raises(StoreError, match="waiver"):
         store.load_task(plain.task.task_id)
+
+
+def test_reference_and_crosscheck_publication_is_conditional_on_the_state_version(
+    store: FileStore,
+) -> None:
+    read = store.authoring_state("demo", SPEC)
+    store.save_authoring_state(read.proposed())  # the lifecycle moved on after the read
+    with pytest.raises(AuthoringError, match="changed"):
+        store.save_reference("demo", SPEC, OID, expected_version=read.version)
+    rec = CrosscheckRecord(OID, SPEC, OID, OID, True, ())
+    with pytest.raises(AuthoringError, match="changed"):
+        store.save_crosscheck(PID, "demo", rec, expected_version=read.version)
+    assert store.load_reference("demo") is None and store.load_crosscheck(PID) is None
+    current = store.authoring_state("demo", SPEC)
+    store.save_reference("demo", SPEC, OID, expected_version=current.version)
+    assert store.load_reference("demo") == (SPEC, OID)

@@ -8,6 +8,7 @@ advisory: approval re-runs the baseline itself and only trusts host-side records
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -67,6 +68,16 @@ def _require_open(store: AuthoringStore, contract: Contract) -> AuthoringState:
     if state.sealed:
         raise AuthorError("frozen", "the task is frozen; author operations are closed")
     return state
+
+
+def _publish(write: Callable[[], None]) -> None:
+    """Run a version-conditional write; losing the race to approval is a refusal."""
+    try:
+        write()
+    except AuthoringError as exc:
+        raise AuthorError(
+            "approval_conflict", "the task changed while this was running; nothing was recorded"
+        ) from exc
 
 
 def _baseline(repo: Repository, baseline_commit: str | None) -> str:
@@ -146,9 +157,13 @@ def author_check(
 def record_reference(repo: Repository, store: AuthoringStore, worktree: Path, source: str) -> str:
     """Snapshot the reference worktree and bind it to the current spec (host-side)."""
     contract = read_contract(repo, source)
-    _require_open(store, contract)
+    state = _require_open(store, contract)
     tree = repo.snapshot(worktree)
-    store.save_reference(contract.lineage_id, spec_of(contract), tree)
+    _publish(
+        lambda: store.save_reference(
+            contract.lineage_id, spec_of(contract), tree, expected_version=state.version
+        )
+    )
     return tree
 
 
@@ -167,7 +182,7 @@ def author_crosscheck(
     """
     contract = read_contract(repo, source)
     spec = spec_of(contract)
-    _require_open(store, contract)
+    state = _require_open(store, contract)
     saved = store.load_reference(contract.lineage_id)
     if saved is None or saved[0] != spec:
         raise AuthorError("no_reference", "no reference snapshot is bound to the current spec")
@@ -196,7 +211,12 @@ def author_crosscheck(
         green=green,
         red_criteria=tuple(red) if not green else (),
     )
-    store.save_crosscheck(proposal_id_for(repo, source, baseline), record)
+    pid = proposal_id_for(repo, source, baseline)
+    _publish(
+        lambda: store.save_crosscheck(
+            pid, contract.lineage_id, record, expected_version=state.version
+        )
+    )
     return record
 
 
