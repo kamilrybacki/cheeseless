@@ -654,6 +654,14 @@ ADR 0009 accepted after round 2.
 | A6 | Other files in `acceptance/contract/` are no longer projected | Rejected on re-check: the full suite showed the study's public `acceptance/contract/test_smoke.py` vanished from the projection. The whole contract directory is public again, as before stage (a); a security test pins that public tests stay projected and hidden tests do not. |
 | A7 | Full suite: the read-only `acceptance/` mount turned the demo `weaken-tests` tactic INCONCLUSIVE (OSError) and hid refused tamper writes from the study's tree-diff classifier, which runs the live gate | Mount and its probes removed from stage (a) and moved to stage (c) with A4 and A5. Integrity does not depend on it: `spec.md` and examples are in the freeze digest and promote rejects `acceptance/` (`test_public_spec`). Stage (c) must ship it together with a demo tactic that reports a refused write as blocked, a re-check of recordings and deck wording, and an operator decision on a study amendment that counts refused writes. |
 
+#### Stage (a) deferred items, resolved in stage (c)
+
+| # | Resolution |
+|---|------------|
+| A4 | Fixed: the implementer profile now fails closed with `SandboxError` when `projection/acceptance` is missing, a file or a symlink, instead of skipping the mount. Security test in `tests/security/test_agent_acceptance_readonly.py`. |
+| A5 | Fixed: the sandbox probe covers overwrite, append, create, delete, rename within and out, chmod, mkdir, and rmdir/rename of the mount itself, checks the rest of the work tree stays writable, and verifies the canary digest is unchanged. |
+| A7 | Fixed: the mount ships with (1) the demo `weaken-tests` tactic reporting a refused write as BLOCKED (never INCONCLUSIVE) only when every planned write was refused and none landed; (2) a separate `write_events` input to the study classifier fed by a symmetric transcript parser (Claude, Codex; opencode unobserved), so refused writes count as `touch_tests` evidence without flipping unobserved flags; (3) the study dry run's cheeseless weakener now gets refused writes and is labelled `blocked`; (4) study Amendment 7. Operator decision recorded there: only refused (`ok=False`) writes count, so naive results are unchanged. Recordings and deck wording re-checked: `docs/demo` casts, player and report regenerated from the demo; the only wording about edits "landing" was the old `weaken-tests` detail text. |
+
 ### ADR 0009 implementation, stage (g)
 
 | # | Decision or gap | Choice |
