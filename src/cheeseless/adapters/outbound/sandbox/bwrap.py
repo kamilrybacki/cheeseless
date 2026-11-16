@@ -17,7 +17,7 @@ from pathlib import Path
 
 from cheeseless.adapters.outbound.sandbox import profiles, seccomp
 from cheeseless.adapters.outbound.sandbox.launch import force_remove
-from cheeseless.ports.sandbox import SandboxError, StepOutcome
+from cheeseless.ports.sandbox import AuthorOutcome, SandboxError, StepOutcome
 
 DEFAULT_BWRAP = "/usr/bin/bwrap"
 BUILD_TIMEOUT = 600.0
@@ -76,6 +76,18 @@ def _trusted_tmpfs_scratch() -> Path:
     raise SandboxError("no verified tmpfs root available for trusted scratch")
 
 
+def _interpreter_roots() -> set[Path]:
+    """Prefixes the running interpreter needs, following each symlink hop of its path."""
+    roots = {Path(sys.prefix), Path(sys.base_prefix)}
+    hop = Path(sys.executable)
+    for _ in range(16):
+        if not hop.is_symlink():
+            break
+        hop = Path(os.path.normpath(hop.parent / os.readlink(hop)))
+        roots.add(hop.parent.parent)
+    return roots
+
+
 class BwrapSandbox:
     def __init__(self, bwrap: str = DEFAULT_BWRAP, build_timeout: float = BUILD_TIMEOUT) -> None:
         self._bwrap = bwrap
@@ -130,6 +142,49 @@ class BwrapSandbox:
                 return outcome
         return StepOutcome(True, 0)
 
+    def author_run(
+        self,
+        acceptance: Path,
+        reference: Path | None,
+        command: Sequence[str],
+        *,
+        env: Sequence[tuple[str, str]],
+        timeout: float = 300.0,
+    ) -> AuthorOutcome:
+        bwrap = self._check()
+        profiles.check_env(env)
+        # The interpreter and its libraries live outside /usr in a venv; mount them
+        # read-only so the unapproved suite can be collected at all.
+        interpreter = _interpreter_roots()
+        fd = seccomp.program_fd()
+        try:
+            argv = profiles.author(
+                bwrap=bwrap,
+                acceptance=acceptance.resolve(),
+                inside=profiles.inside_path(),
+                reference=reference.resolve() if reference is not None else None,
+                reference_inside=profiles.inside_path(),
+                extra_read_only=sorted(interpreter),
+                env=env,
+                seccomp_fd=fd,
+                command=command,
+            )
+            done = subprocess.run(  # noqa: S603 - argv built from validated parts
+                argv,
+                pass_fds=(fd,),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return AuthorOutcome(-1, _tail(exc.stdout), _tail(exc.stderr), timed_out=True)
+        except OSError as exc:
+            raise SandboxError(f"cannot start bubblewrap: {exc}") from exc
+        finally:
+            os.close(fd)
+        return AuthorOutcome(done.returncode, _tail(done.stdout, 1 << 20), _tail(done.stderr))
+
     def _step(
         self, bwrap: str, workdir: Path, step: Sequence[str], env: Sequence[tuple[str, str]]
     ) -> StepOutcome:
@@ -163,8 +218,8 @@ class BwrapSandbox:
         return StepOutcome(True, 0)
 
 
-def _tail(data: bytes | str | None) -> str:
+def _tail(data: bytes | str | None, limit: int = STDERR_TAIL) -> str:
     if not data:
         return ""
     text = data.decode("utf-8", "replace") if isinstance(data, bytes) else data
-    return text[-STDERR_TAIL:]
+    return text[-limit:]

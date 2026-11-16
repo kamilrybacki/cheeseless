@@ -38,3 +38,29 @@ class Sandbox(Protocol):
     def trusted_scratch(self) -> AbstractContextManager[Path]:
         """A fresh private tmpfs-backed directory for hidden tests, removed on exit."""
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorOutcome:
+    exit_code: int
+    stdout: str = ""
+    stderr_tail: str = ""
+    timed_out: bool = False
+
+
+class AuthorSandbox(Protocol):
+    def author_run(
+        self,
+        acceptance: Path,
+        reference: Path | None,
+        command: Sequence[str],
+        *,
+        env: Sequence[tuple[str, str]],
+        timeout: float = 300.0,
+    ) -> AuthorOutcome:
+        """Run ``command`` with the unapproved ``acceptance`` tree read-only.
+
+        New user, PID, IPC and network namespaces; no trusted store and no repo write;
+        ``reference`` (when given) is mounted read-only. Output is advisory.
+        """
+        ...

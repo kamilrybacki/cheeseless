@@ -7,6 +7,8 @@ read-only system directories and the paths a profile names are visible.
 * ``candidate``: the workdir is the lower layer of a disk-backed overlay mounted at a
   random path; writes land in a per-launch upper directory and are thrown away.
 * ``build``: the workdir is bound writable at a random path; no network.
+* ``author``: the unapproved acceptance tree and the reference snapshot, both read-only;
+  nothing is writable and there is no trusted store (ADR 0009).
 * ``agent``: the projection, the verifier and egress sockets and an ephemeral HOME.
 """
 
@@ -169,6 +171,31 @@ def build(
         *_candidate_env(env),
         *_command(command),
     ]
+
+
+def author(
+    *,
+    bwrap: str,
+    acceptance: Path,
+    inside: str,
+    reference: Path | None,
+    reference_inside: str,
+    extra_read_only: Sequence[Path],
+    env: Sequence[tuple[str, str]],
+    seccomp_fd: int,
+    command: Sequence[str],
+) -> list[str]:
+    """The author runner: unapproved tests, read-only trees, no store, no network."""
+    mount = _inside(inside)
+    args = _common(bwrap, seccomp_fd)
+    args += ["--ro-bind", str(acceptance), mount]
+    if reference is not None:
+        args += ["--ro-bind", str(reference), _inside(reference_inside)]
+    for path in extra_read_only:
+        if str(path) in RESERVED_MOUNTS or not path.is_absolute():
+            raise SandboxError(f"cannot mount {path} into the author runner")
+        args += ["--ro-bind-try", str(path), str(path)]
+    return [*args, "--chdir", mount, *_candidate_env(env), *_command(command)]
 
 
 def open_acceptance(projection: Path) -> int:
