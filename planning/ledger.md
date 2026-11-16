@@ -708,3 +708,25 @@ Reviewer: claude-opus-5-5 (independent session, code review). Verdict: approve a
 | C5 | TOCTOU between the `acceptance/` check and the bind. | Fixed: `open_acceptance` opens with `O_PATH\|O_NOFOLLOW\|O_DIRECTORY`, fstats it, and mounts with `--ro-bind-fd`; fails closed with `SandboxError`. |
 | C6 | Security probe never read the canary and did not try a hard link. | Fixed: the probe reads the canary back in the sandbox and attempts `os.link` and a canary overwrite; digest check kept. |
 | C7 | Amendment 7 described a state the code no longer had. | Fixed: rewritten to match the code. |
+
+## ADR 0009 implementation, stages (d)+(f)
+
+Author side of the gate: `author_check`, `author_crosscheck`, `freeze_propose`, the reference record and the host-only approval. Non-ADR decisions:
+
+| # | Area | Decision |
+|---|------|----------|
+| A1 | Retries | The cap of 2 (R12) is keyed by spec digest. A spec edit resets the failure and retry counts. `start_reference` is a no-op unless the phase is REFERENCE_BLOCKED and raises after 2 retries. |
+| A2 | Reference snapshot | The snapshot is written to the odb as an unreachable tree oid and recorded in the trusted store, bound to the spec digest. No ref points at it. |
+| A3 | "Merged" | Means tree equality: the acceptance tree at HEAD equals the proposed acceptance tree. Approve does not change state when the tree is not merged yet. |
+| A4 | Waiver | `--no-reference` needs `--reason` (R4). It waives only the crosscheck. The reason is stored in the frozen task outside the digest and authenticated by `waiver_mac`. Removing it is undetectable but only strengthens the gate. |
+| A5 | State key | Authoring state is keyed by lineage id. The store returns a FROZEN state unchanged when the spec is unchanged. |
+| A6 | Propose | Allowed from AUTHORING and REFERENCE_BLOCKED. It does not require a green crosscheck, because the waiver is applied at approve. A re-propose from PROPOSED goes through `stale()`. The proposal id equals the future task id. |
+| A7 | Approve | Reads from HEAD with the digest baseline `proposal.baseline_commit`. It checks the merge, a GREEN crosscheck with all four bindings (acceptance tree, spec digest, baseline, reference tree) and a RED baseline, then draws the seed. `prepare(source=...)` was added for this. |
+| A8 | Sandbox | A separate `AuthorSandbox` port. Author-runner root selection fails closed, protects the hidden paths, and keeps alias directories while real paths are checked. |
+| A9 | `author_check` | Uses an inline driver. Limit: a result line the candidate prints can be forged, so the check informs the author and never gates freezing. The crosscheck at approve is the authority. |
+| A10 | Reference env | `CHEESELESS_AUTHOR_REFERENCE` reaches the author runner through the `trusted_env` mechanism, not through caller-supplied env. |
+| A11 | Errors | New codes `ROLE_NOT_ALLOWED` 20, `REFERENCE_BLOCKED` 21, `AUTHOR_REFUSED` 22 and three RPCs. The RPCs are documentation only, because the transport is protojson over UDS. |
+| A12 | Role gate | `SessionConfig.role` (implementer or author). A wrong-role call gets a 200 with `ROLE_NOT_ALLOWED`. Routes match exact paths, so anything else is 404. Author sessions refuse run, status and dispute. |
+| A13 | No operator endpoint | Approve, reference record/failed/retry and promote exist only on the host CLI (`freeze --approve`, `reference ...`, all with `--json`). `tests/security/test_no_operator_endpoint.py` proves this for UDS and MCP, with a canary check. |
+
+Remaining (out of scope here): stage (b) role-aware promote; G12/G13 dispute budget reset; `session --role author|reference` launching; real reference-agent sessions.
