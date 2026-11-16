@@ -553,3 +553,99 @@ def test_a_failure_after_the_task_is_persisted_keeps_the_seed_on_retry(hooked):
     assert store.active_task_id() == result.task_id
     state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
     assert state.phase is TaskPhase.FROZEN
+
+
+def _strand(repo, store, tmp, *, publish: bool):
+    """Leave an APPROVING reservation behind, as a host that died mid-approval would."""
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+    contract = uc.read_contract(repo, _source(repo))
+    if publish:
+        store.fail_set_active = True
+        with pytest.raises(AuthorError):
+            _approve(repo, store, tmp, proposal)
+    else:
+        state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
+        store.save_authoring_state(state.approving())
+    return proposal, contract
+
+
+def test_recovery_rolls_an_unpublished_reservation_back_to_proposed(hooked):
+    repo, store, tmp = hooked
+    proposal, contract = _strand(repo, store, tmp, publish=False)
+    with pytest.raises(AuthorError) as caught:
+        _approve(repo, store, tmp, proposal)
+    assert caught.value.kind == "not_proposed"  # sealed: the reported bug
+    uc.recover_approval(store, proposal.proposal_id, actor="op")
+    state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
+    assert state.phase is TaskPhase.PROPOSED
+    assert _approve(repo, store, tmp, proposal).task_id == proposal.proposal_id
+
+
+def test_recovery_finishes_a_published_task_to_frozen(hooked):
+    repo, store, tmp = hooked
+    proposal, contract = _strand(repo, store, tmp, publish=True)
+    assert store.active_task_id() is None
+    uc.recover_approval(store, proposal.proposal_id, actor="op")
+    state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
+    assert state.phase is TaskPhase.FROZEN
+    assert store.active_task_id() == proposal.proposal_id
+
+
+def test_recovery_refuses_while_the_approver_is_alive(hooked):
+    repo, store, tmp = hooked
+    proposal, contract = _strand(repo, store, tmp, publish=False)
+    with store.approval_ownership(contract.lineage_id):
+        with pytest.raises(AuthorError) as caught:
+            uc.recover_approval(store, proposal.proposal_id, actor="op")
+    assert caught.value.kind == "approver_alive"
+    state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
+    assert state.phase is TaskPhase.APPROVING
+
+
+def test_recovery_only_applies_to_an_approving_reservation(hooked):
+    repo, store, tmp = hooked
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+    with pytest.raises(AuthorError) as caught:
+        uc.recover_approval(store, proposal.proposal_id, actor="op")
+    assert caught.value.kind == "not_approving"
+    with pytest.raises(AuthorError) as unknown:
+        uc.recover_approval(store, "e" * 64, actor="op")
+    assert unknown.value.kind == "unknown_proposal"
+
+
+def test_recovery_loses_to_a_state_change_between_read_and_save(hooked):
+    repo, store, tmp = hooked
+    proposal, contract = _strand(repo, store, tmp, publish=False)
+
+    def move_on():
+        s = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
+        store.save_authoring_state(s.released())
+
+    store.after_read = move_on
+    with pytest.raises(AuthorError) as caught:
+        uc.recover_approval(store, proposal.proposal_id, actor="op")
+    assert caught.value.kind == "recovery_conflict"
+
+
+def test_an_approval_holds_the_ownership_lock_for_its_whole_span(hooked):
+    repo, store, tmp = hooked
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+    contract = uc.read_contract(repo, _source(repo))
+    seen = []
+
+    def probe():
+        try:
+            with store.approval_ownership(contract.lineage_id):
+                seen.append("free")
+        except AuthoringError:
+            seen.append("held")
+
+    store.after_reserve = probe
+    _approve(repo, store, tmp, proposal)
+    assert seen == ["held"]

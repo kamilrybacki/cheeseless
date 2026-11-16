@@ -308,6 +308,31 @@ def approve_freeze(
     if state.phase is not TaskPhase.PROPOSED and not resuming:
         raise AuthorError("not_proposed", f"the task is {state.phase.value}")
     _ready(repo, store, proposal, no_reference)
+    try:
+        # Ownership spans reservation to finish: a live approver is what tells recovery
+        # apart from a dead one. A second approver is refused, not queued.
+        with store.approval_ownership(proposal.lineage_id):
+            return _approve_owned(
+                repo, sandbox, author_sandbox, store, proposal, state, resuming,
+                actor=actor, no_reference=no_reference, reason=reason,
+            )
+    except AuthoringError as exc:
+        raise AuthorError("approval_conflict", f"another approval is in progress: {exc}") from exc
+
+
+def _approve_owned(
+    repo: Repository,
+    sandbox: Sandbox,
+    author_sandbox: AuthorSandbox,
+    store: AuthorStore,
+    proposal: Proposal,
+    state: AuthoringState,
+    resuming: bool,
+    *,
+    actor: str,
+    no_reference: bool,
+    reason: str,
+) -> object:
     if resuming:
         reserved = state
     else:
@@ -353,6 +378,48 @@ def approve_freeze(
     return result
 
 
+def recover_approval(store: AuthorStore, proposal_id: str, *, actor: str) -> str:
+    """Host-only: clear an APPROVING reservation whose approver died. Returns the outcome.
+
+    Refused while the approver is alive (it holds the ownership lock). Never reachable
+    through the UDS or MCP surfaces. Published task: finish it to FROZEN; otherwise roll
+    back to PROPOSED. Every state change goes through the lifecycle compare-and-set."""
+    proposal = store.load_proposal(proposal_id)
+    if proposal is None:
+        raise AuthorError("unknown_proposal", "no such proposal")
+    try:
+        owner = store.approval_ownership(proposal.lineage_id)
+        with owner:
+            return _recover_owned(store, proposal, actor)
+    except AuthoringError as exc:
+        text = str(exc)
+        if "held" in text:
+            raise AuthorError("approver_alive", "an approver is still running; not recovering") from exc
+        raise AuthorError("recovery_conflict", f"the authoring state changed: {text}") from exc
+
+
+def _recover_owned(store: AuthorStore, proposal: Proposal, actor: str) -> str:
+    state = store.authoring_state(proposal.lineage_id, proposal.spec_digest)
+    if state.phase is not TaskPhase.APPROVING:
+        raise AuthorError("not_approving", f"nothing to recover: the task is {state.phase.value}")
+    tid = proposal.proposal_id
+    if not store.has_task(tid):
+        store.save_authoring_state(state.released())
+        store.log_event(tid, "freeze-recover", f"{actor} rolled-back")
+        return "rolled_back"
+    if store.load_fingerprints(tid) is None:
+        # Published but the DLP fingerprints are missing: finishing here would freeze
+        # without them. The approval itself rebuilds them, so that is the only way out.
+        raise AuthorError(
+            "approval_incomplete",
+            "the task is published without fingerprints; run the approval again to finish it",
+        )
+    store.set_active(tid)
+    store.save_authoring_state(state.frozen())
+    store.log_event(tid, "freeze-recover", f"{actor} finished")
+    return "finished"
+
+
 def _trusted_head(repo: Repository) -> str:
     """The default branch, not whichever checkout the host happens to have open."""
     try:
@@ -384,6 +451,7 @@ __all__ = [
     "freeze_propose",
     "proposal_id_for",
     "read_contract",
+    "recover_approval",
     "record_reference",
     "reference_failed",
     "spec_of",

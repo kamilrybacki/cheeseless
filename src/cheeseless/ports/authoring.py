@@ -1,5 +1,6 @@
 """Authoring records in the trusted store (ADR 0009, stages d and f)."""
 
+from contextlib import AbstractContextManager
 from typing import Protocol
 
 from cheeseless.domain.authoring import AuthoringState, CrosscheckRecord, Proposal
@@ -14,6 +15,13 @@ class AuthoringStore(Protocol):
         """Compare-and-set: refused (``AuthoringError``) unless ``state.version`` is current.
 
         Returns the stored state with its new version."""
+        ...
+
+    def approval_ownership(self, lineage_id: str) -> AbstractContextManager[None]:
+        """Exclusive, non-blocking ownership of a lineage's approval.
+
+        Held by an approver for its whole run and released by the OS if it dies. Raises
+        ``AuthoringError`` at once if another owner holds it."""
         ...
 
     def save_proposal(self, proposal: Proposal) -> None: ...

@@ -17,6 +17,7 @@ from cheeseless.app.authoring import (
     AuthorStore,
     approve_freeze,
     record_reference,
+    recover_approval,
     reference_failed,
     start_reference,
 )
@@ -124,6 +125,15 @@ def build_parser() -> argparse.ArgumentParser:
         rp.add_argument("--json", action="store_true")
         if name == "record":
             rp.add_argument("--worktree", type=Path, required=True)
+
+    auth = sub.add_parser("author", help="Host only: authoring lifecycle recovery.")
+    asub = auth.add_subparsers(dest="author_command")
+    rec = asub.add_parser(
+        "recover", help="Clear an approval reservation whose approver died (refuses if alive)."
+    )
+    rec.add_argument("--task", required=True, help="The proposal (task) id.")
+    rec.add_argument("--as", dest="actor", default=None, help="Who recovers (audit log).")
+    rec.add_argument("--json", action="store_true")
 
     run = sub.add_parser("run", help="Run the gate against a candidate worktree.")
     run.add_argument("--worktree", type=Path, default=None)
@@ -296,6 +306,26 @@ def _cmd_approve(args: argparse.Namespace, ctx: Context) -> int:
             "no_reference": bool(args.no_reference),
         },
         f"frozen task: {task_id}",
+    )
+    return 0
+
+
+def _cmd_author(args: argparse.Namespace, ctx: Context) -> int:
+    if args.author_command != "recover":
+        print("usage: cheeseless author recover --task <id> --as <actor>", file=sys.stderr)
+        return 2
+    if not args.actor:
+        print("author recover needs --as <actor>", file=sys.stderr)
+        return 2
+    try:
+        outcome = recover_approval(_author_store(ctx), args.task, actor=args.actor)
+    except AuthorError as exc:
+        _emit(args, {"recovered": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
+        return 1
+    _emit(
+        args,
+        {"recovered": True, "outcome": outcome, "task_id": args.task},
+        f"recovered {args.task}: {outcome}",
     )
     return 0
 
@@ -552,6 +582,8 @@ def dispatch(args: argparse.Namespace, ctx: Context) -> int:
         return _cmd_freeze(args, ctx)
     if args.command == "reference":
         return _cmd_reference(args, ctx)
+    if args.command == "author":
+        return _cmd_author(args, ctx)
     if args.command == "run":
         return _cmd_run(args, ctx)
     if args.command == "status":

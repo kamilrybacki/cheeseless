@@ -243,3 +243,19 @@ def test_a_persisted_task_cannot_be_replaced(store: FileStore) -> None:
         store.save_task(plain, bytes(reversed(range(32))))
     assert store.load_task(plain.task.task_id)[1] == bytes(range(32))
     assert store.has_task(plain.task.task_id) and not store.has_task("f" * 64)
+
+
+def test_the_approval_ownership_lock_is_exclusive_and_released(store: FileStore) -> None:
+    with store.approval_ownership("demo"):
+        with pytest.raises(AuthoringError, match="held"):
+            with store.approval_ownership("demo"):
+                raise AssertionError("a second owner must not get in")
+        with store.approval_ownership("other"):  # another lineage is independent
+            pass
+    with store.approval_ownership("demo"):  # released on exit, also after a failure
+        pass
+    with pytest.raises(RuntimeError):
+        with store.approval_ownership("demo"):
+            raise RuntimeError("boom")
+    with store.approval_ownership("demo"):
+        pass

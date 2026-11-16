@@ -131,3 +131,31 @@ def test_reference_error_paths_report_refusal_not_a_traceback(
     assert out["ok"] is False and out["message"]
     assert cli.main(["reference", command], context=_ctx()) == 1
     assert capsys.readouterr().out.startswith("refused:")
+
+
+def test_author_recover_success_and_refusal(monkeypatch, capsys) -> None:
+    seen = {}
+
+    def fake(store, pid, *, actor):
+        seen.update(pid=pid, actor=actor)
+        return "rolled_back"
+
+    monkeypatch.setattr(cli, "recover_approval", fake)
+    code = cli.main(["author", "recover", "--task", "p1", "--as", "op", "--json"], context=_ctx())
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0 and out == {"recovered": True, "outcome": "rolled_back", "task_id": "p1"}
+    assert seen == {"pid": "p1", "actor": "op"}
+
+    def alive(store, pid, *, actor):
+        raise AuthorError("approver_alive", "an approver is still running")
+
+    monkeypatch.setattr(cli, "recover_approval", alive)
+    code = cli.main(["author", "recover", "--task", "p1", "--as", "op", "--json"], context=_ctx())
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["recovered"] is False and out["error"] == "approver_alive"
+
+
+def test_author_recover_needs_actor_and_subcommand(capsys) -> None:
+    assert cli.main(["author", "recover", "--task", "p1"], context=_ctx()) == 2
+    assert "--as" in capsys.readouterr().err
+    assert cli.main(["author"], context=_ctx()) == 2

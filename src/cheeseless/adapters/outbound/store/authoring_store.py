@@ -6,6 +6,8 @@ are keyed by lineage id (the task id changes with every tree); proposals and
 crosschecks are keyed by the proposal id, which equals the future task id.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -117,6 +119,15 @@ class AuthoringStoreMixin:
                 ),
             )
         return saved
+
+    @contextmanager
+    def approval_ownership(self, lineage_id: str) -> Iterator[None]:
+        lineage = _lineage(lineage_id)
+        _fs.ensure_private_dir(self._root / _DIR)
+        with _fs.try_locked(self._authoring_path(f"approval-{lineage}.lock")) as owned:
+            if not owned:
+                raise AuthoringError("the approval ownership lock is held by a live approver")
+            yield
 
     # -- proposals -----------------------------------------------------------
 
