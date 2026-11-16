@@ -186,6 +186,7 @@ def test_mcp_stdio_inside_bwrap_host_session(env, tmp_path):
         assert {tool["name"] for tool in tools["result"]["tools"]} == {
             "gate_run",
             "gate_status",
+            "gate_dispute",
         }
         call = client.response(client.send("tools/call", {"name": "gate_run", "arguments": {}}))
         status = client.response(
