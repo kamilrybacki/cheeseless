@@ -622,3 +622,14 @@ ACCEPT WITH CHANGES). Every finding is addressed in the revised ADR or in
 | R17 | Haiku m10 | Post-freeze crosscheck budget | Accepted: author tools are refused after approval. |
 | R18 | Haiku m11 | `reviewers` empty | Accepted: filled in. |
 | R19 | Codex note | 31 lines, template followed | No change needed; revision is 34 lines. |
+
+### ADR 0009 review round 2 (2026-11-16)
+
+gpt-6.1-sol re-check of 9cec7a0: R1–R19 resolved except R6 (partial); verdict ACCEPT WITH CHANGES.
+
+| # | Finding | Resolution |
+|---|---------|------------|
+| R20 | Disclosure consequence omits the optional note | Accepted: consequence names the capped note, operator-only on request. |
+| R21 | "ADR 0003 profile" ambiguous; ADR 0003 keeps tests outside every sandbox | Accepted: named a third profile, the author runner, for unapproved suites only; the approved runner stays outside every sandbox as ADR 0003 states. |
+
+ADR 0009 accepted after round 2.
