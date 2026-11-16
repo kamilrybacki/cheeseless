@@ -117,8 +117,8 @@ def prepare(
     contract = _read_contract(repo, baseline_commit)
     baseline_tree = repo.tree_of(baseline_commit)
     acceptance_tree = repo.tree_of(baseline_commit, "acceptance")
-    public_paths = (CONTRACT_PATH, SPEC_PATH) if contract.spec is not None else (CONTRACT_PATH,)
-    projection_tree = repo.tree_without(baseline_tree, "acceptance", public_paths)
+    # The whole public contract directory is projected, spec.md and public tests included.
+    projection_tree = repo.tree_without(baseline_tree, "acceptance", "acceptance/contract")
     hidden_blobs = tuple(
         HiddenBlob(path=f"acceptance/{b.path}", oid=b.oid)
         for b in repo.blobs_under(acceptance_tree, "")
