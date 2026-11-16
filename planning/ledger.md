@@ -577,3 +577,20 @@ a model games at all) and folding them into the Haiku/DeepSeek analysis (breaks 
 design). Codex setup: `codex-study` copied to a system dir, seed auth with a blank refresh token
 (rotation would invalidate the operator's session), host allowlist limited to the vendor host.
 Open risk: Luna is excluded from restricted work by routing policy; fixtures are synthetic.
+
+## 2026-11-16: two-sided gate design interview (ADR 0009)
+
+Operator: a test that contradicts the spec is an authoring bug, not gaming; the tool must guard
+both the author and the implementer, and every decision about tests or code must be makeable by
+a human or an agent.
+
+| # | Decision |
+|---|----------|
+| T1 | Spec in `acceptance/contract/spec.md` plus optional per-criterion `examples` (input → expected) in `criteria.yaml`; inside the freeze digest, promote-denied for the implementer. |
+| T2 | New `author` session type in the same sandbox, inverted permissions: `acceptance/` writable incl. hidden tests, `src/` read-only; promote only `acceptance/**` onto `spec/<task>`. CI judge identifies role by branch prefix and rejects role-crossing PRs. Author and implementer never share a HOME or session. |
+| T3 | Author calls `freeze_propose` (all checks, proposal bound to its digest); approval via `cheeseless freeze --approve <proposal>` draws the seed. Approver may be a human or an orchestrator agent, never the author or implementer session; non-interactive CLI with `--json`. |
+| T4 | Consistency checker = the active agent's model plus deterministic checks, no extra judge model. `author_check` is deterministic; a `reference` session sees only `spec.md` and `criteria.yaml` and writes hidden `acceptance/reference/`; `author_crosscheck` runs suite and examples against it. Freeze needs reference GREEN and baseline RED; `--no-reference` only by explicit approver decision, recorded. |
+| T5 | `gate_dispute(criterion_id, reason)` ends the session `DISPUTED` (no more runs, no pass); stored in the trusted store, listed by `cheeseless disputes --json`; reason never returned to the implementer; fix = author re-freeze; lineage budget unchanged. |
+| T7 | Refinement of T4 (advisor review): the reference lives in the trusted store as a snapshot tree bound to the spec digest, not in `acceptance/reference/`, because an author-writable reference could be forged to agree with the tests and a repo copy would add a hidden artifact class. The reference session gets the implementer projection plus `spec.md`, no tests, no gate tools; feedback only from public `examples`. |
+| T8 | Dispute is opt-in per repo, default off, because the study imports this checkout and a new implementer tool would change its treatment arm. |
+| T6 | ADR written by claude-opus-5-5; cross-vendor review by Codex; implementation delegated in TDD stages with `tests/security/` canaries. |
