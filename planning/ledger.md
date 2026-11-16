@@ -649,6 +649,6 @@ ADR 0009 accepted after round 2.
 | A1 | Smuggling shapes of `spec.md` untested | Accepted: symlink and non-UTF-8 `spec.md` tests added (symlink was already refused). |
 | A2 | Spec and examples skip the description guards | Accepted: spec capped at 64 KiB, example texts at 2000 chars, 20 examples per criterion; `.py::` node ids refused (plain `::` stays legal). |
 | A3 | Non-UTF-8 spec raised a bare `UnicodeDecodeError` | Accepted: now a `FreezeError`. |
-| A4 | Read-only mount skipped when `projection/acceptance` is absent | Rejected for now: the agent profile also serves projections without a contract; `criteria.yaml` always projects for frozen tasks. |
+| A4 | Read-only mount skipped when `projection/acceptance` is absent | Deferred to stage (c): the only production caller (`bootstrap.py`) always projects `criteria.yaml`; the role-bound profiles will fail closed instead. |
 | A5 | Read-only probe covers overwrite only | Deferred to stage (c), where the author/implementer sandbox profiles get their own probes. |
 | A6 | Other files in `acceptance/contract/` are no longer projected | Accepted as intended: only `criteria.yaml` and `spec.md` are public. |
