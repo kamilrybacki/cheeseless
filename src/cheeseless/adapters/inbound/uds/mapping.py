@@ -331,7 +331,10 @@ def parse_dispute_request(body: bytes) -> verifier_pb2.DisputeRequest:
     text = body.decode("utf-8")
     if len(text) > 65536:
         raise MappingError("request too large")
-    json_format.Parse(text, msg, ignore_unknown_fields=False)
+    try:
+        json_format.Parse(text, msg, ignore_unknown_fields=False)
+    except json_format.ParseError as exc:
+        raise MappingError("malformed dispute request") from exc
     return msg
 
 

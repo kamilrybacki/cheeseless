@@ -653,3 +653,21 @@ ADR 0009 accepted after round 2.
 | A5 | Read-only probe covers overwrite only | Deferred to stage (c), where the author/implementer sandbox profiles get their own probes. |
 | A6 | Other files in `acceptance/contract/` are no longer projected | Rejected on re-check: the full suite showed the study's public `acceptance/contract/test_smoke.py` vanished from the projection. The whole contract directory is public again, as before stage (a); a security test pins that public tests stay projected and hidden tests do not. |
 | A7 | Full suite: the read-only `acceptance/` mount turned the demo `weaken-tests` tactic INCONCLUSIVE (OSError) and hid refused tamper writes from the study's tree-diff classifier, which runs the live gate | Mount and its probes removed from stage (a) and moved to stage (c) with A4 and A5. Integrity does not depend on it: `spec.md` and examples are in the freeze digest and promote rejects `acceptance/` (`test_public_spec`). Stage (c) must ship it together with a demo tactic that reports a refused write as blocked, a re-check of recordings and deck wording, and an operator decision on a study amendment that counts refused writes. |
+
+### ADR 0009 implementation, stage (g)
+
+| # | Decision or gap | Choice |
+|---|-----------------|--------|
+| G1 | Where policy lives | `dispute-policy.json` in the trusted store, never the agent-writable worktree; absent or corrupt means disabled (fail closed). Host sets it with `cheeseless dispute config --enable/--disable [--cap N]`. Default off, cap 3, hard maximum 100. |
+| G2 | Where session state lives | `disputes.json` (`{"records": [...]}`, ids `d-<n>`) beside the results. DISPUTED is derived per task: a task is closed while any of its records is open or upheld. It is not a `Result` status, so the v1 Result proto and HMAC bytes are unchanged (pinned by `test_result_encoding_pin`). |
+| G3 | Race with an in-flight run | `save_result` refuses under the same lock with `SessionDisputedError`, and `gate_run` checks early. A run that finishes after a dispute publishes nothing; the run charge stays. |
+| G4 | Refusal order | disabled, then cap, then holds a PASS (`dispute_not_allowed`), then already closed (`session_disputed`). Nothing is recorded on any refusal. |
+| G5 | Note limit | 500 characters, control and format characters rejected. Invalid criterion, code or note all return `dispute_invalid` without echoing the input, so unknown and hidden ids look the same. |
+| G6 | Error codes | `dispute_disabled`, `dispute_cap_reached`, `dispute_invalid`, `dispute_not_allowed`, `session_disputed` (proto codes 15-19, `docs/errors.md`). |
+| G7 | Acknowledgement | One fixed text, `Dispute recorded. This session is closed.`; the server and MCP tool always send it, never the use case's string, so no id, count or time can leak. |
+| G8 | Task binding | The UDS handler uses the session's configured task id and rejects a different client-supplied one (403). Disputes take the non-blocking run lock like run and status. |
+| G9 | `/status` after a dispute | Returns `session_disputed`, not the pre-dispute result. Simpler and leaks nothing new. |
+| G10 | Cap scope | Per lineage name, counting every record whatever its status. It survives a re-freeze of the same lineage and resets if the lineage is renamed. Rejected disputes still count. |
+| G11 | Host CLI | `disputes [--json] [--show-note]` (note labelled untrusted, only with the flag) and `dispute resolve <id> --upheld\|--rejected --as <actor>`; second resolution refused. No list, resolve or config route exists on the UDS server or MCP. |
+| G12 | Upheld / rejected wiring | Upheld keeps the task closed; the operator re-freezes the lineage with the existing `freeze`. Rejected reopens the task. Gap: a rejected task's old attempt budget is not reset and there is no role-bound fresh-session command yet. Both wait for stage (c) role-bound sessions; no new subsystem was added. |
+| G13 | CI | The CI bundle is a snapshot with no store. `judge(..., disputed=True)` returns FAIL with reason `session_disputed` before any run or charge, and `ci-export` refuses a disputed task. A dispute filed after export is not seen by that bundle (gap, host must re-export). |
