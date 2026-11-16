@@ -29,6 +29,8 @@ OPERATOR_WORDS = (
     "waive",
     "no-reference",
     "no_reference",
+    "recover",
+    "author-recover",
 )
 ALLOWED_AUTHOR = {"author-check", "author-crosscheck", "freeze-propose"}
 
@@ -88,6 +90,9 @@ def _call(server: UdsVerifierServer, path: str, body: bytes = b"{}") -> bytes:
         "promote",
         "disable",
         "no-reference",
+        "recover",
+        "author-recover",
+        "AuthorRecover",
     ],
 )
 def test_operator_paths_are_404_for_every_role(role: str, name: str) -> None:
