@@ -80,15 +80,18 @@ class FileStore(AuthoringStoreMixin):
         if len(seed) != SEED_BYTES:
             raise StoreError(f"holdout seed must be {SEED_BYTES} bytes")
         raw = codec.encode_task(frozen, seed)
-        if frozen.waiver:
-            data = codec.loads(raw, "task")
-            data["waiver_mac"] = self._waiver_mac(frozen.task.task_id, frozen.waiver)
-            raw = codec.dumps(data)
+        data = codec.loads(raw, "task")
+        data["waiver_mac"] = self._waiver_mac(frozen.task.task_id, frozen.waiver)
+        raw = codec.dumps(data)
         _fs.write_atomic(self._task_path(frozen.task.task_id), raw)
 
     def _waiver_mac(self, task_id: str, waiver: str) -> str:
-        """The waiver sits outside the freeze digest, so the host key authenticates it."""
-        message = b"cheeseless-waiver-v1\0" + task_id.encode() + b"\0" + waiver.encode()
+        """The waiver sits outside the freeze digest, so the host key authenticates it.
+
+        The MAC covers a versioned envelope that also states the *absence* of a waiver, so
+        deleting a waiver (or the whole field) from a record cannot pass as "no waiver"."""
+        body = f"waiver:v1:{waiver}" if waiver else "waiver:v1:none"
+        message = b"cheeseless-waiver-v1\0" + task_id.encode() + b"\0" + body.encode()
         return hmac.new(self.hmac_key(), message, hashlib.sha256).hexdigest()
 
     def load_task(self, task_id: str) -> tuple[FrozenTask, bytes]:
@@ -96,11 +99,10 @@ class FileStore(AuthoringStoreMixin):
         if raw is None:
             raise StoreError(f"unknown task {task_id}")
         frozen, seed = codec.decode_task(raw, task_id)
-        if frozen.waiver:
-            claimed = codec.loads(raw, "task").get("waiver_mac")
-            expected = self._waiver_mac(task_id, frozen.waiver)
-            if not isinstance(claimed, str) or not hmac.compare_digest(claimed, expected):
-                raise StoreError(f"task {task_id}: waiver is not authentic")
+        claimed = codec.loads(raw, "task").get("waiver_mac")
+        expected = self._waiver_mac(task_id, frozen.waiver)
+        if not isinstance(claimed, str) or not hmac.compare_digest(claimed, expected):
+            raise StoreError(f"task {task_id}: waiver is not authentic")
         return frozen, seed
 
     def active_task_id(self) -> str | None:

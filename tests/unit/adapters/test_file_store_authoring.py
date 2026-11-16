@@ -91,7 +91,10 @@ def test_waiver_reason_round_trips_and_old_tasks_decode(store: FileStore) -> Non
     plain = frozen_task()
     store.save_task(plain, seed)
     assert store.load_task(plain.task.task_id)[0].waiver == ""
-    assert b"waiver" not in (store.root / "tasks" / f"{plain.task.task_id}.json").read_bytes()
+    import json
+
+    on_disk = json.loads((store.root / "tasks" / f"{plain.task.task_id}.json").read_bytes())
+    assert "waiver" not in on_disk and "waiver_mac" in on_disk
     waived = dataclasses.replace(plain, waiver="reference agent unavailable")
     store.save_task(waived, seed)
     assert store.load_task(plain.task.task_id)[0].waiver == "reference agent unavailable"
@@ -157,3 +160,40 @@ def test_only_one_reader_wins_the_approval_reservation(store: FileStore) -> None
     assert store.authoring_state("demo", SPEC).phase is TaskPhase.APPROVING
     released = store.save_authoring_state(reserved.released())
     assert released.phase is TaskPhase.PROPOSED
+
+
+def test_removing_the_waiver_text_keeps_a_mac_that_no_longer_fits(store: FileStore) -> None:
+    import json
+
+    task_id, path = _waived(store)
+    data = json.loads(path.read_bytes())
+    del data["waiver"]
+    path.write_bytes(json.dumps(data).encode())
+    with pytest.raises(StoreError, match="waiver"):
+        store.load_task(task_id)
+
+
+def test_downgrading_a_waived_task_to_an_unwaived_record_is_refused(store: FileStore) -> None:
+    import json
+
+    task_id, path = _waived(store)
+    data = json.loads(path.read_bytes())
+    del data["waiver"], data["waiver_mac"]
+    path.write_bytes(json.dumps(data).encode())
+    with pytest.raises(StoreError, match="waiver"):
+        store.load_task(task_id)
+
+
+def test_an_unwaived_task_without_the_waiver_field_is_refused(store: FileStore) -> None:
+    import json
+
+    from tests.factories import frozen_task
+
+    plain = frozen_task()
+    store.save_task(plain, bytes(range(32)))
+    path = store.root / "tasks" / f"{plain.task.task_id}.json"
+    data = json.loads(path.read_bytes())
+    del data["waiver_mac"]
+    path.write_bytes(json.dumps(data).encode())
+    with pytest.raises(StoreError, match="waiver"):
+        store.load_task(plain.task.task_id)
