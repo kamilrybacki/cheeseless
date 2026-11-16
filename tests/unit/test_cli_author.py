@@ -13,7 +13,9 @@ from cheeseless.domain.authoring import AuthoringState, TaskPhase
 
 def _ctx():
     repo = SimpleNamespace(head_commit=lambda: "a" * 40)
-    return cli.Context(repo=repo, runner=object(), sandbox=object(), store=object())
+    return cli.Context(
+        repo=repo, runner=object(), sandbox=object(), store=object(), author_sandbox=object()
+    )
 
 
 def test_parser_accepts_approve_and_reference() -> None:
@@ -29,7 +31,7 @@ def test_parser_accepts_approve_and_reference() -> None:
 def test_approve_success_json(monkeypatch, capsys) -> None:
     seen = {}
 
-    def fake(repo, runner, sandbox, store, pid, **kw):
+    def fake(repo, sandbox, author_sandbox, store, pid, **kw):
         seen.update(pid=pid, **kw)
         return SimpleNamespace(task_id="t" * 64, seed=b"s")
 

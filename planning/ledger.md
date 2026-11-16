@@ -728,5 +728,6 @@ Author side of the gate: `author_check`, `author_crosscheck`, `freeze_propose`, 
 | A11 | Errors | New codes `ROLE_NOT_ALLOWED` 20, `REFERENCE_BLOCKED` 21, `AUTHOR_REFUSED` 22 and three RPCs. The RPCs are documentation only, because the transport is protojson over UDS. |
 | A12 | Role gate | `SessionConfig.role` (implementer or author). A wrong-role call gets a 200 with `ROLE_NOT_ALLOWED`. Routes match exact paths, so anything else is 404. Author sessions refuse run, status and dispute. |
 | A13 | No operator endpoint | Approve, reference record/failed/retry and promote exist only on the host CLI (`freeze --approve`, `reference ...`, all with `--json`). `tests/security/test_no_operator_endpoint.py` proves this for UDS and MCP, with a canary check. |
+| A14 | Approval containment | `approve_freeze` runs collection, the RED check and both flakiness runs through `AuthorSandbox` (`prepare(author_sandbox=...)`). The plain operator `cheeseless freeze` keeps the host runner: it executes tests the operator wrote and reviewed, not an agent's proposal, and sharing the contained path would change its trust model. `tests/security/test_approve_runs_contained.py` proves it with a canary. |
 
 Remaining (out of scope here): stage (b) role-aware promote; G12/G13 dispute budget reset; `session --role author|reference` launching; real reference-agent sessions.

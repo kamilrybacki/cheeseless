@@ -32,7 +32,7 @@ from cheeseless.domain.dispute import DEFAULT_CAP, DisputeRecord
 from cheeseless.domain.result import Result
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.runner import SuiteRunner
-from cheeseless.ports.sandbox import Sandbox
+from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
 from cheeseless.ports.store import Store, StoreError
 
 
@@ -42,6 +42,8 @@ class Context:
     runner: SuiteRunner
     sandbox: Sandbox
     store: Store
+    # The contained author runner; approval runs author-proposed tests only through it.
+    author_sandbox: AuthorSandbox | None = None
 
 
 def split_agent_argv(argv: Sequence[str]) -> tuple[list[str], list[str] | None]:
@@ -262,10 +264,12 @@ def _cmd_approve(args: argparse.Namespace, ctx: Context) -> int:
         print("--approve needs --as <actor>", file=sys.stderr)
         return 2
     try:
+        if ctx.author_sandbox is None:
+            raise AuthorError("no_author_sandbox", "no contained author runner is available")
         result = approve_freeze(
             ctx.repo,
-            ctx.runner,
             ctx.sandbox,
+            ctx.author_sandbox,
             _author_store(ctx),
             args.approve,
             actor=args.actor,

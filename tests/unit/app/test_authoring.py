@@ -178,11 +178,15 @@ def test_propose_is_allowed_from_reference_blocked(world):
     )
 
 
-def _approve(repo, store, tmp_path, proposal, **kw):
+def _red_sandbox():
+    return FakeAuthorSandbox(_line(outcomes={t["node_id"]: "failed" for t in TESTS}))
+
+
+def _approve(repo, store, tmp_path, proposal, author_sandbox=None, **kw):
     return uc.approve_freeze(
         repo,
-        _FakeRunner([_suite(TestOutcome.FAILED)]),
         _FakeSandbox(tmp_path / "sb"),
+        author_sandbox or _red_sandbox(),
         store,
         proposal.proposal_id,
         actor="tester",
@@ -217,7 +221,7 @@ def test_approve_unknown_proposal(world):
     repo, store, tmp = world
     with pytest.raises(AuthorError) as caught:
         uc.approve_freeze(
-            repo, _FakeRunner([]), _FakeSandbox(tmp / "sb"), store, "f" * 64, actor="t"
+            repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, "f" * 64, actor="t"
         )
     assert caught.value.kind == "unknown_proposal"
 
@@ -280,13 +284,14 @@ def test_approve_requires_a_red_baseline(world):
     _green(repo, store)
     proposal = uc.freeze_propose(repo, store, _source(repo))
     with pytest.raises(FreezeError, match="not RED"):
-        uc.approve_freeze(
+        _approve(
             repo,
-            _FakeRunner([_suite(TestOutcome.PASSED)]),
-            _FakeSandbox(tmp / "sb"),
             store,
-            proposal.proposal_id,
-            actor="t",
+            tmp,
+            proposal,
+            author_sandbox=FakeAuthorSandbox(
+                _line(outcomes={t["node_id"]: "passed" for t in TESTS})
+            ),
         )
     assert store.active_task_id() is None
 
@@ -339,3 +344,15 @@ def test_author_check_and_crosscheck_in_the_real_author_runner(world):
     result = uc.author_check(repo, ctx.sandbox, _source(repo))
     assert result.ok, result.problems
     assert result.tests >= 4
+
+
+def test_approve_runs_the_suite_only_in_the_author_sandbox(world):
+    repo, store, tmp = world
+    _record(repo, store)
+    _green(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+    sandbox = _red_sandbox()
+    _approve(repo, store, tmp, proposal, author_sandbox=sandbox)
+    # collection/RED run plus the flakiness re-run, both contained
+    assert len(sandbox.calls) == 2
+    assert all(c[1] is not None and "run" in c[2] for c in sandbox.calls)

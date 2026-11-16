@@ -7,13 +7,16 @@ advisory: approval re-runs the baseline itself and only trusts host-side records
 
 from __future__ import annotations
 
-import json
-import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from cheeseless.app.author_driver import (
+    DRIVER,
+    RESULT_MARK,
+    run_driver_on,
+)
 from cheeseless.app.freeze import FreezeError, PreparedFreeze, commit, prepare, read_contract
 from cheeseless.domain import ids
 from cheeseless.domain.authoring import (
@@ -27,94 +30,12 @@ from cheeseless.domain.authoring import (
 )
 from cheeseless.domain.contract import Contract, canonical_contract_bytes
 from cheeseless.domain.dlp import redact_sentinels, sentinel_problems
-from cheeseless.domain.evaluation import CollectedTest, SuiteRun, TestOutcome, freeze_problems
+from cheeseless.domain.evaluation import SuiteRun, TestOutcome, freeze_problems
 from cheeseless.domain.freeze import freeze_digest
 from cheeseless.ports.authoring import AuthoringStore
 from cheeseless.ports.repository import Repository
-from cheeseless.ports.runner import SuiteRunner
-from cheeseless.ports.sandbox import AuthorOutcome, AuthorSandbox, Sandbox
+from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
 from cheeseless.ports.store import Store
-
-RESULT_MARK = "CHEESELESS-AUTHOR "
-CHECK_TIMEOUT = 300.0
-
-# Runs inside the author-runner sandbox as ``python -I -B -c DRIVER collect|run <argv-json>``.
-# It collects and (in run mode) executes the hidden suite against the mounted reference and
-# prints one result line. It never imports the host package.
-DRIVER = r"""
-import json, os, subprocess, sys, types
-import pytest
-
-MARK = "CHEESELESS-AUTHOR "
-mode = sys.argv[1]
-argv = json.loads(sys.argv[2]) if len(sys.argv) > 2 else []
-
-
-class Rec:
-    def __init__(self):
-        self.collected, self.outcomes, self.errors = [], {}, []
-
-    def pytest_configure(self, config):
-        config.addinivalue_line("markers", "criterion(id): the acceptance criterion tested")
-
-    def pytest_collection_modifyitems(self, items):
-        for item in items:
-            crit = []
-            for m in item.iter_markers("criterion"):
-                ok = len(m.args) == 1 and not m.kwargs and isinstance(m.args[0], str)
-                crit.append(m.args[0] if ok else "<invalid criterion marker>")
-            self.collected.append({"node_id": item.nodeid, "criteria": crit})
-
-    def pytest_collectreport(self, report):
-        if report.failed:
-            self.errors.append(report.nodeid or "<collection>")
-
-    def pytest_runtest_logreport(self, report):
-        nid, x = report.nodeid, hasattr(report, "wasxfail")
-        if report.when == "teardown":
-            if report.failed:
-                self.outcomes[nid] = "error"
-        elif report.when == "setup":
-            if report.failed:
-                self.outcomes[nid] = "error"
-            elif report.skipped:
-                self.outcomes[nid] = "xfailed" if x else "skipped"
-        elif report.failed:
-            self.outcomes[nid] = "failed"
-        elif report.skipped:
-            self.outcomes[nid] = "xfailed" if x else "skipped"
-        else:
-            self.outcomes[nid] = "xpassed" if x else "passed"
-
-
-class Runner:
-    @pytest.fixture
-    def candidate(self):
-        ref = os.environ["CHEESELESS_AUTHOR_REFERENCE"]
-
-        class C:
-            def run(self, args=(), stdin=None, timeout=None):
-                data = stdin.encode() if isinstance(stdin, str) else stdin
-                try:
-                    p = subprocess.run([*argv, *args], input=data, capture_output=True,
-                                       cwd=ref, timeout=timeout or 30.0)
-                except subprocess.TimeoutExpired:
-                    raise AssertionError("candidate call timed out")
-                dec = lambda b: b.decode("utf-8", "replace")
-                return types.SimpleNamespace(returncode=p.returncode,
-                                             stdout=dec(p.stdout), stderr=dec(p.stderr))
-        return C()
-
-
-rec = Rec()
-args = ["hidden", "-p", "no:cacheprovider", "--import-mode=importlib", "-c", os.devnull,
-        "--rootdir", os.getcwd(), "-q"]
-if mode == "collect":
-    args.append("--collect-only")
-code = pytest.main(args, plugins=[rec] + ([Runner()] if mode == "run" else []))
-print(MARK + json.dumps({"exitstatus": int(code), "collected": rec.collected,
-                         "outcomes": rec.outcomes, "collection_errors": rec.errors}))
-"""
 
 
 class AuthorError(Exception):
@@ -153,33 +74,6 @@ def proposal_id_for(repo: Repository, source: str, baseline_commit: str | None =
     )
 
 
-def _parse(outcome: AuthorOutcome) -> dict[str, object] | None:
-    if outcome.timed_out:
-        return None
-    for line in reversed(outcome.stdout.splitlines()):
-        if line.startswith(RESULT_MARK):
-            try:
-                data = json.loads(line[len(RESULT_MARK) :])
-            except ValueError:
-                return None
-            return data if isinstance(data, dict) else None
-    return None
-
-
-def _suite(data: dict[str, object]) -> SuiteRun | None:
-    try:
-        collected = tuple(
-            CollectedTest(str(t["node_id"]), tuple(str(c) for c in t["criteria"]))
-            for t in data["collected"]  # type: ignore[attr-defined]
-        )
-        raw = data["outcomes"]
-        outcomes = {str(k): TestOutcome(str(v)) for k, v in raw.items()}  # type: ignore[attr-defined]
-        errors = tuple(str(e) for e in data["collection_errors"])  # type: ignore[attr-defined]
-    except (KeyError, TypeError, ValueError, AttributeError):
-        return None
-    return SuiteRun(collected=collected, outcomes=outcomes, collection_errors=errors)
-
-
 def _run_driver(
     repo: Repository,
     sandbox: AuthorSandbox,
@@ -188,13 +82,10 @@ def _run_driver(
     reference: Path | None,
     run_argv: tuple[str, ...],
 ) -> SuiteRun | None:
-    command = (sys.executable, "-I", "-B", "-c", DRIVER, mode, json.dumps(list(run_argv)))
     with tempfile.TemporaryDirectory(prefix="cheeseless-author-") as tmp:
         acceptance = Path(tmp) / "acceptance"
         repo.export(repo.tree_of(source, "acceptance"), acceptance)
-        outcome = sandbox.author_run(acceptance, reference, command, env=(), timeout=CHECK_TIMEOUT)
-    data = _parse(outcome)
-    return None if data is None else _suite(data)
+        return run_driver_on(sandbox, acceptance, mode, reference, run_argv)
 
 
 def _hidden_and_public(
@@ -356,8 +247,8 @@ def _crosscheck_problem(
 
 def approve_freeze(
     repo: Repository,
-    runner: SuiteRunner,
     sandbox: Sandbox,
+    author_sandbox: AuthorSandbox,
     store: AuthorStore,
     proposal_id: str,
     *,
@@ -365,7 +256,9 @@ def approve_freeze(
     no_reference: bool = False,
     reason: str = "",
 ) -> object:
-    """Host-only: freeze a proposed, merged, crosschecked and RED task."""
+    """Host-only: freeze a proposed, merged, crosschecked and RED task.
+
+    The author's acceptance code runs only inside ``author_sandbox``."""
     reason = reason.strip()
     if no_reference and not reason:
         raise AuthorError("reason_required", "--no-reference needs a --reason")
@@ -383,7 +276,12 @@ def approve_freeze(
         if problem is not None:
             raise problem
     prepared: PreparedFreeze = prepare(
-        repo, runner, sandbox, baseline_commit=proposal.baseline_commit, source=head
+        repo,
+        None,
+        sandbox,
+        author_sandbox=author_sandbox,
+        baseline_commit=proposal.baseline_commit,
+        source=head,
     )
     if prepared.task_id != proposal.proposal_id:
         raise AuthorError("not_merged", "HEAD no longer reproduces the proposed freeze")

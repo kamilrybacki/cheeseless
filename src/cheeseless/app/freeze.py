@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from cheeseless.app.author_driver import run_driver_on
 from cheeseless.domain.contract import (
     Contract,
     canonical_contract_bytes,
@@ -26,7 +27,7 @@ from cheeseless.domain.holdout import split as holdout_split
 from cheeseless.domain.task import Task
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.runner import SuiteRunner
-from cheeseless.ports.sandbox import Sandbox
+from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
 from cheeseless.ports.store import Store
 
 CONTRACT_PATH = "acceptance/contract/criteria.yaml"
@@ -103,18 +104,51 @@ def _public_contents(
     ]
 
 
+def _contained_run(
+    author_sandbox: AuthorSandbox, acc_root: Path, cand_root: Path, contract: Contract
+) -> SuiteRun:
+    suite = run_driver_on(
+        author_sandbox, acc_root, "run", cand_root, contract.run, tuple(contract.env)
+    )
+    if suite is None:
+        raise FreezeError(["the contained author runner returned no usable result"])
+    return suite
+
+
+def _host_run(
+    runner: SuiteRunner,
+    acc_root: Path,
+    launcher: tuple[str, ...],
+    contract: Contract,
+    timeout: float,
+) -> SuiteRun:
+    return runner.run(
+        root=acc_root,
+        paths=["hidden"],
+        selected=None,
+        launcher=launcher,
+        run=contract.run,
+        timeout=timeout,
+    ).suite
+
+
 def prepare(
     repo: Repository,
-    runner: SuiteRunner,
+    runner: SuiteRunner | None,
     sandbox: Sandbox,
     *,
+    author_sandbox: AuthorSandbox | None = None,
     baseline_commit: str | None = None,
     source: str | None = None,
     timeout: float = 300.0,
     tool_version: str = "0.1.0",
 ) -> PreparedFreeze:
     """Validate a freeze. ``source`` (a commit or tree oid) is where the files are read
-    from; it defaults to the baseline commit. The digest always uses ``baseline_commit``."""
+    from; it defaults to the baseline commit. The digest always uses ``baseline_commit``.
+
+    With ``author_sandbox`` the suite is executed by the contained author runner (read-only
+    acceptance, private /tmp, no network, no store or home) instead of ``runner``. Approval
+    of an author-proposed tree must use it: that code is not trusted yet."""
     if baseline_commit is None:
         baseline_commit = repo.head_commit()
     if source is None:
@@ -152,28 +186,20 @@ def prepare(
                 build = sandbox.build(cand_root, contract.build, env)
                 if not build.ok:
                     raise FreezeError([f"build failed: {build.stderr_tail}".strip()])
-                launcher = sandbox.launcher(cand_root, env, scratch)
-                first = runner.run(
-                    root=acc_root,
-                    paths=["hidden"],
-                    selected=None,
-                    launcher=launcher,
-                    run=contract.run,
-                    timeout=timeout,
-                )
-                second = runner.run(
-                    root=acc_root,
-                    paths=["hidden"],
-                    selected=None,
-                    launcher=launcher,
-                    run=contract.run,
-                    timeout=timeout,
-                )
-            suite = first.suite
+                if author_sandbox is not None:
+                    first = _contained_run(author_sandbox, acc_root, cand_root, contract)
+                    second = _contained_run(author_sandbox, acc_root, cand_root, contract)
+                else:
+                    if runner is None:
+                        raise ValueError("prepare needs a runner or an author sandbox")
+                    launcher = sandbox.launcher(cand_root, env, scratch)
+                    first = _host_run(runner, acc_root, launcher, contract, timeout)
+                    second = _host_run(runner, acc_root, launcher, contract, timeout)
+            suite = first
             problems = freeze_problems([c.id for c in contract.criteria], suite)
             if problems:
                 raise FreezeError(problems)
-            if _observations(first.suite) != _observations(second.suite):
+            if _observations(first) != _observations(second):
                 raise FreezeError(["the hidden suite is flaky: two runs disagreed"])
             tests = criterion_by_test(suite)
 
