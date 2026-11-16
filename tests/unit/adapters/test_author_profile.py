@@ -37,10 +37,9 @@ def test_author_profile_is_fully_unshared_with_a_read_only_acceptance_tree(tmp_p
     assert "--bind" not in argv and "--overlay" not in argv
     ro = [argv[i + 1 : i + 3] for i, a in enumerate(argv) if a == "--ro-bind"]
     assert [str(tmp_path / "acc"), INSIDE_A] in ro
-    # The candidate tree is a throwaway in-memory overlay (never a host-writing bind).
-    assert [str(tmp_path / "ref"), INSIDE_R] not in ro
-    i = argv.index("--overlay-src")
-    assert argv[i : i + 4] == ["--overlay-src", str(tmp_path / "ref"), "--tmp-overlay", INSIDE_R]
+    # The baseline is read-only; the driver copies it afresh for every candidate call.
+    assert [str(tmp_path / "ref"), INSIDE_R] in ro
+    assert "--overlay-src" not in argv and "--tmp-overlay" not in argv
     assert argv[argv.index("--chdir") + 1] == INSIDE_A
 
 

@@ -188,20 +188,14 @@ def author(
 ) -> list[str]:
     """The author runner: unapproved tests, no store, no network.
 
-    The acceptance tree is read-only. The reference (candidate) tree gets the same semantics
-    as a normal candidate run: writable, but on a throwaway in-memory overlay, so a baseline
-    that writes into its own tree behaves as it will under the gate and nothing reaches the host.
+    Acceptance and the reference (baseline) are both read-only, so the baseline stays
+    immutable. The in-sandbox driver gives each candidate call its own fresh writable copy.
     """
     mount = _inside(inside)
     args = _common(bwrap, seccomp_fd)
     args += ["--ro-bind", str(acceptance), mount]
     if reference is not None:
-        args += [
-            "--overlay-src",
-            str(reference),
-            "--tmp-overlay",
-            _inside(reference_inside),
-        ]
+        args += ["--ro-bind", str(reference), _inside(reference_inside)]
     for path in extra_read_only:
         if str(path) in RESERVED_MOUNTS or not path.is_absolute():
             raise SandboxError(f"cannot mount {path} into the author runner")

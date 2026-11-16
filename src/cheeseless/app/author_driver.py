@@ -21,7 +21,7 @@ CHECK_TIMEOUT = 300.0
 # It collects and (in run mode) executes the hidden suite against the mounted reference and
 # prints one result line. It never imports the host package.
 DRIVER = r"""
-import json, os, subprocess, sys, types
+import json, os, shutil, subprocess, sys, tempfile, types
 import pytest
 
 MARK = "CHEESELESS-AUTHOR "
@@ -74,11 +74,18 @@ class Runner:
         class C:
             def run(self, args=(), stdin=None, timeout=None):
                 data = stdin.encode() if isinstance(stdin, str) else stdin
+                # Every call gets fresh writable state copied from the immutable baseline,
+                # like a normal candidate call; nothing carries over between calls.
+                work = tempfile.mkdtemp(prefix="cand-")
+                tree = os.path.join(work, "tree")
                 try:
+                    shutil.copytree(ref, tree, symlinks=True)
                     p = subprocess.run([*argv, *args], input=data, capture_output=True,
-                                       cwd=ref, timeout=timeout or 30.0)
+                                       cwd=tree, timeout=timeout or 30.0)
                 except subprocess.TimeoutExpired:
                     raise AssertionError("candidate call timed out")
+                finally:
+                    shutil.rmtree(work, ignore_errors=True)
                 dec = lambda b: b.decode("utf-8", "replace")
                 return types.SimpleNamespace(returncode=p.returncode,
                                              stdout=dec(p.stdout), stderr=dec(p.stderr))
