@@ -91,3 +91,38 @@ def test_a_symlinked_interpreter_does_not_expose_the_store(tmp_path, monkeypatch
     acc.mkdir()
     with pytest.raises(SandboxError):
         BwrapSandbox(protected=[store]).author_run(acc, None, ["true"], env=())
+
+
+@needs_bwrap
+def test_the_candidate_tree_is_writable_but_throwaway_and_acceptance_stays_read_only(tmp_path):
+    """A baseline that writes into its own tree must behave as in a normal candidate run."""
+    store = _store(tmp_path)
+    acc = tmp_path / "acc"
+    acc.mkdir()
+    (acc / "t.py").write_text("original")
+    ref = tmp_path / "ref"
+    ref.mkdir()
+    (ref / "keep.txt").write_text("keep")
+    code = (
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "ref = Path(os.environ['CHEESELESS_AUTHOR_REFERENCE'])\n"
+        "(ref / 'generated.txt').write_text('made')\n"
+        "(ref / 'keep.txt').write_text('changed')\n"
+        "print('ref-write', (ref / 'generated.txt').read_text())\n"
+        "for target in (Path(os.getcwd()) / 't.py', Path(os.getcwd()) / 'new.py'):\n"
+        "    try:\n        target.write_text('x'); print('acc=LEAK')\n"
+        "    except OSError:\n        print('acc=blocked')\n"
+        f"try:\n print(open({str(store / 'hmac.key')!r}).read())\n"
+        "except OSError:\n print('canary=denied')\n"
+    )
+    out = BwrapSandbox(protected=[store]).author_run(
+        acc, ref, [sys.executable, "-I", "-c", code], env=()
+    )
+    assert "ref-write made" in out.stdout, out.stderr_tail
+    assert "acc=LEAK" not in out.stdout and out.stdout.count("acc=blocked") == 2
+    assert "canary=denied" in out.stdout and CANARY not in out.stdout
+    # Throwaway: nothing the candidate wrote reaches the host's reference or acceptance tree.
+    assert not (ref / "generated.txt").exists()
+    assert (ref / "keep.txt").read_text() == "keep"
+    assert (acc / "t.py").read_text() == "original" and not (acc / "new.py").exists()

@@ -30,14 +30,17 @@ def _argv(tmp_path: Path, **over: object) -> list[str]:
     return profiles.author(**args)  # type: ignore[arg-type]
 
 
-def test_author_profile_is_fully_unshared_and_read_only(tmp_path: Path) -> None:
+def test_author_profile_is_fully_unshared_with_a_read_only_acceptance_tree(tmp_path: Path) -> None:
     argv = _argv(tmp_path)
     for flag in ("--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-net"):
         assert flag in argv
     assert "--bind" not in argv and "--overlay" not in argv
     ro = [argv[i + 1 : i + 3] for i, a in enumerate(argv) if a == "--ro-bind"]
     assert [str(tmp_path / "acc"), INSIDE_A] in ro
-    assert [str(tmp_path / "ref"), INSIDE_R] in ro
+    # The candidate tree is a throwaway in-memory overlay (never a host-writing bind).
+    assert [str(tmp_path / "ref"), INSIDE_R] not in ro
+    i = argv.index("--overlay-src")
+    assert argv[i : i + 4] == ["--overlay-src", str(tmp_path / "ref"), "--tmp-overlay", INSIDE_R]
     assert argv[argv.index("--chdir") + 1] == INSIDE_A
 
 

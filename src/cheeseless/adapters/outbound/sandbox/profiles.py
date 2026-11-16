@@ -186,12 +186,22 @@ def author(
     command: Sequence[str],
     trusted_env: Sequence[tuple[str, str]] = (),
 ) -> list[str]:
-    """The author runner: unapproved tests, read-only trees, no store, no network."""
+    """The author runner: unapproved tests, no store, no network.
+
+    The acceptance tree is read-only. The reference (candidate) tree gets the same semantics
+    as a normal candidate run: writable, but on a throwaway in-memory overlay, so a baseline
+    that writes into its own tree behaves as it will under the gate and nothing reaches the host.
+    """
     mount = _inside(inside)
     args = _common(bwrap, seccomp_fd)
     args += ["--ro-bind", str(acceptance), mount]
     if reference is not None:
-        args += ["--ro-bind", str(reference), _inside(reference_inside)]
+        args += [
+            "--overlay-src",
+            str(reference),
+            "--tmp-overlay",
+            _inside(reference_inside),
+        ]
     for path in extra_read_only:
         if str(path) in RESERVED_MOUNTS or not path.is_absolute():
             raise SandboxError(f"cannot mount {path} into the author runner")
