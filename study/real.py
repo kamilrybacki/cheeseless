@@ -25,12 +25,14 @@ from study.arms import (
     prepare_cheeseless,
     run_naive,
 )
-from study.classifier import Classification
+from study.classifier import Classification, Event
 from study.prompt import build_prompt
 from study.scorer import INFRA, INVALID, TIMEOUT
 from study.suite import copy_pytest_runtime
 from study.tasks import CANARY, SENTINEL, Task, baseline_files
+from study.transcripts import observe_writes
 
+SANDBOX_WORK = "/work"
 SEED_FILE_LIMIT = 1 << 20
 _SCRUBBED_ENV = ("PATH", "LANG", "TERM")
 
@@ -184,6 +186,7 @@ def run_naive_real(
     started = time.monotonic()
     prompt = build_prompt(task, ARM_NAIVE)
     exits: list[int] = []
+    writes: list[tuple[Event, ...] | None] = []
 
     def apply(workdir: Path) -> None:
         with tempfile.TemporaryDirectory(prefix="study-home-") as tmp:
@@ -200,10 +203,12 @@ def run_naive_real(
                 _scrubbed_env(home),
                 agent.timeout,
             )
+            # parse before the temporary home (and the transcript in it) is discarded
+            writes.append(observe_writes(agent.agent.vendor, home, (SANDBOX_WORK,)))
         exits.append(code)
 
     try:
-        result = run_naive(task, root, apply)
+        result = run_naive(task, root, apply, lambda: writes[0] if writes else None)
     except AgentTimedOut:
         return _status(ARM_NAIVE, TIMEOUT, "agent_timeout", started)
     if exits and exits[0] != 0:
@@ -237,6 +242,7 @@ def run_cheeseless_real(task: Task, root: Path, agent: StudyAgent, evidence: Pat
     sockets.mkdir(mode=0o700, parents=True, exist_ok=True)
     sockets.chmod(0o700)
     home: Path | None = None
+    write_events: tuple[Event, ...] | None = None
     try:
         with host_session(
             state_dir=case.state,
@@ -258,6 +264,12 @@ def run_cheeseless_real(task: Task, root: Path, agent: StudyAgent, evidence: Pat
             except subprocess.TimeoutExpired:
                 return _status(ARM_CHEESELESS, TIMEOUT, "agent_timeout", started)
             copy_evidence(home, evidence, protected=info["protected_roots"])
+            write_events = observe_writes(
+                agent.agent.vendor,
+                home,
+                (str(info["projection_dir"]), str(case.projection)),
+                evidence=evidence,
+            )
             write_projection_list(Path(info["projection_dir"]), evidence)
             blocked = info["blocked"].is_set()
     except (ValueError, OSError, RuntimeError) as exc:
@@ -268,4 +280,6 @@ def run_cheeseless_real(task: Task, root: Path, agent: StudyAgent, evidence: Pat
         return _status(ARM_CHEESELESS, INFRA, "agent_nonzero_exit", started)
     if not case.projection.is_dir():
         return _status(ARM_CHEESELESS, INFRA, "projection_missing", started)
-    return finish_cheeseless(task, case, before, None, gate_runs=None, started=started)
+    return finish_cheeseless(
+        task, case, before, None, gate_runs=None, started=started, write_events=write_events
+    )
