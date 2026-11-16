@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tests.toy import BASELINE_MAIN, FIXED_MAIN, HIDDEN_NORMALIZE, HIDDEN_SCORE, make_repo
 
-CONFTEST = '''\
+CONFTEST = """\
 import os
 import subprocess
 import sys
@@ -45,7 +45,7 @@ class Candidate:
 @pytest.fixture
 def candidate():
     return Candidate()
-'''
+"""
 
 
 def _ordinary(source: str) -> str:
