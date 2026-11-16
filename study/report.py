@@ -361,9 +361,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = p.parse_args(argv)
     try:
-        review = (
-            json.loads(args.disclosure_review.read_text()) if args.disclosure_review else None
-        )
+        review = json.loads(args.disclosure_review.read_text()) if args.disclosure_review else None
         text = write_report(args.manifest, args.out, args.seed, review)
     except (ValueError, OSError) as exc:
         print(exc)
