@@ -87,7 +87,12 @@ def _state_home(state_dir: Path | None) -> Path:
 def build_context(state_dir: Path | None = None, cwd: Path | None = None) -> Context:
     repo = GitRepository.discover(cwd or Path.cwd())
     store = FileStore(store_root(repo.common_dir(), _state_home(state_dir)))
-    return Context(repo=repo, runner=PytestRunner(), sandbox=BwrapSandbox(), store=store)
+    return Context(
+        repo=repo,
+        runner=PytestRunner(),
+        sandbox=BwrapSandbox(protected=[store.root, repo.root]),
+        store=store,
+    )
 
 
 def _pool(profile: str) -> Pool:

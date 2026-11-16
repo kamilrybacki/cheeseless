@@ -76,21 +76,65 @@ def _trusted_tmpfs_scratch() -> Path:
     raise SandboxError("no verified tmpfs root available for trusted scratch")
 
 
-def _interpreter_roots() -> set[Path]:
-    """Prefixes the running interpreter needs, following each symlink hop of its path."""
-    roots = {Path(sys.prefix), Path(sys.base_prefix)}
+def _hop_roots() -> list[Path]:
+    """Grandparent of every symlink target on the way from ``sys.executable`` to the binary.
+
+    A venv python often points through an alias directory that differs from the real
+    install, and the alias has to exist inside the runner for ``execvp`` to follow it.
+    """
+    roots: list[Path] = []
     hop = Path(sys.executable)
     for _ in range(16):
         if not hop.is_symlink():
             break
         hop = Path(os.path.normpath(hop.parent / os.readlink(hop)))
-        roots.add(hop.parent.parent)
+        roots.append(hop.parent.parent)
+    return roots
+
+
+def _contains(root: Path, other: Path) -> bool:
+    return root == other or root in other.parents
+
+
+def _interpreter_roots(protected: Sequence[Path] = ()) -> set[Path]:
+    """Read-only roots the running interpreter needs, failing closed.
+
+    Only the interpreter's own prefixes (resolved) and its symlink-hop prefixes are
+    considered. A root that is ``/``, or equals or contains ``$HOME`` or any ``protected``
+    path (the trusted store, the repository), is refused rather than mounted: mounting it
+    would hand the unapproved suite the trusted store.
+    """
+    candidates = [
+        Path(sys.prefix),
+        Path(sys.base_prefix),
+        Path(os.path.realpath(sys.executable)).parent.parent,
+        *_hop_roots(),
+    ]
+    home = os.environ.get("HOME")
+    guarded = [Path(os.path.realpath(p)) for p in protected]
+    if home:
+        guarded.append(Path(os.path.realpath(home)))
+    roots: set[Path] = set()
+    for candidate in candidates:
+        for root in {candidate, Path(os.path.realpath(candidate))}:
+            if root == Path("/") or any(_contains(root, g) for g in guarded):
+                raise SandboxError(
+                    f"refusing to mount {root} into the author runner: "
+                    "it would expose the trusted store or the home directory"
+                )
+            roots.add(root)
     return roots
 
 
 class BwrapSandbox:
-    def __init__(self, bwrap: str = DEFAULT_BWRAP, build_timeout: float = BUILD_TIMEOUT) -> None:
+    def __init__(
+        self,
+        bwrap: str = DEFAULT_BWRAP,
+        build_timeout: float = BUILD_TIMEOUT,
+        protected: Sequence[Path] = (),
+    ) -> None:
         self._bwrap = bwrap
+        self._protected = tuple(protected)
         self._build_timeout = build_timeout
 
     def _check(self) -> str:
@@ -155,7 +199,7 @@ class BwrapSandbox:
         profiles.check_env(env)
         # The interpreter and its libraries live outside /usr in a venv; mount them
         # read-only so the unapproved suite can be collected at all.
-        interpreter = _interpreter_roots()
+        interpreter = _interpreter_roots(self._protected)
         fd = seccomp.program_fd()
         try:
             argv = profiles.author(
