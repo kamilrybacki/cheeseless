@@ -104,3 +104,30 @@ def test_reference_record(monkeypatch, capsys, tmp_path) -> None:
 
 def test_reference_without_subcommand(capsys) -> None:
     assert cli.main(["reference"], context=_ctx()) == 2
+
+
+@pytest.mark.parametrize("command", ["failed", "retry"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        FreezeError(["no contract at the source"]),
+        AuthorError("frozen", "the task is frozen; author operations are closed"),
+    ],
+    ids=["unknown-task", "wrong-state"],
+)
+def test_reference_error_paths_report_refusal_not_a_traceback(
+    monkeypatch, capsys, command, error
+) -> None:
+    def boom(*_args):
+        raise error
+
+    monkeypatch.setattr(cli, "read_contract", lambda repo, src: object())
+    monkeypatch.setattr(cli, "reference_failed", boom)
+    monkeypatch.setattr(cli, "start_reference", boom)
+    if isinstance(error, FreezeError):
+        monkeypatch.setattr(cli, "read_contract", boom)
+    assert cli.main(["reference", command, "--json"], context=_ctx()) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False and out["message"]
+    assert cli.main(["reference", command], context=_ctx()) == 1
+    assert capsys.readouterr().out.startswith("refused:")

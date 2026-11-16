@@ -314,7 +314,7 @@ def _cmd_reference(args: argparse.Namespace, ctx: Context) -> int:
             return 0
         contract = read_contract(ctx.repo, source)
         state = (reference_failed if command == "failed" else start_reference)(store, contract)
-    except (AuthoringError, FreezeError, StoreError) as exc:
+    except (AuthorError, AuthoringError, FreezeError, StoreError) as exc:
         _emit(args, {"ok": False, "message": str(exc)}, f"refused: {exc}")
         return 1
     _emit(
