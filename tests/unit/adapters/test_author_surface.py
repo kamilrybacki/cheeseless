@@ -13,6 +13,7 @@ from cheeseless.adapters.inbound.uds.server import SessionConfig, UdsVerifierSer
 from cheeseless.app.authoring import AuthorCheckResult
 from cheeseless.domain.authoring import CrosscheckRecord, Proposal
 from cheeseless.domain.errors import ErrorCode, gate_error
+from cheeseless.domain.session_role import SessionBinding, SessionRole
 
 OID = "a" * 40
 H = "b" * 64
@@ -27,7 +28,12 @@ def _server(role: str, **extra) -> UdsVerifierServer:
         timeout=1.0,
         tool_version="0",
         repo=SimpleNamespace(),  # type: ignore[arg-type]
-        store=SimpleNamespace(session_role=lambda _task: role),  # type: ignore[arg-type]
+        store=SimpleNamespace(  # type: ignore[arg-type]
+            session_record=lambda _sid: SessionBinding("t1", SessionRole(role), 1),
+            session_generation=lambda _task: 1,
+        ),
+        session_id="s1",
+        generation=1,
         runner=SimpleNamespace(),  # type: ignore[arg-type]
         sandbox=SimpleNamespace(),  # type: ignore[arg-type]
         role=role,

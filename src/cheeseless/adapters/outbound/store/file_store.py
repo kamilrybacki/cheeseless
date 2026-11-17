@@ -29,7 +29,7 @@ from cheeseless.domain.dlp import Fingerprints
 from cheeseless.domain.freeze import FrozenTask
 from cheeseless.domain.holdout import SEED_BYTES
 from cheeseless.domain.result import MIN_KEY_BYTES, Result
-from cheeseless.domain.session_role import parse_role
+from cheeseless.domain.session_role import SessionBinding, parse_role
 from cheeseless.domain.status import Status
 from cheeseless.ports.store import DisputeRefused, SessionDisputedError, StoreError
 
@@ -197,23 +197,37 @@ class FileStore(AuthoringStoreMixin):
     # -- disputes (ADR 0009, stage g) --------------------------------------------
     # Files are created lazily so the layout is unchanged while disputes are unused.
 
-    def session_role(self, task_id: str) -> str:
-        """The role the host bound at launch; ``implementer`` when none was recorded."""
-        roles = self._read_json("session-roles.json")
-        value = roles.get(_task_id(task_id), "implementer")
-        try:
-            return parse_role(str(value)).value
-        except ValueError as exc:
-            raise StoreError(f"session role is invalid: {exc}") from exc
-
-    def set_session_role(self, task_id: str, role: str) -> None:
+    def register_session(self, task_id: str, role: str) -> tuple[str, SessionBinding]:
         task_id = _task_id(task_id)
-        value = parse_role(role).value
+        bound = parse_role(role)
         with _fs.locked(self._root / "store.lock"):
-            roles = self._read_json("session-roles.json")
+            binding = SessionBinding(task_id, bound, self.session_generation(task_id))
+            session_id = secrets.token_hex(16)
+            sessions = self._read_json("sessions.json")
+            entry = {"task": task_id, "role": bound.value, "generation": binding.generation}
             _fs.write_atomic(
-                self._root / "session-roles.json", codec.dumps({**roles, task_id: value})
+                self._root / "sessions.json", codec.dumps({**sessions, session_id: entry})
             )
+        return session_id, binding
+
+    def session_record(self, session_id: str) -> SessionBinding | None:
+        entry = self._read_json("sessions.json").get(session_id)
+        if entry is None:
+            return None
+        try:
+            generation = entry["generation"]
+            if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
+                raise ValueError("generation")
+            return SessionBinding(_task_id(entry["task"]), parse_role(entry["role"]), generation)
+        except (KeyError, TypeError, ValueError, StoreError) as exc:
+            raise StoreError(f"session record is invalid: {exc}") from exc
+
+    def end_session(self, session_id: str) -> None:
+        with _fs.locked(self._root / "store.lock"):
+            sessions = self._read_json("sessions.json")
+            if session_id in sessions:
+                rest = {k: v for k, v in sessions.items() if k != session_id}
+                _fs.write_atomic(self._root / "sessions.json", codec.dumps(rest))
 
     def session_generation(self, task_id: str) -> int:
         value = self._read_json("session-generations.json").get(_task_id(task_id), 0)

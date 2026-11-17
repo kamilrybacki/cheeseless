@@ -12,6 +12,7 @@ from cheeseless.adapters.outbound.sandbox import profiles
 from cheeseless.adapters.outbound.store.file_store import FileStore
 from cheeseless.domain.session_role import SessionRole, acceptance_mount, tool_names
 from tests.factories import frozen_task
+from tests.support import bind_session
 
 SEED = bytes(range(32))
 ROUTES = ("/run", "/status", "/dispute", "/author-check", "/author-crosscheck", "/freeze-propose")
@@ -35,7 +36,7 @@ def _tid() -> str:
     return frozen_task().task.task_id
 
 
-def _server(store, role: str) -> UdsVerifierServer:
+def _server(store, role: str, bound: str | None = None) -> UdsVerifierServer:
     cfg = SessionConfig(
         task_id=_tid(),
         worktree=Path("."),
@@ -49,6 +50,7 @@ def _server(store, role: str) -> UdsVerifierServer:
         sandbox=Boom(),  # type: ignore[arg-type]
         role=role,
         author_sandbox=Boom() if role == "author" else None,  # type: ignore[arg-type]
+        **bind_session(store, _tid(), bound or role),
     )
     return UdsVerifierServer("/nonexistent/sock", cfg)
 
@@ -69,14 +71,12 @@ def _refused(raw: bytes) -> bool:
 
 
 def test_an_author_session_cannot_call_gate_run(store):
-    store.set_session_role(_tid(), "author")
     server = _server(store, "author")
     for path in ("/run", "/status", "/dispute"):
         assert _refused(_wire(server, path, "author")), path
 
 
 def test_an_implementer_session_cannot_call_the_author_tools(store):
-    store.set_session_role(_tid(), "implementer")
     server = _server(store, "implementer")
     for path in ("/author-check", "/author-crosscheck", "/freeze-propose"):
         assert _refused(_wire(server, path)), path
@@ -90,33 +90,38 @@ def test_a_forged_claim_on_an_implementer_session_is_refused_everywhere(store):
 
 
 def test_a_role_mismatch_between_the_session_and_the_store_fails_closed(store):
-    store.set_session_role(_tid(), "implementer")  # the host launched an implementer
-    server = _server(store, "author")  # a stale or forged author server object
+    # the host registered an implementer, but the server object claims author
+    server = _server(store, "author", bound="implementer")
     for path in ("/author-check", "/freeze-propose", "/run"):
         assert _refused(_wire(server, path, "author")), path
 
 
 def test_an_unreadable_role_record_fails_closed(store):
-    (store._root / "session-roles.json").write_text("{not json")
     server = _server(store, "implementer")
+    (store._root / "sessions.json").write_text("{not json")
     for path in ("/run", "/status"):
         assert _refused(_wire(server, path)), path
 
 
 def test_a_reference_session_has_no_route_at_all(store):
-    store.set_session_role(_tid(), "reference")
     server = _server(store, "reference")
     for path in ROUTES:
         for claimed in ("reference", "implementer", "author"):
             assert _refused(_wire(server, path, claimed)), (path, claimed)
 
 
-def test_the_role_record_defaults_to_implementer_and_is_host_written(store):
-    assert store.session_role(_tid()) == "implementer"
-    store.set_session_role(_tid(), "author")
-    assert store.session_role(_tid()) == "author"
+def test_the_session_record_is_host_written_and_keyed_per_session(store):
+    a, rec_a = store.register_session(_tid(), "author")
+    b, rec_b = store.register_session(_tid(), "reference")
+    assert a != b
+    assert store.session_record(a).role.value == "author"
+    assert store.session_record(b).role.value == "reference"
+    assert store.session_record("0" * 32) is None
     with pytest.raises(ValueError):
-        store.set_session_role(_tid(), "root")
+        store.register_session(_tid(), "root")
+    store.end_session(a)
+    assert store.session_record(a) is None
+    assert store.session_record(b) is not None
 
 
 class _Client:

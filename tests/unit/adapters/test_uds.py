@@ -23,7 +23,7 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.freeze import commit, prepare
 from cheeseless.domain.budget import Pool
 from tests.requirements import needs
-from tests.support import finish, start_in_pid_namespace, wait_for_socket
+from tests.support import bind_session, finish, start_in_pid_namespace, wait_for_socket
 from tests.toy import make_repo
 
 pytestmark = needs(os.path.exists("/usr/bin/unshare"), "needs unshare for a real PID namespace")
@@ -85,6 +85,7 @@ def env(tmp_path_factory):
 
 def _session(env, worktree, **kwargs) -> SessionConfig:
     return SessionConfig(
+        **bind_session(env.store, env.task_id),
         task_id=env.task_id,
         worktree=Path(worktree),
         profile="local",

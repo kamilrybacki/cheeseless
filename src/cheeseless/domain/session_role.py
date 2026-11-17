@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 
@@ -16,6 +17,15 @@ def parse_role(value: str) -> SessionRole:
         return SessionRole(value)
     except ValueError:
         raise ValueError(f"unknown session role: {value!r}") from None
+
+
+@dataclass(frozen=True)
+class SessionBinding:
+    """What the host recorded for one launched session; the agent cannot write it."""
+
+    task_id: str
+    role: SessionRole
+    generation: int
 
 
 def acceptance_mount(role: SessionRole) -> str:

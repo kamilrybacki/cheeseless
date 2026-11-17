@@ -12,6 +12,7 @@ from cheeseless.domain.dlp import Fingerprints
 from cheeseless.domain.errors import ErrorCode
 from cheeseless.domain.freeze import FrozenTask
 from cheeseless.domain.result import Result
+from cheeseless.domain.session_role import SessionBinding
 
 
 class StoreError(Exception):
@@ -81,11 +82,20 @@ class Store(Protocol):
         """Return the fingerprint set, or ``None`` when freeze did not create one."""
         ...
 
-    def session_role(self, task_id: str) -> str:
-        """Role bound by the host at launch (``implementer`` if never set). Host-written."""
+    def register_session(self, task_id: str, role: str) -> tuple[str, SessionBinding]:
+        """Record a launched session; returns its random id and the binding written.
+
+        The binding carries the task's current generation, read under the same lock.
+        """
         ...
 
-    def set_session_role(self, task_id: str, role: str) -> None: ...
+    def session_record(self, session_id: str) -> SessionBinding | None:
+        """The host's record of one live session, or ``None`` (ended, never launched)."""
+        ...
+
+    def end_session(self, session_id: str) -> None:
+        """Forget a session; ending an unknown session is a no-op."""
+        ...
 
     def session_generation(self, task_id: str) -> int:
         """Host-owned counter, bumped when a rejected dispute reopens the task."""

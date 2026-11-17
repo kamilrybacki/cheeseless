@@ -15,6 +15,7 @@ from cheeseless.app.dispute import configure_disputes
 from cheeseless.domain.dispute import ACK_TEXT, DisputeCode
 from cheeseless.domain.errors import ErrorCode, GateError, gate_error
 from tests.factories import frozen_task
+from tests.support import bind_session
 
 SEED = bytes(range(32))
 
@@ -88,6 +89,7 @@ def _server(store: FileStore, task_id: str | None = None) -> UdsVerifierServer:
         store=store,
         runner=SimpleNamespace(),  # type: ignore[arg-type]
         sandbox=SimpleNamespace(),  # type: ignore[arg-type]
+        **bind_session(store, task_id or _tid()),
     )
     return UdsVerifierServer("/nonexistent/sock", cfg)
 

@@ -513,6 +513,9 @@ def serve_uds(
         directory = _private_dir("cheeseless-uds-")
         socket_path = directory / "verifier.sock"
         dir_owned = True
+    session_id, binding = (
+        (None, None) if task_id is None else ctx.store.register_session(task_id, role)
+    )
     session = SessionConfig(
         task_id=task_id,
         worktree=worktree,
@@ -529,16 +532,17 @@ def serve_uds(
         expected_pidns_fd=expected_pidns_fd,
         namespace_fd=namespace_fd,
         role=role,
-        generation=None if task_id is None else ctx.store.session_generation(task_id),
+        session_id=session_id,
+        generation=None if binding is None else binding.generation,
         author_sandbox=ctx.sandbox if role == "author" else None,  # type: ignore[arg-type]
     )
-    if task_id is not None:
-        ctx.store.set_session_role(task_id, parse_role(role).value)
     server = UdsVerifierServer(socket_path, session, socket_dir_owned=dir_owned)
     try:
         server.serve_forever()
     finally:
         session.close_namespace_fds()
+        if session_id is not None:
+            ctx.store.end_session(session_id)
     return 0
 
 
@@ -789,6 +793,7 @@ def host_session(
         if strays:
             raise RuntimeError(f"stray hidden material in the projection: {strays}")
 
+        session_id, binding = ctx.store.register_session(task_id, bound.value)
         session = SessionConfig(
             task_id=task_id,
             worktree=projection_dir,
@@ -803,8 +808,9 @@ def host_session(
             dlp=scanner_for(ctx.store, task_id),
             role=bound.value,
             author_sandbox=sandbox if bound is SessionRole.AUTHOR else None,
+            session_id=session_id,
+            generation=binding.generation,
         )
-        ctx.store.set_session_role(task_id, bound.value)
         server = UdsVerifierServer(socket_path, session, socket_dir_owned=dir_owned)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -950,6 +956,11 @@ def host_session(
             thread.join(timeout=SESSION_START_TIMEOUT)
         if session is not None:
             session.close_namespace_fds()
+            if session.session_id is not None:
+                try:
+                    ctx.store.end_session(session.session_id)
+                except Exception:  # noqa: BLE001 - a stale record is unreachable: random id
+                    pass
         ns_fd = None
         for leftover in (seccomp_fd, acceptance_fd):
             if leftover is not None:

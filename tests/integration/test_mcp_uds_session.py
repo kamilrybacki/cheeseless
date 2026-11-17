@@ -17,7 +17,7 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.freeze import commit, prepare
 from cheeseless.domain.budget import Pool
 from tests.requirements import needs
-from tests.support import finish, start_in_pid_namespace, wait_for_socket
+from tests.support import bind_session, finish, start_in_pid_namespace, wait_for_socket
 from tests.toy import CANARY, make_repo
 
 pytestmark = needs(os.path.exists("/usr/bin/unshare"), "needs unshare for a real PID namespace")
@@ -101,6 +101,7 @@ def test_mcp_over_authenticated_uds_in_namespace(env, tmp_path):
         runner=env.runner,
         sandbox=env.sandbox,
         expected_pidns_fd=os.dup(ns_fd),
+        **bind_session(env.store, env.task_id),
     )
     server = UdsVerifierServer(sock, session)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

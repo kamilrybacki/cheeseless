@@ -1,5 +1,6 @@
 """`cheeseless session --role` binds the role at launch (stage c, item 1)."""
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -61,9 +62,12 @@ def _launch(toy_repo: Path, tmp_path: Path, role: str, task: str = "a" * 64) -> 
 
 
 @pytest.mark.parametrize("role", ["author", "reference"])
-def test_a_pre_freeze_role_session_launches_and_records_its_role(toy_repo, tmp_path, role):
+def test_a_pre_freeze_role_session_launches_and_clears_its_record(toy_repo, tmp_path, role):
     store = _launch(toy_repo, tmp_path, role)
-    assert store.session_role("a" * 64) == role
+    # the record existed for the session's life and is gone with it
+    assert not (store._root / "sessions.json").exists() or not json.loads(
+        (store._root / "sessions.json").read_text()
+    )
 
 
 def test_an_implementer_session_still_needs_a_frozen_task(toy_repo, tmp_path):

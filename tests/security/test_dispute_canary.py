@@ -16,6 +16,7 @@ from cheeseless.app.promote import promote
 from cheeseless.domain.dispute import ACK_TEXT
 from cheeseless.domain.errors import ErrorCode, GateError
 from tests.factories import frozen_task
+from tests.support import bind_session
 
 SEED = bytes(range(32))
 CANARY = "CANARY-NOTE-7f3a91"
@@ -56,6 +57,7 @@ def _server(store: FileStore) -> UdsVerifierServer:
         store=store,
         runner=Boom(),
         sandbox=Boom(),  # type: ignore[arg-type]
+        **bind_session(store, _tid()),
     )
     return UdsVerifierServer("/nonexistent/sock", cfg)
 

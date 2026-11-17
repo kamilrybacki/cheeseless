@@ -160,6 +160,9 @@ class SessionConfig:
     pidns_fd: int | None = None
     # ``implementer`` (run, status, dispute) or ``author`` (check, crosscheck, propose).
     role: str = "implementer"
+    # Host-recorded identity of this session (store.register_session). Both are required for
+    # any role-checked route: a config without them fails closed.
+    session_id: str | None = None
     # Store generation at launch; a later rejected dispute makes this session stale.
     generation: int | None = None
     author_sandbox: AuthorSandbox | None = None
@@ -470,22 +473,27 @@ class UdsVerifierServer:
                 pass
 
     def _role_ok(self, claimed: str) -> bool:
-        """The claim, the server's bound role and the trusted store must all agree.
+        """The claim, the server's bound role and this session's own record must all agree.
 
-        A reference session has no route at all. Any store failure refuses (fail closed).
+        A reference session has no route at all. The record is per session (not per task), so
+        a second session on the same task cannot change this one's role; its generation must
+        still equal the task's, so a rejected dispute stales it. Missing task id, session id,
+        generation or record, and any store failure, refuse (fail closed).
         """
-        bound = self.session.role
-        if bound == "reference" or claimed != bound:
+        s = self.session
+        if s.role == "reference" or claimed != s.role:
             return False
-        task_id = self.session.task_id
-        if task_id is None:
+        if s.task_id is None or s.session_id is None or s.generation is None:
             return False
         try:
-            if self.session.generation is not None and (
-                self.session.store.session_generation(task_id) != self.session.generation
-            ):
-                return False
-            return bool(self.session.store.session_role(task_id) == bound)
+            record = s.store.session_record(s.session_id)
+            return (
+                record is not None
+                and record.task_id == s.task_id
+                and record.role.value == s.role
+                and record.generation == s.generation
+                and s.store.session_generation(s.task_id) == s.generation
+            )
         except Exception:  # noqa: BLE001 - an unreadable record must refuse
             return False
 
