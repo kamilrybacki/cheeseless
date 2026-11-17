@@ -15,6 +15,7 @@ import socket
 import struct
 import sys
 import termios
+import threading
 import tty
 from collections.abc import Callable
 from pathlib import Path
@@ -22,6 +23,36 @@ from pathlib import Path
 from cheeseless.domain.pane_frames import Data, FrameDecoder, FrameError, encode_data, encode_resize
 
 _READ_SIZE = 16 * 1024
+_TERMINATING = (signal.SIGTERM, signal.SIGHUP)
+
+
+def write_all(fd: int, data: bytes) -> None:
+    """Write every byte of ``data``; ``os.write`` may write only part of it."""
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view) :]
+
+
+def _exit_on_signal(signo: int, _frame: object) -> None:
+    # Raising unwinds through run_pane_client's finally, which restores the tty. The
+    # default action would kill the process with the pane still in raw mode.
+    raise SystemExit(128 + signo)
+
+
+def install_exit_handlers() -> Callable[[], None]:
+    """Turn SIGTERM/SIGHUP into SystemExit; return a function that undoes it.
+
+    Signal handlers can only be set on the main thread; elsewhere this is a no-op.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+    previous = {signo: signal.signal(signo, _exit_on_signal) for signo in _TERMINATING}
+
+    def restore() -> None:
+        for signo, handler in previous.items():
+            signal.signal(signo, handler)
+
+    return restore
 
 
 def install_winch_pipe() -> tuple[int, Callable[[], None]]:
@@ -79,7 +110,7 @@ def _pump(sock: socket.socket, stdin_fd: int, stdout_fd: int, resize_fd: int) ->
                     return 0
                 for frame in decoder.feed(chunk):
                     if isinstance(frame, Data):
-                        os.write(stdout_fd, frame.payload)
+                        write_all(stdout_fd, frame.payload)
 
 
 def run_pane_client(
@@ -101,6 +132,7 @@ def run_pane_client(
     if resize_fd is None:
         resize_fd, restore_winch = install_winch_pipe()
     saved = termios.tcgetattr(stdin)
+    restore_exit = install_exit_handlers()
     try:
         tty.setraw(stdin)
         return _pump(sock, stdin, stdout, resize_fd)
@@ -110,6 +142,7 @@ def run_pane_client(
         return 1
     finally:
         termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
+        restore_exit()
         sock.close()
         if restore_winch is not None:
             restore_winch()

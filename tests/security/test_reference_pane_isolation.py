@@ -6,6 +6,7 @@ variables: none may be visible inside, and the pty master and the relay socket m
 unreachable from the sandbox. The relay admits only the host uid and one client.
 """
 
+import contextlib
 import os
 import select
 import socket
@@ -143,6 +144,41 @@ def test_the_relay_socket_is_not_visible_inside_the_sandbox(start):
         assert sandbox.proc.wait(timeout=10) != 0
         for protected in (sandbox.proj, sandbox.home):
             assert not within(relay.socket_path, protected)
+    finally:
+        relay.close()
+        os.close(slave)
+
+
+def test_the_sandbox_cannot_connect_to_the_relay_but_the_host_can(start):
+    """Negative: a connect from inside fails. Positive control: the host then attaches
+    and receives a canary written to the reference pty, so the relay was live and free."""
+    master, slave = os.openpty()
+    relay = PaneRelay(master)
+    relay.start()
+    probe = (
+        "import socket, sys\n"
+        "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+        "try:\n"
+        "    s.connect(sys.argv[1])\n"
+        "except OSError:\n"
+        "    print('BLOCKED', flush=True)\n"
+        "else:\n"
+        "    s.settimeout(3)\n"
+        "    print('CONNECTED', s.recv(4096), flush=True)\n"
+    )
+    try:
+        out = start([PYTHON, "-I", "-c", probe, str(relay.socket_path)]).drain().decode()
+        assert "BLOCKED" in out
+        assert "CONNECTED" not in out
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as host:
+            host.connect(str(relay.socket_path))
+            host.settimeout(5)
+            got, end = b"", time.monotonic() + 5
+            while b"canary-pane-output" not in got and time.monotonic() < end:
+                os.write(slave, b"canary-pane-output\r\n")
+                with contextlib.suppress(TimeoutError):
+                    got += host.recv(4096)
+            assert b"canary-pane-output" in got
     finally:
         relay.close()
         os.close(slave)

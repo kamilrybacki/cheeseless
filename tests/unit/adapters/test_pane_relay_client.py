@@ -157,3 +157,68 @@ def test_the_parser_has_pane_relay_with_a_required_socket():
     assert args.socket == Path("/x/y")
     with pytest.raises(SystemExit):
         build_parser().parse_args(["pane-relay"])
+
+
+def test_write_all_survives_short_writes(monkeypatch):
+    from cheeseless.adapters.inbound.cli import pane_client
+
+    written: list[bytes] = []
+
+    def short_write(_fd: int, data) -> int:
+        chunk = bytes(data[:3])
+        written.append(chunk)
+        return len(chunk)
+
+    monkeypatch.setattr(pane_client.os, "write", short_write)
+    pane_client.write_all(1, b"0123456789")
+    assert b"".join(written) == b"0123456789"
+
+
+def test_sigterm_becomes_system_exit_on_the_main_thread():
+    import signal
+
+    from cheeseless.adapters.inbound.cli.pane_client import install_exit_handlers
+
+    previous = signal.getsignal(signal.SIGTERM)
+    restore = install_exit_handlers()
+    try:
+        with pytest.raises(SystemExit) as exc:
+            signal.raise_signal(signal.SIGTERM)
+        assert exc.value.code == 128 + signal.SIGTERM
+    finally:
+        restore()
+    assert signal.getsignal(signal.SIGTERM) == previous
+
+
+def test_sigterm_restores_the_tty_of_a_running_client(term, tmp_path):
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    master, slave = term
+    before = termios.tcgetattr(slave)
+    relay = FakeRelay(tmp_path / "r.sock")
+    code = (
+        "import sys\nfrom pathlib import Path\n"
+        "from cheeseless.adapters.inbound.cli.pane_client import run_pane_client\n"
+        "sys.exit(run_pane_client(Path(sys.argv[1])))\n"
+    )
+    proc = subprocess.Popen(  # noqa: S603 - fixed argv, our own interpreter
+        [sys.executable, "-c", code, str(relay.path)], stdin=slave, stdout=slave
+    )
+    try:
+        relay.accept()
+        relay.read_until(lambda f: Resize(33, 101) in f)
+        deadline = time.monotonic() + 5
+        while termios.tcgetattr(slave)[3] & termios.ICANON:
+            assert time.monotonic() < deadline, "client never entered raw mode"
+            time.sleep(0.01)
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=5) == 128 + signal.SIGTERM
+        assert termios.tcgetattr(slave) == before
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        relay.close()
