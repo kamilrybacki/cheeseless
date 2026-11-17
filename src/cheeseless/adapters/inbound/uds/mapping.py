@@ -43,6 +43,7 @@ _ERROR_CODE_TO_PROTO = {
     ErrorCode.ROLE_NOT_ALLOWED: error_pb2.ERROR_CODE_ROLE_NOT_ALLOWED,
     ErrorCode.REFERENCE_BLOCKED: error_pb2.ERROR_CODE_REFERENCE_BLOCKED,
     ErrorCode.AUTHOR_REFUSED: error_pb2.ERROR_CODE_AUTHOR_REFUSED,
+    ErrorCode.REFERENCE_REFUSED: error_pb2.ERROR_CODE_REFERENCE_REFUSED,
 }
 
 _PROTO_TO_ERROR_CODE = {v: k for k, v in _ERROR_CODE_TO_PROTO.items()}
@@ -387,12 +388,14 @@ _AUTHOR_REQUESTS = {
     "crosscheck": verifier_pb2.AuthorCrosscheckRequest,
     "propose": verifier_pb2.FreezeProposeRequest,
     "spec_done": verifier_pb2.SpecDoneRequest,
+    "reference_done": verifier_pb2.ReferenceDoneRequest,
 }
 _AUTHOR_RESPONSES = {
     "check": verifier_pb2.AuthorCheckResponse,
     "crosscheck": verifier_pb2.AuthorCrosscheckResponse,
     "propose": verifier_pb2.FreezeProposeResponse,
     "spec_done": verifier_pb2.SpecDoneResponse,
+    "reference_done": verifier_pb2.ReferenceDoneResponse,
 }
 
 
@@ -425,6 +428,8 @@ def author_outcome_to_response(kind: str, outcome: object) -> Any:
         resp.crosscheck.red_criteria.extend(outcome.red_criteria)  # type: ignore[attr-defined]
     elif kind == "spec_done":
         resp.ack.spec_digest = outcome.spec_digest  # type: ignore[attr-defined]
+    elif kind == "reference_done":
+        resp.ack.attempt_id = outcome.attempt_id  # type: ignore[attr-defined]
     else:
         resp.proposal.proposal_id = outcome.proposal_id  # type: ignore[attr-defined]
     return resp
@@ -442,6 +447,8 @@ def author_response_to_outcome(kind: str, msg: Any) -> object:
         return {"proposal_id": msg.proposal.proposal_id}
     if which == "ack" and kind == "spec_done":
         return {"spec_digest": msg.ack.spec_digest}
+    if which == "ack" and kind == "reference_done":
+        return {"attempt_id": msg.ack.attempt_id}
     raise MappingError("missing or unexpected outcome oneof")
 
 

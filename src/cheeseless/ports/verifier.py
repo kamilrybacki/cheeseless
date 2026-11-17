@@ -22,6 +22,10 @@ class VerifierClient(Protocol):
 
     def freeze_propose(self) -> dict[str, object] | GateError: ...
 
+    def reference_done(self) -> dict[str, object] | GateError:
+        """Dev reference sessions only (ADR 0014): ask the host to stop this attempt."""
+        ...
+
     def spec_done(self) -> dict[str, object] | GateError:
         """Dev author sessions only (ADR 0013): close the spec phase."""
         ...

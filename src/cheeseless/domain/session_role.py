@@ -45,12 +45,13 @@ def acceptance_mount(role: SessionRole) -> str:
 def tool_names(role: SessionRole, *, disputes: bool = False, dev: bool = False) -> tuple[str, ...]:
     """The agent-visible MCP tool names for a role.
 
-    ``spec_done`` exists only in a host-started ``cheeseless dev`` author session."""
+    ``spec_done`` exists only in a host-started ``cheeseless dev`` author session and
+    ``reference_done`` only in a dev TUI reference session (ADR 0014)."""
     if role is SessionRole.AUTHOR:
         author: tuple[str, ...] = ("author_check", "author_crosscheck", "freeze_propose")
         return (*author, "spec_done") if dev else author
     if role is SessionRole.REFERENCE:
-        return ()
+        return ("reference_done",) if dev else ()
     base = ("gate_run", "gate_status")
     return (*base, "gate_dispute") if disputes else base
 

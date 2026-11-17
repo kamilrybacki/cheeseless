@@ -31,6 +31,7 @@ class ErrorCode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ERROR_CODE_ROLE_NOT_ALLOWED: _ClassVar[ErrorCode]
     ERROR_CODE_REFERENCE_BLOCKED: _ClassVar[ErrorCode]
     ERROR_CODE_AUTHOR_REFUSED: _ClassVar[ErrorCode]
+    ERROR_CODE_REFERENCE_REFUSED: _ClassVar[ErrorCode]
 ERROR_CODE_UNSPECIFIED: ErrorCode
 ERROR_CODE_RUN_BUDGET_EXHAUSTED: ErrorCode
 ERROR_CODE_CRITERION_FAILED: ErrorCode
@@ -54,6 +55,7 @@ ERROR_CODE_SESSION_DISPUTED: ErrorCode
 ERROR_CODE_ROLE_NOT_ALLOWED: ErrorCode
 ERROR_CODE_REFERENCE_BLOCKED: ErrorCode
 ERROR_CODE_AUTHOR_REFUSED: ErrorCode
+ERROR_CODE_REFERENCE_REFUSED: ErrorCode
 
 class BudgetState(_message.Message):
     __slots__ = ("remaining", "limit")

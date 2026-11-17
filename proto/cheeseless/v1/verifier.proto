@@ -133,6 +133,23 @@ message SpecDoneResponse {
   }
 }
 
+// Asks the host to stop a running dev-mode TUI reference attempt (ADR 0014). Reference
+// sessions of a dev attempt only.
+message ReferenceDoneRequest {
+  string task_id = 1;
+}
+
+message ReferenceDoneAck {
+  string attempt_id = 1;
+}
+
+message ReferenceDoneResponse {
+  oneof outcome {
+    ReferenceDoneAck ack = 1;
+    Error error = 2;
+  }
+}
+
 service Verifier {
   rpc Run(RunRequest) returns (RunResponse);
   rpc Status(StatusRequest) returns (StatusResponse);
@@ -141,4 +158,5 @@ service Verifier {
   rpc AuthorCrosscheck(AuthorCrosscheckRequest) returns (AuthorCrosscheckResponse);
   rpc FreezePropose(FreezeProposeRequest) returns (FreezeProposeResponse);
   rpc SpecDone(SpecDoneRequest) returns (SpecDoneResponse);
+  rpc ReferenceDone(ReferenceDoneRequest) returns (ReferenceDoneResponse);
 }

@@ -91,6 +91,9 @@ class UdsVerifierClient:
     def spec_done(self) -> dict[str, object] | GateError:
         return self._author("spec_done", "/spec-done", verifier_pb2.SpecDoneResponse)
 
+    def reference_done(self) -> dict[str, object] | GateError:
+        return self._author("reference_done", "/reference-done", verifier_pb2.ReferenceDoneResponse)
+
     def _author(self, kind: str, path: str, response_type: Any) -> dict[str, object] | GateError:
         data = self._post(path, self._request_body())
         try:
