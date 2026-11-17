@@ -159,3 +159,74 @@ def test_author_recover_needs_actor_and_subcommand(capsys) -> None:
     assert cli.main(["author", "recover", "--task", "p1"], context=_ctx()) == 2
     assert "--as" in capsys.readouterr().err
     assert cli.main(["author"], context=_ctx()) == 2
+
+
+def test_promote_role_defaults_to_implementer_and_routes_to_gate(monkeypatch, capsys) -> None:
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "promote",
+        lambda *a, **k: (
+            calls.append("gate") or SimpleNamespace(ref="refs/heads/gate/t", commit="c")
+        ),
+    )
+    monkeypatch.setattr(
+        cli, "promote_author", lambda *a, **k: calls.append("spec") or pytest.fail("crossed")
+    )
+    ctx = cli.Context(
+        repo=SimpleNamespace(root="."), runner=object(), sandbox=object(), store=object()
+    )
+    assert cli.main(["promote", "--json"], context=ctx) == 0
+    assert calls == ["gate"]
+    assert json.loads(capsys.readouterr().out)["ref"] == "refs/heads/gate/t"
+
+
+def test_promote_role_author_routes_to_spec_and_never_to_gate(monkeypatch, capsys) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "promote", lambda *a, **k: pytest.fail("crossed"))
+    monkeypatch.setattr(
+        cli,
+        "promote_author",
+        lambda repo, store, *, worktree: (
+            calls.append(worktree) or SimpleNamespace(ref="refs/heads/spec/l", commit="c")
+        ),
+    )
+    ctx = cli.Context(
+        repo=SimpleNamespace(root="."), runner=object(), sandbox=object(), store=object()
+    )
+    assert cli.main(["promote", "--role", "author", "--json"], context=ctx) == 0
+    assert len(calls) == 1
+    assert json.loads(capsys.readouterr().out)["ref"] == "refs/heads/spec/l"
+
+
+def test_author_promote_refusal_is_structured_and_nonzero(monkeypatch, capsys) -> None:
+    def refuse(*a, **k):
+        raise AuthorError("stale_author_check", "the acceptance tree changed")
+
+    monkeypatch.setattr(cli, "promote_author", refuse)
+    ctx = cli.Context(
+        repo=SimpleNamespace(root="."), runner=object(), sandbox=object(), store=object()
+    )
+    assert cli.main(["promote", "--role", "author", "--json"], context=ctx) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"refused": "stale_author_check", "message": "the acceptance tree changed"}
+
+
+def test_author_promote_path_rejection_lists_paths(monkeypatch, capsys) -> None:
+    def refuse(*a, **k):
+        raise cli.PromoteRejected(("src/x.py",), ())
+
+    monkeypatch.setattr(cli, "promote_author", refuse)
+    ctx = cli.Context(
+        repo=SimpleNamespace(root="."), runner=object(), sandbox=object(), store=object()
+    )
+    assert cli.main(["promote", "--role", "author", "--json"], context=ctx) == 1
+    assert json.loads(capsys.readouterr().out)["rejected"] == ["src/x.py"]
+
+
+def test_author_promote_refuses_task_and_approve_flags(capsys) -> None:
+    ctx = cli.Context(
+        repo=SimpleNamespace(root="."), runner=object(), sandbox=object(), store=object()
+    )
+    assert cli.main(["promote", "--role", "author", "--approve", "src/x"], context=ctx) == 2
+    assert cli.main(["promote", "--role", "author", "--task", "t"], context=ctx) == 2

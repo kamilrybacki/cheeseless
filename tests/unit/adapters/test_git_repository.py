@@ -263,3 +263,20 @@ def test_sparse_hide_removes_hidden_files(repo: GitRepository, toy_repo: Path) -
     assert (toy_repo / "acceptance" / "contract" / "criteria.yaml").is_file()
     assert (toy_repo / "src" / "toy" / "__main__.py").is_file()
     assert repo.dirty_paths("acceptance") == []
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/main", "refs/heads/gates/x", "refs/tags/gate/x"])
+def test_promote_refuses_refs_outside_gate_and_spec(
+    repo: GitRepository, toy_repo: Path, ref: str
+) -> None:
+    baseline = repo.head_commit()
+    tree = repo.tree_of(baseline)
+    with pytest.raises(RepositoryError):
+        repo.promote(baseline, tree, tree, ref)
+
+
+def test_promote_accepts_a_spec_ref(repo: GitRepository, toy_repo: Path) -> None:
+    baseline = repo.head_commit()
+    tree = repo.tree_of(baseline)
+    commit = repo.promote(baseline, tree, tree, "refs/heads/spec/abc")
+    assert git(toy_repo, "rev-parse", "refs/heads/spec/abc") == commit

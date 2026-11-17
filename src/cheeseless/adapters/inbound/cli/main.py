@@ -25,7 +25,7 @@ from cheeseless.app.dispute import configure_disputes, list_disputes, resolve_di
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.freeze import FreezeError, commit, prepare, read_contract
 from cheeseless.app.gate_run import gate_run
-from cheeseless.app.promote import PromoteRejected, promote
+from cheeseless.app.promote import PromoteRejected, promote, promote_author
 from cheeseless.app.status import status
 from cheeseless.domain.authoring import AuthoringError
 from cheeseless.domain.budget import Pool
@@ -147,7 +147,16 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--worktree", type=Path, default=None)
     st.add_argument("--json", action="store_true")
 
-    prom = sub.add_parser("promote", help="Promote an evaluated tree to gate/<task>.")
+    prom = sub.add_parser(
+        "promote",
+        help="Promote an evaluated tree to gate/<task>, or with --role author to spec/<lineage>.",
+    )
+    prom.add_argument(
+        "--role",
+        choices=("implementer", "author"),
+        default="implementer",
+        help="implementer: gate/<task>; author: spec/<lineage> (acceptance/ only).",
+    )
     prom.add_argument("--worktree", type=Path, default=None)
     prom.add_argument("--task", default=None)
     prom.add_argument("--approve", action="append", default=[])
@@ -461,14 +470,27 @@ def _cmd_status(args: argparse.Namespace, ctx: Context) -> int:
 
 def _cmd_promote(args: argparse.Namespace, ctx: Context) -> int:
     worktree = args.worktree if args.worktree is not None else ctx.repo.root
+    author = args.role == "author"
+    if author and (args.task is not None or args.approve):
+        print("author promote takes no --task and no --approve", file=sys.stderr)
+        return 2
     try:
-        outcome = promote(
-            ctx.repo,
-            ctx.store,
-            task_id=args.task,
-            worktree=worktree,
-            approved=tuple(args.approve),
-        )
+        if author:
+            outcome = promote_author(ctx.repo, _author_store(ctx), worktree=worktree)
+        else:
+            outcome = promote(
+                ctx.repo,
+                ctx.store,
+                task_id=args.task,
+                worktree=worktree,
+                approved=tuple(args.approve),
+            )
+    except AuthorError as exc:
+        if args.json:
+            _print_json({"refused": exc.kind, "message": str(exc)})
+        else:
+            print(f"refused ({exc.kind}): {exc}", file=sys.stderr)
+        return 1
     except PromoteRejected as exc:
         if args.json:
             _print_json(
