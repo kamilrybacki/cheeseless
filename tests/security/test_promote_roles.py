@@ -5,6 +5,7 @@ carry anything except acceptance/ and only onto gate/<task>. A stale tree is ref
 side ever publishes hidden-test or holdout content.
 """
 
+import os
 import subprocess
 from dataclasses import replace
 
@@ -42,13 +43,39 @@ def implementer(toy_repo, tmp_path):
     return repo, runner, sandbox, store, wt, frozen
 
 
-def _all_blobs(worktree, ref) -> str:
-    out = subprocess.run(  # noqa: S603
-        ["git", "-C", str(worktree), "grep", "-I", "-l", "-e", CANARY, "-e", SENTINEL, ref],  # noqa: S607
+def _host(host, *args: str, data: bytes | None = None) -> bytes:
+    """Run git against the host repository; any failure is a test error, never an empty result."""
+    return subprocess.run(  # noqa: S603
+        ["git", "-C", str(host), *args],  # noqa: S607
+        input=data,
         capture_output=True,
-        text=True,
-    )
-    return out.stdout
+        check=True,
+    ).stdout
+
+
+def _newly_added(host, ref: str) -> dict[str, bytes]:
+    """Path -> content of every file ``ref`` adds or changes relative to the default branch.
+
+    Baseline hidden tests legitimately live in host branches, so only content the promote itself
+    introduced is inspected. Binary blobs are read too."""
+    _host(host, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    raw = _host(host, "diff-tree", "-r", "-z", "--no-renames", "--diff-filter=AM", "main", ref)
+    fields = raw.split(b"\0")
+    added: dict[str, bytes] = {}
+    for meta, path in zip(fields[0::2], fields[1::2], strict=False):
+        if not meta:
+            continue
+        new_oid = meta.split()[3].decode()
+        added[path.decode()] = _host(host, "cat-file", "blob", new_oid)
+    return added
+
+
+def _leaks(host, ref: str) -> list[str]:
+    return [
+        path
+        for path, content in _newly_added(host, ref).items()
+        if CANARY.encode() in content or SENTINEL.encode() in content
+    ]
 
 
 @pytest.mark.parametrize(
@@ -112,7 +139,10 @@ def test_implementer_promote_lands_on_gate_and_never_carries_hidden_content(impl
     gate_run(repo, store, runner, sandbox, worktree=wt)
     out = promote(repo, store, worktree=wt)
     assert out.ref.startswith("refs/heads/gate/")
-    assert _all_blobs(wt, out.ref) == ""
+    added = _newly_added(repo.root, out.ref)
+    assert added  # the control below is meaningless if the scan saw nothing
+    assert _leaks(repo.root, out.ref) == []
+    assert not [p for p in added if p == "acceptance" or p.startswith("acceptance/")]
 
 
 def test_implementer_promote_cannot_be_pointed_at_a_spec_ref(implementer):
@@ -171,3 +201,62 @@ def test_author_promote_loses_a_race_with_approval_and_publishes_nothing(author)
         capture_output=True,
     )
     assert probe.returncode != 0
+
+
+def test_author_promote_adds_only_the_checked_acceptance_tree_and_no_hidden_markers(author):
+    repo, store, wt = author
+    _edit_acceptance(wt)
+    assert _check(repo, store, wt).ok
+    out = promote_author(repo, store, worktree=wt)
+    added = _newly_added(repo.root, out.ref)
+    assert set(added) == {"acceptance/hidden/test_extra.py"}
+    assert _leaks(repo.root, out.ref) == []
+
+
+def _contaminated_ref(host, tmp_path, ref: str, content: bytes) -> None:
+    """Commit main plus a src/toy/leak.bin carrying ``content`` onto ``ref`` with plumbing."""
+    env = {**os.environ, "GIT_INDEX_FILE": str(tmp_path / "leak-index")}
+
+    def plumbing(*args: str, data: bytes | None = None) -> str:
+        out = subprocess.run(  # noqa: S603
+            ["git", "-C", str(host), *args],  # noqa: S607
+            input=data,
+            capture_output=True,
+            check=True,
+            env=env,
+        )
+        return out.stdout.decode().strip()
+
+    blob = plumbing("hash-object", "-w", "--stdin", data=content)
+    plumbing("read-tree", "main")
+    plumbing("update-index", "--add", "--cacheinfo", f"100644,{blob},src/toy/leak.bin")
+    tree = plumbing("write-tree")
+    commit = plumbing(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.invalid",
+        "commit-tree",
+        tree,
+        "-p",
+        "main",
+        "-m",
+        "contaminated",
+    )
+    plumbing("update-ref", ref, commit)
+
+
+@pytest.mark.parametrize("marker", [CANARY, SENTINEL])
+def test_the_leak_scan_detects_a_contaminated_ref_binary_included(author, tmp_path, marker):
+    """Control: hidden content on a ref must be flagged, so a clean result above is evidence
+    and not an empty scan."""
+    repo, _store, _wt = author
+    ref = "refs/heads/gate/contaminated"
+    _contaminated_ref(repo.root, tmp_path, ref, b"\0\xff" + marker.encode() + b"\0")
+    assert _leaks(repo.root, ref) == ["src/toy/leak.bin"]
+
+
+def test_the_leak_scan_fails_loudly_on_a_missing_ref(author):
+    repo, _store, _wt = author
+    with pytest.raises(subprocess.CalledProcessError):
+        _leaks(repo.root, "refs/heads/gate/does-not-exist")
