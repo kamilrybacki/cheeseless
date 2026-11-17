@@ -38,7 +38,7 @@ from cheeseless.app.dev_flow import (
 )
 from cheeseless.app.dev_session import open_session
 from cheeseless.bootstrap import build_context, host_session
-from cheeseless.domain.dev_session import DevSessionError, DevState
+from cheeseless.domain.dev_session import DevPhase, DevSessionError, DevState
 from cheeseless.ports.dev_session import DevSessionStore
 from cheeseless.ports.reference_attempt import ReferenceAttemptStore
 
@@ -108,7 +108,7 @@ def run_dev_command(args: argparse.Namespace, agent: Sequence[str] | None) -> in
     )
     if start.reference:
         return _tests_phase(args, lineage, start, store)
-    return _run_session(args, start, list(agent or ()))
+    return _run_session(args, start, list(agent or ()), lineage, store)
 
 
 def _tests_phase(
@@ -135,8 +135,17 @@ def _tests_phase(
     return 0 if ready else 1
 
 
+def _phase_of(store: DevSessionStore, lineage: str) -> str:
+    state = store.dev_state(lineage)
+    return state.phase.value if state is not None else "unknown"
+
+
 def _run_session(
-    args: argparse.Namespace, start: PhaseStart, agent: Sequence[str]
+    args: argparse.Namespace,
+    start: PhaseStart,
+    agent: Sequence[str],
+    lineage: str,
+    store: DevSessionStore,
 ) -> int:
     """Launch the one session this phase allows, with the flags that phase grants.
 
@@ -152,6 +161,12 @@ def _run_session(
         ):
             # The session runs to completion inside the context; the host tears down.
             pass
+        if start.role == "implementer":
+            _emit(
+                args,
+                {"lineage": lineage, "phase": _phase_of(store, lineage)},
+                _implement_report(store, lineage),
+            )
     except (ValueError, RuntimeError) as exc:
         print(f"dev: {exc}", file=sys.stderr)
         return 1
@@ -159,6 +174,21 @@ def _run_session(
         print(f"dev: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _implement_report(store: DevSessionStore, lineage: str) -> str:
+    """What the implement phase did, including the count that will force a re-freeze."""
+    state = store.dev_state(lineage)
+    if state is None:
+        return ""
+    if state.needs_refreeze:
+        return (
+            f"the holdout failed {state.holdout_failures} times: re-freeze with the author "
+            "or abort; the gate will not judge again"
+        )
+    if state.phase is DevPhase.DONE:
+        return "the implement phase passed: the dev session is done"
+    return f"{state.phase.value} phase ({state.holdout_failures} holdout failures so far)"
 
 
 __all__ = ["run_dev_command"]

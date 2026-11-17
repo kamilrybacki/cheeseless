@@ -14,8 +14,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from cheeseless.domain.dev_session import DevPhase, DevSessionError, resume_target
+from cheeseless.domain.dev_session import DevPhase, DevSessionError, DevState, resume_target
 from cheeseless.domain.reference_attempt import ReferenceState
+from cheeseless.domain.result import Result
+from cheeseless.domain.status import Status
 from cheeseless.ports.dev_session import DevSessionStore
 from cheeseless.ports.reference_attempt import ReferenceAttemptStore
 
@@ -136,6 +138,25 @@ def reference_ready(store: ReferenceAttemptStore, lineage_id: str, spec_digest: 
     return True
 
 
+def next_after_result(state: DevState, result: Result) -> DevState:
+    """The dev move a gate verdict means. Reads the verdict; never charges a pool.
+
+    The verdict is the verifier's decision: PASS ends the phase, FAIL spends one of the
+    holdout attempts. Accounting a run against a budget belongs to ``gate_run``, so this
+    asks no store and no pool.
+    """
+    if state.phase is not DevPhase.IMPLEMENT:
+        raise DevFlowError(
+            f"a gate result only applies to the implement phase, not {state.phase.value}"
+        )
+    try:
+        if result.status is Status.PASS:
+            return state.passed()
+        return state.holdout_failed()
+    except DevSessionError as exc:
+        raise DevFlowError(str(exc)) from exc
+
+
 __all__ = [
     "CREDENTIAL_HINT",
     "CREDENTIAL_VAR",
@@ -143,6 +164,7 @@ __all__ = [
     "PhaseStart",
     "DevTestsPhaseError",
     "require_clean_tree",
+    "next_after_result",
     "require_token",
     "start_phase",
     "reference_ready",

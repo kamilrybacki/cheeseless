@@ -983,3 +983,11 @@ launches it), so this slice implements an accepted decision and adds no new ADR.
 | D13-6b | `app/dev_flow.reference_ready` is a read-only predicate over the stored attempts | The tests phase cannot close without a `done` attempt for *this* spec digest. It reads and never transitions or binds, so calling it cannot move an attempt; `test_the_reference_predicate_is_read_only` asserts the body holds no write call. |
 | D13-6c | A stale digest is reported apart from a missing attempt | The two send the user to different fixes (re-run the reference vs run one at all), and the earlier draft reported "no reference" for both, which was wrong whenever an attempt existed for another spec. |
 | D13-6d | Renamed `tests_ready` → `reference_ready`, `TestsPhaseError` → `DevTestsPhaseError` | pytest collects a module-level name starting with `tests_` as a test and a class starting with `Tests` as a test class; both collided (a spurious fixture error and a `PytestCollectionWarning`) in `app/dev_flow.py`. |
+
+## ADR 0013 stage 5, slice 3: applying a gate verdict to the implement phase
+
+| id | decision | why |
+|---|---|---|
+| D13-7a | `dev_flow.next_after_result` maps a `Result` to one domain move and does nothing else | The verifier already decides pass or fail and `gate_run` already accounts the attempt against the pool. Answering "what does this verdict mean for the dev session" is a pure function of the state and the verdict, so it asks no store and charges nothing; `test_the_run_never_charges_the_pool_itself` asserts the body holds no `record_attempt`, `Pool` or `save_`. |
+| D13-7b | The final holdout failure is **stored**, and only the next judgment is refused | `DevState.holdout_failed` allows the count to reach `MAX_HOLDOUT_FAILURES` and `judgment_allowed` then turns false. Raising on the storing move would have lost the count the author needs to see to justify a re-freeze; the first draft of the test asserted the opposite and was wrong, not the domain. `next_after_result` therefore surfaces `DevSessionError` as `DevFlowError("too often…")` on the *following* verdict. |
+| D13-7c | The report names the holdout count, not only the phase | A bare `implement phase` after three failures looks identical to one after zero, and the user's next action differs completely (re-freeze vs keep going). |

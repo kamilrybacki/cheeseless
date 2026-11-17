@@ -155,3 +155,27 @@ def test_the_tests_phase_never_approves_a_freeze(
     run_dev_command(args, ["/bin/true"])
     output = capsys.readouterr()
     assert "cheeseless-dev" not in output.out + output.err
+
+
+def test_the_implement_report_names_the_re_freeze() -> None:
+    """The count that forces a re-freeze must be visible, not just the phase name."""
+    from cheeseless.bootstrap_dev import _implement_report
+    from cheeseless.domain.dev_session import MAX_HOLDOUT_FAILURES, DevPhase, DevState
+
+    state = DevState(
+        lineage_id="demo",
+        phase=DevPhase.IMPLEMENT,
+        spec_digest="1" * 64,
+        proposal_id="2" * 64,
+        author_session="0b7d4c1e-2f3a-4b5c-8d9e-0f1a2b3c4d5e",
+        holdout_failures=MAX_HOLDOUT_FAILURES,
+        version=1,
+    )
+
+    class _Store:
+        def dev_state(self, lineage: str) -> DevState:
+            return state
+
+    report = _implement_report(_Store(), "demo")
+    assert "re-freeze" in report
+    assert str(MAX_HOLDOUT_FAILURES) in report
