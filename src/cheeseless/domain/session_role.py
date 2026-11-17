@@ -29,11 +29,11 @@ class SessionBinding:
 
 
 def acceptance_mount(role: SessionRole) -> str:
-    """How ``acceptance/`` is mounted: read-only, writable, or masked by an empty tmpfs."""
+    """How ``acceptance/`` is mounted: read-only, writable, or tests masked (contract kept)."""
     if role is SessionRole.AUTHOR:
         return "rw"
     if role is SessionRole.REFERENCE:
-        return "hidden"
+        return "contract"
     return "ro"
 
 

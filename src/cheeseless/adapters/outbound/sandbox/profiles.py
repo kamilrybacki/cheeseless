@@ -226,6 +226,23 @@ def open_acceptance(projection: Path) -> int:
     return fd
 
 
+def open_contract(projection: Path) -> int | None:
+    """An O_PATH fd on ``acceptance/contract/`` (spec and examples), or None when absent.
+
+    The reference session gets only this subtree of ``acceptance/``. A symlink or a
+    non-directory fails closed (SandboxError); an absent directory (a pre-freeze
+    projection) simply leaves nothing to re-expose. The caller closes the fd.
+    """
+    contract = projection / "acceptance" / "contract"
+    try:
+        fd = os.open(contract, os.O_PATH | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise SandboxError(f"the contract directory cannot be mounted safely: {contract}") from exc
+    return fd
+
+
 def agent(
     *,
     bwrap: str,
@@ -249,14 +266,18 @@ def agent(
         args += ["--bind", str(path), str(path)]
     # Applied after the writable projection bind, so it lands on top of it. Bound by the fd
     # opened with O_NOFOLLOW (see open_acceptance), so a swapped path cannot redirect it.
-    # `rw` (author) leaves the writable projection bind; `hidden` (reference) masks the tree
-    # with an empty tmpfs so hidden tests are unreadable. Default `ro` is the implementer's.
+    # `rw` (author) leaves the writable projection bind; `contract` (reference) masks the
+    # tree with an empty tmpfs and re-exposes only contract/. Default `ro` is the implementer's.
     if acceptance_mode == "ro":
         if acceptance_fd is None:
             raise ValueError("a read-only acceptance mount needs a pinned fd")
         args += ["--ro-bind-fd", str(acceptance_fd), str(acceptance_dir)]
-    elif acceptance_mode == "hidden":
+    elif acceptance_mode == "contract":
+        # The reference: the tests are masked by an empty tmpfs, then only the contract
+        # (spec and examples, ADR 0009) is bound back read-only from a pinned fd.
         args += ["--tmpfs", str(acceptance_dir)]
+        if acceptance_fd is not None:
+            args += ["--ro-bind-fd", str(acceptance_fd), str(acceptance_dir / "contract")]
     elif acceptance_mode != "rw":
         raise ValueError(f"unknown acceptance mode: {acceptance_mode!r}")
     for path in read_only:

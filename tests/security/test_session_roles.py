@@ -154,8 +154,9 @@ def test_an_author_never_lists_run_or_dispute_even_if_disputes_are_on():
 
 def _argv(role: SessionRole, tmp_path: Path) -> list[str]:
     proj = tmp_path / "proj"
-    (proj / "acceptance").mkdir(parents=True, exist_ok=True)
-    fd = profiles.open_acceptance(proj)
+    (proj / "acceptance" / "contract").mkdir(parents=True, exist_ok=True)
+    mode = acceptance_mount(role)
+    fd = profiles.open_contract(proj) if mode == "contract" else profiles.open_acceptance(proj)
     try:
         return profiles.agent(
             bwrap="bwrap",
@@ -166,12 +167,13 @@ def _argv(role: SessionRole, tmp_path: Path) -> list[str]:
             env=[],
             command=["true"],
             acceptance_fd=fd,
-            acceptance_mode=acceptance_mount(role),
+            acceptance_mode=mode,
         )
     finally:
         import os
 
-        os.close(fd)
+        if fd is not None:
+            os.close(fd)
 
 
 def test_mounts_follow_the_role(tmp_path):
@@ -181,16 +183,20 @@ def test_mounts_follow_the_role(tmp_path):
     author = _argv(SessionRole.AUTHOR, tmp_path)
     assert "--ro-bind-fd" not in author and acc not in author  # writable via the projection bind
     reference = _argv(SessionRole.REFERENCE, tmp_path)
-    assert "--ro-bind-fd" not in reference
+    # the tests are masked by a tmpfs, then ONLY the contract is bound back, read-only
     assert reference[reference.index("--tmpfs", reference.index(acc) - 2) + 1] == acc
+    bind = reference.index("--ro-bind-fd")
+    assert reference[bind + 2] == acc + "/contract"
+    assert bind > reference.index(acc)  # the bind lands on top of the tmpfs
 
 
 def test_a_reference_session_cannot_read_hidden_tests_canary(tmp_path):
-    """The reference mount masks acceptance/, so the canary is not visible in the built view."""
+    """The reference mount masks acceptance/ except the contract."""
     proj = tmp_path / "proj"
     (proj / "acceptance").mkdir(parents=True, exist_ok=True)
     (proj / "acceptance" / "test_hidden.py").write_text("CANARY-REF-91c2")
     reference = _argv(SessionRole.REFERENCE, tmp_path)
     i = reference.index(str(proj / "acceptance"))
     assert reference[i - 1] == "--tmpfs"  # an empty tmpfs lands on top of the tree
-    assert acceptance_mount(SessionRole.REFERENCE) == "hidden"
+    assert acceptance_mount(SessionRole.REFERENCE) == "contract"
+    assert reference.count("--ro-bind-fd") == 1  # nothing but the contract is re-exposed

@@ -888,6 +888,8 @@ def host_session(
         mount_mode = acceptance_mount(bound)
         if mount_mode == "ro":
             acceptance_fd = profiles.open_acceptance(projection_dir)
+        elif mount_mode == "contract":
+            acceptance_fd = profiles.open_contract(projection_dir)
         pinned_acceptance = acceptance_fd
         env = _merge_env(agent_env, egress_ready_env, extras.env)
 
