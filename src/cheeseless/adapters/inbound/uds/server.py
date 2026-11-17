@@ -1,4 +1,4 @@
-"""Verifier UDS server: only ``run`` and ``status``, host-configured session."""
+"""Verifier UDS server: only ``run``, ``status`` and ``dispute``, host-configured session."""
 
 from __future__ import annotations
 
@@ -14,6 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cheeseless.app.author_gate import (
+    gate_author_check,
+    gate_author_crosscheck,
+    gate_freeze_propose,
+)
+from cheeseless.app.dispute import gate_dispute
 from cheeseless.app.gate_run import gate_run
 from cheeseless.app.status import status as app_status
 from cheeseless.domain.budget import Pool
@@ -23,16 +29,23 @@ from cheeseless.domain.errors import ErrorCode, gate_error
 from cheeseless.domain.task import Task
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.runner import SuiteRunner
-from cheeseless.ports.sandbox import Sandbox
+from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
 from cheeseless.ports.store import Store
 
 from .mapping import (
     MappingError,
     agent_view_to_run_response,
     agent_view_to_status_response,
+    author_outcome_to_response,
+    dispute_outcome_to_response,
+    dispute_request_fields,
+    parse_author_request,
+    parse_dispute_request,
     parse_run_request,
     parse_status_request,
     run_request_to_task_id,
+    serialize_author_response,
+    serialize_dispute_response,
     serialize_run_response,
     serialize_status_response,
     status_request_to_task_id,
@@ -102,6 +115,32 @@ def _peer_pidns_inode(conn: socket.socket) -> int | None:
             pass
 
 
+def _paths(slug: str, rpc: str) -> tuple[str, str, str]:
+    return (f"/{slug}", f"/cheeseless.v1.Verifier/{rpc}", f"/{rpc}")
+
+
+ROLE_HEADER = "x-cheeseless-role"
+_AUTHOR_ROUTES = {
+    path: kind
+    for kind, slug, rpc in (
+        ("check", "author-check", "AuthorCheck"),
+        ("crosscheck", "author-crosscheck", "AuthorCrosscheck"),
+        ("propose", "freeze-propose", "FreezePropose"),
+    )
+    for path in _paths(slug, rpc)
+}
+_AUTHOR_KINDS = frozenset(_AUTHOR_ROUTES.values())
+_IMPLEMENTER_ROUTES = {
+    path: kind
+    for kind, slug, rpc in (
+        ("run", "run", "Run"),
+        ("status", "status", "Status"),
+        ("dispute", "dispute", "Dispute"),
+    )
+    for path in _paths(slug, rpc)
+}
+
+
 @dataclass
 class SessionConfig:
     task_id: str | None
@@ -119,6 +158,14 @@ class SessionConfig:
     expected_pidns_fd: int | None = None
     namespace_fd: int | None = None
     pidns_fd: int | None = None
+    # ``implementer`` (run, status, dispute) or ``author`` (check, crosscheck, propose).
+    role: str = "implementer"
+    # Host-recorded identity of this session (store.register_session). Both are required for
+    # any role-checked route: a config without them fails closed.
+    session_id: str | None = None
+    # Store generation at launch; a later rejected dispute makes this session stale.
+    generation: int | None = None
+    author_sandbox: AuthorSandbox | None = None
 
     def namespace_fds(self) -> tuple[int, ...]:
         return tuple(
@@ -416,7 +463,7 @@ class UdsVerifierServer:
             if body is None:
                 self._write_error(wfile, 400, "truncated body")
                 return
-            self._route(wfile, path, body)
+            self._route(wfile, path, body, claimed_role=headers.get(ROLE_HEADER, "implementer"))
         except TimeoutError:
             self._write_error(wfile, 408, "request timeout")
         except (OSError, ValueError):
@@ -425,14 +472,142 @@ class UdsVerifierServer:
             except OSError:
                 pass
 
-    def _route(self, wfile: Any, path: str, body: bytes) -> None:
+    def _role_ok(self, claimed: str) -> bool:
+        """The claim, the server's bound role and this session's own record must all agree.
+
+        A reference session has no route at all. The record is per session (not per task), so
+        a second session on the same task cannot change this one's role; its generation must
+        still equal the task's, so a rejected dispute stales it. Missing task id, session id,
+        generation or record, and any store failure, refuse (fail closed).
+        """
+        s = self.session
+        if s.role == "reference" or claimed != s.role:
+            return False
+        if s.task_id is None or s.session_id is None or s.generation is None:
+            return False
+        try:
+            record = s.store.session_record(s.session_id)
+            return (
+                record is not None
+                and record.task_id == s.task_id
+                and record.role.value == s.role
+                and record.generation == s.generation
+                and s.store.session_generation(s.task_id) == s.generation
+            )
+        except Exception:  # noqa: BLE001 - an unreadable record must refuse
+            return False
+
+    def _route(self, wfile: Any, path: str, body: bytes, claimed_role: str = "implementer") -> None:
         path = path.split("?", 1)[0]
-        if path in ("/run", "/cheeseless.v1.Verifier/Run", "/Run"):
-            self._run(wfile, body)
-        elif path in ("/status", "/cheeseless.v1.Verifier/Status", "/Status"):
-            self._status(wfile, body)
+        author_kind = _AUTHOR_ROUTES.get(path)
+        implementer_kind = _IMPLEMENTER_ROUTES.get(path)
+        known = author_kind or implementer_kind
+        if (
+            implementer_kind == "status"
+            and self.session.task_id is None
+            and self.session.role == "implementer"
+        ):
+            self._no_task_status(wfile)
+        elif known is not None and not self._role_ok(claimed_role):
+            self._role_refused(wfile, known)
+        elif author_kind is not None:
+            if self.session.role != "author":
+                self._role_refused(wfile, author_kind)
+            else:
+                self._author(wfile, body, author_kind)
+        elif implementer_kind is not None:
+            if self.session.role == "author":
+                self._role_refused(wfile, implementer_kind)
+            else:
+                getattr(self, "_" + implementer_kind)(wfile, body)
         else:
             self._write_error(wfile, 404, "not found")
+
+    def _no_task_status(self, wfile: Any) -> None:
+        """No task is frozen, so there is no session to bind: answer read-only, touch no store.
+
+        This is the pre-stage-(c) answer (an infra error: nothing to report), kept so
+        `serve-uds` without a frozen task stays informative instead of refusing as a role error.
+        """
+        view = AgentView(gate_error(ErrorCode.INFRA_ERROR), ())
+        self._write_response(
+            wfile, 200, serialize_status_response(agent_view_to_status_response(view))
+        )
+
+    def _role_refused(self, wfile: Any, kind: str) -> None:
+        err = gate_error(ErrorCode.ROLE_NOT_ALLOWED)
+        if kind in _AUTHOR_KINDS:
+            data = serialize_author_response(author_outcome_to_response(kind, err))
+        elif kind == "run":
+            data = serialize_run_response(agent_view_to_run_response(AgentView(err, ())))
+        elif kind == "status":
+            data = serialize_status_response(agent_view_to_status_response(AgentView(err, ())))
+        else:
+            data = serialize_dispute_response(dispute_outcome_to_response(err))
+        self._write_response(wfile, 200, data)
+
+    def _author(self, wfile: Any, body: bytes, kind: str) -> None:
+        try:
+            task_id = parse_author_request(kind, body)
+        except (MappingError, UnicodeDecodeError, ValueError):
+            self._write_error(wfile, 400, "bad request")
+            return
+        if not self._task_matches(task_id, wfile):
+            return
+        if not self._run_lock.acquire(blocking=False):
+            self._write_error(wfile, 429, "run in progress")
+            return
+        try:
+            outcome = self._author_outcome(kind)
+            self._write_response(
+                wfile, 200, serialize_author_response(author_outcome_to_response(kind, outcome))
+            )
+        finally:
+            self._run_lock.release()
+
+    def _author_outcome(self, kind: str) -> object:
+        s = self.session
+        sandbox = s.author_sandbox
+        store: Any = s.store
+        if kind == "propose":
+            return gate_freeze_propose(s.repo, store, s.worktree)
+        if sandbox is None:
+            return gate_error(ErrorCode.INFRA_ERROR)
+        if kind == "check":
+            return gate_author_check(s.repo, sandbox, store, s.worktree)
+        return gate_author_crosscheck(s.repo, sandbox, store, s.worktree)
+
+    def _dispute(self, wfile: Any, body: bytes) -> None:
+        try:
+            req = parse_dispute_request(body)
+        except (MappingError, UnicodeDecodeError, ValueError):
+            self._write_error(wfile, 400, "bad request")
+            return
+        task_id, criterion_id, code, note = dispute_request_fields(req)
+        if not self._task_matches(task_id, wfile):
+            return
+        configured = self.session.task_id
+        if configured is None:
+            self._write_error(wfile, 400, "bad request")
+            return
+        if not self._run_lock.acquire(blocking=False):
+            self._write_error(wfile, 429, "run in progress")
+            return
+        try:
+            try:
+                outcome = gate_dispute(
+                    self.session.store,
+                    task_id=configured,
+                    criterion_id=criterion_id,
+                    code=code,
+                    note=note,
+                )
+            except Exception:
+                outcome = gate_error(ErrorCode.INFRA_ERROR)
+            data = serialize_dispute_response(dispute_outcome_to_response(outcome))
+            self._write_response(wfile, 200, data)
+        finally:
+            self._run_lock.release()
 
     def _run(self, wfile: Any, body: bytes) -> None:
         try:
@@ -481,6 +656,19 @@ class UdsVerifierServer:
             return
         try:
             try:
+                disputed = self._session_disputed()
+            except Exception:
+                # Fail closed: an unreadable dispute ledger must not look like "no dispute".
+                agent_view = AgentView(gate_error(ErrorCode.INFRA_ERROR), ())
+                data = serialize_status_response(agent_view_to_status_response(agent_view))
+                self._write_response(wfile, 200, data)
+                return
+            if disputed:
+                agent_view = AgentView(gate_error(ErrorCode.SESSION_DISPUTED), ())
+                data = serialize_status_response(agent_view_to_status_response(agent_view))
+                self._write_response(wfile, 200, data)
+                return
+            try:
                 result = app_status(
                     self.session.store,
                     task_id=self.session.task_id,
@@ -497,6 +685,12 @@ class UdsVerifierServer:
             self._write_response(wfile, 200, data)
         finally:
             self._run_lock.release()
+
+    def _session_disputed(self) -> bool:
+        task_id = self.session.task_id
+        if task_id is None:
+            return False
+        return self.session.store.session_disputed(task_id)
 
     def _task_matches(self, client_task_id: str, wfile: Any) -> bool:
         configured = self.session.task_id

@@ -118,3 +118,23 @@ def locked(path: Path) -> Iterator[None]:
         yield
     finally:
         os.close(fd)
+
+
+@contextmanager
+def try_locked(path: Path) -> Iterator[bool]:
+    """Non-blocking exclusive advisory lock: yields whether it was acquired.
+
+    The lock lives as long as the descriptor, so a process that dies releases it."""
+    try:
+        fd = _open(path, os.O_RDWR | os.O_CREAT)
+    except OSError as exc:
+        raise StoreError(f"cannot open lock {path}: {exc}") from exc
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(fd)

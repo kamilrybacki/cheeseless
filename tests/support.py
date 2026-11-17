@@ -126,3 +126,9 @@ __all__ = [
     "start_in_pid_namespace",
     "wait_for_socket",
 ]
+
+
+def bind_session(store, task_id: str, role: str = "implementer") -> dict:  # noqa: ANN001
+    """What the host passes to a ``SessionConfig`` after ``register_session``."""
+    session_id, binding = store.register_session(task_id, role)
+    return {"session_id": session_id, "generation": binding.generation}

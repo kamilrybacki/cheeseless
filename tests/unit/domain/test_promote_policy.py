@@ -99,3 +99,54 @@ def test_is_protected_covers_deny_list():
         assert is_protected(p), p
     for p in ("src/a.py", "docs/x.md", ".github/CODEOWNERS", "acceptances/x"):
         assert not is_protected(p), p
+
+
+# -- author promote (ADR 0009 stage b) ------------------------------------------------
+
+from cheeseless.domain.promote_policy import decide_author_promote  # noqa: E402
+
+
+def test_author_promote_allows_only_acceptance_paths() -> None:
+    decision = decide_author_promote(
+        {
+            "acceptance/hidden/test_x.py": "100644",
+            "acceptance/contract/spec.md": "100644",
+            "acceptance/old.py": "000000",
+        }
+    )
+    assert decision.ok
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/toy/core.py",
+        "tests/test_core.py",
+        "README.md",
+        "acceptance",
+        ".cheeseless/config.yaml",
+        ".github/workflows/ci.yml",
+        ".gitmodules",
+        "acceptance/../src/x.py",
+        "/acceptance/x.py",
+        "acceptance/.git/config",
+        "acceptance\\x.py",
+        "",
+    ],
+)
+def test_author_promote_refuses_everything_else(path: str) -> None:
+    decision = decide_author_promote({path: "100644"})
+    assert decision.rejected == (path,)
+    assert not decision.ok
+
+
+@pytest.mark.parametrize("mode", ["120000", "160000", "040000", "100664"])
+def test_author_promote_refuses_symlinks_and_other_modes(mode: str) -> None:
+    decision = decide_author_promote({"acceptance/hidden/link": mode})
+    assert decision.rejected == ("acceptance/hidden/link",)
+
+
+def test_author_promote_never_needs_approval_and_is_sorted() -> None:
+    decision = decide_author_promote({"src/b.py": "100644", "acceptance/ok.py": "100644", "a": "1"})
+    assert decision.needs_approval == ()
+    assert decision.rejected == ("a", "src/b.py")

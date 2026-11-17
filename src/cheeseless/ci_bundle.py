@@ -25,10 +25,10 @@ from cheeseless.domain.ids import git_oid
 from cheeseless.domain.result import MIN_KEY_BYTES
 from cheeseless.ports.store import StoreError
 
-BUNDLE_VERSION = 2
+BUNDLE_VERSION = 3
 MAX_CI_LIMIT = 1000
 MAX_BUNDLE_BYTES = 1 << 20
-_FIELDS = frozenset({"version", "task", "lineage", "key", "ci_limit", "budget", "mac"})
+_FIELDS = frozenset({"version", "task", "lineage", "key", "ci_limit", "budget", "disputes", "mac"})
 _BUDGET_FIELDS = frozenset({"repo", "branch", "root"})
 
 
@@ -52,6 +52,7 @@ class Bundle:
     key: bytes
     ci_limit: int
     budget: BudgetLedgerRef
+    disputes: int  # dispute records of the lineage at export (G13 staleness watermark)
 
 
 def _canonical(body: dict[str, Any]) -> bytes:
@@ -66,6 +67,12 @@ def _check_limit(limit: object) -> int:
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_CI_LIMIT:
         raise BundleError("ci limit is out of range")
     return limit
+
+
+def _check_disputes(count: object) -> int:
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise BundleError("bundle dispute watermark is invalid")
+    return count
 
 
 def _check_budget(budget: object, lineage: str) -> BudgetLedgerRef:
@@ -96,7 +103,13 @@ def _budget_body(ref: BudgetLedgerRef) -> dict[str, str]:
 
 
 def encode_bundle(
-    frozen: FrozenTask, seed: bytes, key: bytes, *, ci_limit: int, budget: BudgetLedgerRef
+    frozen: FrozenTask,
+    seed: bytes,
+    key: bytes,
+    *,
+    ci_limit: int,
+    budget: BudgetLedgerRef,
+    disputes: int,
 ) -> bytes:
     if len(key) < MIN_KEY_BYTES:
         raise BundleError(f"HMAC key must be at least {MIN_KEY_BYTES} bytes")
@@ -107,6 +120,7 @@ def encode_bundle(
         "key": base64.b64encode(key).decode("ascii"),
         "ci_limit": _check_limit(ci_limit),
         "budget": _budget_body(_check_budget(budget, frozen.task.lineage_id)),
+        "disputes": _check_disputes(disputes),
     }
     return _canonical({**body, "mac": _mac(key, body)})
 
@@ -135,12 +149,13 @@ def decode_bundle(raw: bytes) -> Bundle:
         raise BundleError("bundle has the wrong shape")
     version = data.get("version")
     if version != BUNDLE_VERSION or isinstance(version, bool):
-        # v1 bundles carry no budget ledger; they are refused, never upgraded.
+        # v1 has no budget ledger and v2 no dispute watermark; they are refused, never upgraded.
         raise BundleError("unsupported bundle version (re-export with this tool)")
     if set(data) != _FIELDS:
         raise BundleError("bundle has the wrong shape")
     key = _key_of(data)
     limit = _check_limit(data["ci_limit"])
+    disputes = _check_disputes(data["disputes"])
     body = {k: v for k, v in data.items() if k != "mac"}
     tag = data["mac"]
     if not isinstance(tag, str) or not hmac.compare_digest(tag, _mac(key, body)):
@@ -155,7 +170,9 @@ def decode_bundle(raw: bytes) -> Bundle:
     if data["lineage"] != frozen.task.lineage_id:
         raise BundleError("bundle lineage does not match its task")
     budget = _check_budget(data["budget"], frozen.task.lineage_id)
-    return Bundle(frozen=frozen, seed=seed, key=key, ci_limit=limit, budget=budget)
+    return Bundle(
+        frozen=frozen, seed=seed, key=key, ci_limit=limit, budget=budget, disputes=disputes
+    )
 
 
 def decode_bundle_b64(text: str) -> Bundle:

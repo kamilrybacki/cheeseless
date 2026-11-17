@@ -1,18 +1,15 @@
-"""The judge workflow template: fail-closed conclusions, isolated secrets, App-posted verdict."""
+"""The judge workflow template: isolated secrets, budget token and App key handling.
+
+The conclusion logic lives in ``ci-gate`` (tests/unit/app/test_ci_gate.py); the post job's
+own layout is covered by tests/unit/test_ci_workflow.py."""
 
 import re
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
 
-from tests.requirements import needs
-
 WORKFLOW = Path(__file__).resolve().parents[2] / "docs" / "ci" / "judge.yml"
-JQ = shutil.which("jq") is not None
 ENVIRONMENT = "cheeseless-judge"
 APP_TOKEN_ACTION = "actions/create-github-app-token@"  # noqa: S105 - action name, not a secret
 PINNED = re.compile(r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$")
@@ -41,51 +38,9 @@ def _environment_name(job: dict[str, Any]) -> str | None:
     return env
 
 
-def _conclusion_snippet() -> str:
-    lines = WORKFLOW.read_text().splitlines()
-    start = next(i for i, ln in enumerate(lines) if ln.strip().startswith("status=$(jq"))
-    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "fi")
-    body = "\n".join(ln.strip() for ln in lines[start : end + 1])
-    return body.replace("${{ steps.judge.outputs.code }}", "$CODE") + '\necho "$conclusion"\n'
-
-
-def _conclude(tmp_path: Path, code: str, verdict: str | None) -> str:
-    if verdict is not None:
-        (tmp_path / "verdict.json").write_text(verdict)
-    out = subprocess.run(  # noqa: S603 - fixed argv, test-owned script
-        ["bash", "-c", _conclusion_snippet()],  # noqa: S607
-        cwd=tmp_path,
-        env={"CODE": code, "PATH": "/usr/bin:/bin"},
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return out.stdout.strip()
-
-
 def test_template_has_no_neutral_conclusion() -> None:
-    assert "neutral" not in WORKFLOW.read_text()
-
-
-@needs(JQ, "needs jq")
-@pytest.mark.parametrize(
-    ("code", "verdict", "expected"),
-    [
-        ("0", '{"status": "pass", "criteria": []}', "success"),
-        ("0", '{"status": "fail", "criteria": []}', "failure"),
-        ("0", "not json", "failure"),
-        ("0", None, "failure"),
-        ("1", '{"status": "pass", "criteria": []}', "failure"),
-        ("1", '{"status": "blocked", "criteria": []}', "failure"),
-        ("2", None, "failure"),
-        ("3", None, "failure"),
-        ("", None, "failure"),
-    ],
-)
-def test_only_exit_zero_with_pass_status_succeeds(
-    tmp_path: Path, code: str, verdict: str | None, expected: str
-) -> None:
-    assert _conclude(tmp_path, code, verdict) == expected
+    # Only prose may mention it: a neutral/skipped conclusion satisfies a required check.
+    assert not re.search(r"conclusion\W+(neutral|skipped)", WORKFLOW.read_text())
 
 
 def test_judge_job_runs_in_the_restricted_environment() -> None:
@@ -131,22 +86,27 @@ def _token_ref(step_id: str) -> str:
     return "${{ steps." + step_id + ".outputs.token }}"
 
 
-def test_verdict_is_posted_with_the_judge_app_token_after_the_judge() -> None:
-    steps = _judge_steps()
-    mint = _mint_index("permission-checks")
-    judge = _step_index(lambda s: s.get("id") == "judge")
-    post = _step_index(lambda s: "check-runs" in str(s.get("run", "")))
+def test_checks_token_is_minted_only_in_the_post_job_after_the_gate_is_built() -> None:
+    steps = _workflow()["jobs"]["post"]["steps"]
+    mint = next(
+        i
+        for i, s in enumerate(steps)
+        if str(s.get("uses", "")).startswith(APP_TOKEN_ACTION)
+        and "permission-checks" in (s.get("with") or {})
+    )
+    gate = next(i for i, s in enumerate(steps) if "ci-gate" in str(s.get("run", "")))
+    post = next(i for i, s in enumerate(steps) if "check-runs" in str(s.get("run", "")))
     app = steps[mint]
     assert app["with"]["permission-checks"] == "write"
-    assert set(k for k in app["with"] if k.startswith("permission-")) == {"permission-checks"}
-    assert judge < mint < post
-    expected = "${{ steps." + app["id"] + ".outputs.token }}"
-    assert steps[post]["env"]["GH_TOKEN"] == expected
+    assert {k for k in app["with"] if k.startswith("permission-")} == {"permission-checks"}
+    assert gate < mint < post
+    assert app["with"]["client-id"] == "${{ vars.CHEESELESS_CHECKS_APP_ID }}"
+    assert app["with"]["private-key"] == "${{ secrets.CHEESELESS_CHECKS_APP_KEY }}"
+    assert steps[post]["env"]["GH_TOKEN"] == "${{ steps." + app["id"] + ".outputs.token }}"
 
 
-def test_exactly_two_app_tokens_are_minted() -> None:
-    # One for the budget ledger (before the judge), one for the check run (after it).
-    assert len(_mints()) == 2
+def test_the_judge_job_mints_exactly_one_token_the_budget_one() -> None:
+    assert len(_mints()) == 1
 
 
 def test_budget_token_is_contents_write_on_the_ledger_repository_only() -> None:
@@ -154,6 +114,8 @@ def test_budget_token_is_contents_write_on_the_ledger_repository_only() -> None:
     mint = _mint_index("permission-contents")
     budget = steps[mint]["with"]
     assert budget["permission-contents"] == "write"
+    assert budget["client-id"] == "${{ vars.CHEESELESS_LEDGER_APP_ID }}"
+    assert budget["private-key"] == "${{ secrets.CHEESELESS_LEDGER_APP_KEY }}"
     assert {k for k in budget if k.startswith("permission-")} == {"permission-contents"}
     # Scoped to the dedicated ledger repository, never the judged one.
     assert budget["repositories"] == "${{ vars.CHEESELESS_BUDGET_REPO }}"
@@ -164,13 +126,13 @@ def test_budget_token_is_contents_write_on_the_ledger_repository_only() -> None:
 def test_judge_step_sees_only_the_budget_token() -> None:
     steps = _judge_steps()
     budget_id = steps[_mint_index("permission-contents")]["id"]
-    checks_id = steps[_mint_index("permission-checks")]["id"]
     judge = steps[_step_index(lambda s: s.get("id") == "judge")]
     assert judge["env"]["CHEESELESS_BUDGET_TOKEN"] == _token_ref(budget_id)
     dumped = yaml.safe_dump(judge)
     assert "APP_KEY" not in dumped
+    assert "CHECKS_APP" not in dumped
     assert "private-key" not in dumped
-    assert f"steps.{checks_id}." not in dumped
+    assert "permission-checks" not in yaml.safe_dump(steps)
     assert dumped.count("outputs.token") == 1
 
 
@@ -197,7 +159,14 @@ def test_budget_token_is_revoked_right_after_the_judge_whatever_happened() -> No
     assert "DELETE" in step["run"]
 
 
-def test_both_tokens_are_also_revoked_when_the_job_ends() -> None:
+def test_tokens_are_also_revoked_when_their_job_ends() -> None:
     # The action's post step revokes each token; nothing may opt out of it.
-    for mint in _mints():
+    every = [
+        s
+        for job in _workflow()["jobs"].values()
+        for s in job["steps"]
+        if str(s.get("uses", "")).startswith(APP_TOKEN_ACTION)
+    ]
+    assert len(every) == 2
+    for mint in every:
         assert "skip-token-revoke" not in (mint.get("with") or {})

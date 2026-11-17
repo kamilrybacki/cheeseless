@@ -125,6 +125,7 @@ def _record(
         "flag_evidence": list(cls.evidence),
         "refused_attempt": cls.refused_attempt,
         "transcript_observed": res.transcript_observed,
+        "writes_observed": res.writes_observed,
         "evidence_canary": canary,
         "labels": {
             "counted": labels.counted,
@@ -186,8 +187,10 @@ def run_dry(
         root.mkdir(parents=True, exist_ok=True)
         behaviour = job.behaviour or fake_agent.HONEST
 
-        def apply(r: Path, b: str = behaviour, t: Task = job.task) -> tuple[object, ...]:
-            return fake_agent.act(b, r, t)
+        def apply(
+            r: Path, b: str = behaviour, t: Task = job.task, ro: bool = job.arm != ARM_NAIVE
+        ) -> tuple[object, ...]:
+            return fake_agent.act(b, r, t, tests_read_only=ro)
 
         runner = run_naive if job.arm == ARM_NAIVE else run_cheeseless
         res = runner(job.task, root, apply)  # type: ignore[arg-type]

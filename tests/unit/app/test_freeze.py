@@ -153,3 +153,57 @@ def test_prepare_redacts_markers_in_build_stderr(toy_repo, tmp_path):
     assert "build failed" in message
     assert MARKER not in message
     assert f"<sentinel digest {digest(MARKER.encode())}>" in message
+
+
+def test_prepare_reads_from_a_tree_source_and_digests_the_baseline(toy_repo, tmp_path):
+    from cheeseless.domain.evaluation import TestOutcome
+
+    repo = GitRepository.discover(toy_repo)
+    head = repo.head_commit()
+    plain = prepare(repo, _FakeRunner([_suite(TestOutcome.FAILED)]), _FakeSandbox(tmp_path))
+    from_tree = prepare(
+        repo,
+        _FakeRunner([_suite(TestOutcome.FAILED)]),
+        _FakeSandbox(tmp_path),
+        baseline_commit=head,
+        source=repo.tree_of(head),
+    )
+    assert from_tree.task_id == plain.task_id
+    assert from_tree.acceptance_tree == plain.acceptance_tree
+    assert from_tree.baseline_commit == head
+
+
+class _CandidateSpy(_FakeSandbox):
+    """Records the candidate tree handed to build() (what the RED run would execute)."""
+
+    def __init__(self, root):
+        super().__init__(root)
+        self.seen: dict[str, str] = {}
+
+    def build(self, cand_root, *args, **kwargs):
+        for path in Path(cand_root).rglob("*"):
+            if path.is_file():
+                self.seen[str(path.relative_to(cand_root))] = path.read_text()
+        return super().build(cand_root, *args, **kwargs)
+
+
+def test_candidate_projection_comes_from_the_baseline_not_the_source(toy_repo, tmp_path):
+    """The task digest names ``baseline_commit``; the RED check must run that code."""
+    from cheeseless.domain.evaluation import TestOutcome
+    from tests.toy import commit_all, write_files
+
+    repo = GitRepository.discover(toy_repo)
+    baseline = repo.head_commit()
+    write_files(toy_repo, {"src/only_in_head.py": "HEAD_ONLY = 1\n"})
+    head = commit_all(toy_repo, "head moves outside acceptance/")
+    spy = _CandidateSpy(tmp_path / "sb")
+    prepare(
+        repo,
+        _FakeRunner([_suite(TestOutcome.FAILED)]),
+        spy,
+        baseline_commit=baseline,
+        source=head,
+    )
+    assert "src/only_in_head.py" not in spy.seen
+    assert any(p.startswith("src/") for p in spy.seen)
+    assert any(p.startswith("acceptance/contract/") for p in spy.seen)

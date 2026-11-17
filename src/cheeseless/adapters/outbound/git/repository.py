@@ -20,7 +20,9 @@ from cheeseless.adapters.outbound.git._cmd import (
 from cheeseless.domain.freeze import HiddenBlob
 from cheeseless.ports.repository import RepositoryError, SnapshotRejected
 
+_ZERO_OID = "0" * 40
 GATE_REF_PREFIX = "refs/heads/gate/"
+SPEC_REF_PREFIX = "refs/heads/spec/"
 _PROJECTION_MESSAGE = b"cheeseless projection\n"
 
 
@@ -124,6 +126,14 @@ class GitRepository:
             raise RepositoryError("the repository has no commit at HEAD")
         return oid(found)
 
+    def default_branch_commit(self) -> str:
+        """The remote default branch (``origin/HEAD``) if set, else local ``main``; fail closed."""
+        for spec in ("refs/remotes/origin/HEAD^{commit}", "refs/heads/main^{commit}"):
+            found = self._resolve(spec)
+            if found is not None:
+                return oid(found)
+        raise RepositoryError("the default branch cannot be resolved (no origin/HEAD or main)")
+
     def tree_of(self, commit: str, path: str = "") -> str:
         spec = f"{oid(commit)}:{rel_path(path)}" if path else f"{oid(commit)}^{{tree}}"
         found = self._resolve(spec)
@@ -204,14 +214,23 @@ class GitRepository:
                 self._git.run("update-index", "-z", "--index-info", input=info, index=index)
             return oid(self._git.text("write-tree", index=index))
 
-    def tree_without(self, tree: str, prefix: str, keep: str) -> str:
+    def tree_without(self, tree: str, prefix: str, keep: str | Sequence[str]) -> str:
         rel_path(prefix)
-        rel_path(keep)
+        keep_paths = (keep,) if isinstance(keep, str) else tuple(keep)
+        for path in keep_paths:
+            rel_path(path)
         kept = [
             (e.mode, e.oid, e.path)
             for e in self._entries(tree)
-            if not under(e.path, prefix) or under(e.path, keep)
+            if not under(e.path, prefix) or any(under(e.path, path) for path in keep_paths)
         ]
+        return self._write_tree(kept)
+
+    def replace_subtree(self, tree: str, prefix: str, source_tree: str, keep: str) -> str:
+        rel_path(prefix)
+        rel_path(keep)
+        kept = [(e.mode, e.oid, e.path) for e in self._entries(tree) if not under(e.path, prefix)]
+        kept += [(e.mode, e.oid, e.path) for e in self._entries(source_tree) if under(e.path, keep)]
         return self._write_tree(kept)
 
     def snapshot(self, worktree: Path) -> str:
@@ -249,22 +268,59 @@ class GitRepository:
         return paths
 
     def promote(self, baseline: str, base_tree: str, candidate_tree: str, ref: str) -> str:
-        if not ref.startswith(GATE_REF_PREFIX):
-            raise RepositoryError(f"promote only writes under {GATE_REF_PREFIX}: {ref}")
+        if not ref.startswith((GATE_REF_PREFIX, SPEC_REF_PREFIX)):
+            raise RepositoryError(
+                f"promote only writes under {GATE_REF_PREFIX} or {SPEC_REF_PREFIX}: {ref}"
+            )
         self._git.run("check-ref-format", ref)
         changes = self._changes(base_tree, candidate_tree)
         for mode, _oid, path in changes:
             if mode not in obj.FILE_MODES and mode != obj.DELETED:
                 raise SnapshotRejected(f"cannot promote a file of mode {mode}", path)
-        parent = oid(baseline)
-        tree = self._write_tree(changes, base=f"{parent}^{{tree}}")
-        commit = self._commit(self._git, tree, parent)
-        self._git.run("update-ref", ref, commit)
+        if self._is_symbolic(ref):
+            raise RepositoryError(f"refusing to promote onto a symbolic ref: {ref}")
+        base = oid(baseline)
+        head = self._ref_head(ref)
+        tree = self._write_tree(changes, base=f"{base}^{{tree}}")
+        if head and not self._is_ancestor(base, head):
+            # The baseline moved since the ref was last published. Chain onto the head (the ref
+            # stays a fast-forward) and add the baseline as a second parent so the merge base,
+            # and therefore the CI path diff, is the new baseline and not main's own changes.
+            commit = self._commit(self._git, tree, head, merge=base)
+        else:
+            commit = self._commit(self._git, tree, head or base)
+        try:
+            # --no-deref plus the expected old value: a compare-and-swap that never follows
+            # a symbolic ref and refuses when another publisher moved the ref meanwhile.
+            self._git.run("update-ref", "--no-deref", ref, commit, head or _ZERO_OID)
+        except RepositoryError as exc:
+            raise RepositoryError(f"{ref} moved while promoting; retry") from exc
         return commit
 
+    def _is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        try:
+            return self.merge_base(ancestor, descendant) == ancestor
+        except RepositoryError:  # no common history at all
+            return False
+
+    def _is_symbolic(self, ref: str) -> bool:
+        try:
+            self._git.run("symbolic-ref", "-q", ref)
+        except RepositoryError:
+            return False
+        return True
+
+    def _ref_head(self, ref: str) -> str:
+        try:
+            out = self._git.run("rev-parse", "--verify", "-q", f"{ref}^{{commit}}")
+        except RepositoryError:
+            return ""
+        return oid(out.decode().strip())
+
     @staticmethod
-    def _commit(git: Git, tree: str, parent: str = "") -> str:
+    def _commit(git: Git, tree: str, parent: str = "", *, merge: str = "") -> str:
         args = ["commit-tree", tree] + (["-p", parent] if parent else [])
+        args += ["-p", merge] if merge else []
         message = b"cheeseless promote\n" if parent else _PROJECTION_MESSAGE
         return oid(git.run(*args, input=message, extra_env=IDENTITY).decode().strip())
 

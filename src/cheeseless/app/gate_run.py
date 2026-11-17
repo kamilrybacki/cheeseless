@@ -18,7 +18,7 @@ from cheeseless.domain.result import Result, sign
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.runner import SuiteRunner
 from cheeseless.ports.sandbox import Sandbox
-from cheeseless.ports.store import Store
+from cheeseless.ports.store import SessionDisputedError, Store
 
 PRE_HIDDEN_ATTEMPT_LIMIT = 10
 PRE_HIDDEN_ATTEMPT_WINDOW = 60.0
@@ -38,6 +38,12 @@ def _safe_tail(scanner: DlpScanner | None, text: str) -> str:
     except Exception:  # noqa: BLE001 - scan failure must omit, never leak
         return ""
     return text
+
+
+def _disputed(store: Store, task_id: str) -> Verdict:
+    """The session ended in a dispute: publish nothing. Any run charge stays."""
+    store.log_event(task_id, "gate_run", "session_disputed")
+    return Verdict(gate_error(ErrorCode.SESSION_DISPUTED), charged=False)
 
 
 def gate_run(
@@ -62,6 +68,8 @@ def gate_run(
         raise ValueError("no active task")
     frozen, _seed = store.load_task(task_id)
     task = frozen.task
+    if store.session_disputed(task_id):
+        return _disputed(store, task_id)
 
     if attempt_limit is None:
         attempt_limit = PRE_HIDDEN_ATTEMPT_LIMIT
@@ -202,7 +210,10 @@ def gate_run(
                     key = store.hmac_key()
                     signed = sign(verdict.outcome, key)
                     verdict = replace(verdict, outcome=signed)
-                    store.save_result(signed, operator_cause=verdict.operator_cause)
+                    try:
+                        store.save_result(signed, operator_cause=verdict.operator_cause)
+                    except SessionDisputedError:
+                        return _disputed(store, task_id)
                 store.log_event(task_id, "gate_run", verdict.operator_cause or "exception")
                 return verdict
             suite = out.suite
@@ -226,7 +237,10 @@ def gate_run(
         key = store.hmac_key()
         signed = sign(verdict.outcome, key)
         verdict = replace(verdict, outcome=signed)
-        store.save_result(signed, operator_cause=verdict.operator_cause)
+        try:
+            store.save_result(signed, operator_cause=verdict.operator_cause)
+        except SessionDisputedError:
+            return _disputed(store, task_id)
     store.log_event(task_id, "gate_run", verdict.operator_cause or "ok")
     return verdict
 

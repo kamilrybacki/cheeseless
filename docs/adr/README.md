@@ -13,3 +13,5 @@ Only critical, long-lived decisions live here. Everything else goes to
 | [0006](0006-ci-source-of-truth-and-promote.md) | CI authoritative, promote path allowlist, hooks not a boundary | accepted |
 | [0007](0007-egress-dlp-proxy.md) | Host-side MITM proxy with DLP for all gated egress | accepted |
 | [0008](0008-agent-facing-error-model.md) | One typed agent-facing error and staged disclosure | accepted |
+| [0009](0009-author-and-implementer-roles.md) | Separate author and implementer roles, reference crosscheck, dispute channel | accepted |
+| [0010](0010-author-runner-candidate-broker.md) | Reach the candidate from the author sandbox only through a host broker | accepted |

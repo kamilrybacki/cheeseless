@@ -26,7 +26,7 @@ def _frozen():
 
 def _roundtrip_parts():
     frozen, seed = _frozen()
-    return frozen, seed, encode_bundle(frozen, seed, KEY, ci_limit=5, budget=BUDGET)
+    return frozen, seed, encode_bundle(frozen, seed, KEY, ci_limit=5, budget=BUDGET, disputes=0)
 
 
 def test_round_trip():
@@ -39,16 +39,16 @@ def test_round_trip():
     assert bundle.budget == BUDGET
 
 
-def test_version_is_two():
+def test_version_is_three():
     _, _, raw = _roundtrip_parts()
-    assert BUNDLE_VERSION == 2
-    assert json.loads(raw)["version"] == 2
+    assert BUNDLE_VERSION == 3
+    assert json.loads(raw)["version"] == 3
 
 
 def test_short_key_refused_on_encode():
     frozen, seed = _frozen()
     with pytest.raises(BundleError):
-        encode_bundle(frozen, seed, b"short", ci_limit=5, budget=BUDGET)
+        encode_bundle(frozen, seed, b"short", ci_limit=5, budget=BUDGET, disputes=0)
 
 
 @pytest.mark.parametrize(
@@ -64,7 +64,7 @@ def test_short_key_refused_on_encode():
 def test_bad_budget_refused_on_encode(budget):
     frozen, seed = _frozen()
     with pytest.raises(BundleError):
-        encode_bundle(frozen, seed, KEY, ci_limit=5, budget=budget)
+        encode_bundle(frozen, seed, KEY, ci_limit=5, budget=budget, disputes=0)
 
 
 def _mutate(raw, fn):
@@ -87,7 +87,12 @@ def _resign(data):
     "mutation",
     [
         lambda d: d.update(version=1),
-        lambda d: d.update(version=3),
+        lambda d: d.update(version=2),
+        lambda d: d.update(version=4),
+        lambda d: d.update(disputes=-1),
+        lambda d: d.update(disputes=True),
+        lambda d: d.update(disputes="0"),
+        lambda d: d.pop("disputes"),
         lambda d: d.update(key=base64.b64encode(b"x" * 8).decode()),
         lambda d: d.update(ci_limit=0),
         lambda d: d.update(ci_limit="5"),
@@ -156,3 +161,16 @@ def test_v1_bundle_without_a_ledger_refused():
 def test_garbage_refused(raw):
     with pytest.raises(BundleError):
         decode_bundle(raw)
+
+
+def test_bundle_records_the_dispute_watermark_it_was_exported_against():
+    frozen, seed = _frozen()
+    raw = encode_bundle(frozen, seed, KEY, ci_limit=5, budget=BUDGET, disputes=2)
+    assert decode_bundle(raw).disputes == 2
+
+
+def test_the_watermark_is_covered_by_the_mac():
+    frozen, seed = _frozen()
+    raw = encode_bundle(frozen, seed, KEY, ci_limit=5, budget=BUDGET, disputes=2)
+    with pytest.raises(BundleError):
+        decode_bundle(_mutate(raw, lambda d: d.update(disputes=0)))

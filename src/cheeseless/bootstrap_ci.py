@@ -31,7 +31,11 @@ from cheeseless.adapters.outbound.git.repository import GitRepository
 from cheeseless.adapters.outbound.runner.pytest_runner import PytestRunner
 from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
+from cheeseless.app.authoring import author_check
+from cheeseless.app.ci_branch import BranchOutcome, check_branch, check_payload
+from cheeseless.app.ci_gate import build_checks
 from cheeseless.app.ci_judge import CiVerdict, FreezeDrift, JudgeReason, judge
+from cheeseless.app.ci_route import resolve_route
 from cheeseless.bootstrap import _ensure_outside, _state_home
 from cheeseless.ci_bundle import (
     BudgetLedgerRef,
@@ -50,6 +54,7 @@ from cheeseless.domain.budget_ledger import (
     run_key,
 )
 from cheeseless.domain.status import Status
+from cheeseless.ports.store import StoreError
 
 BUNDLE_ENV = "CHEESELESS_CI_BUNDLE"
 BUDGET_TOKEN_ENV = "CHEESELESS_BUDGET_TOKEN"  # noqa: S105 - an env var name
@@ -66,6 +71,37 @@ def _err(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+def _lineage_disputes(store: FileStore, lineage_id: str) -> int:
+    return sum(1 for rec in store.disputes() if rec.lineage_id == lineage_id)
+
+
+def ci_bundle_check(args: argparse.Namespace) -> int:
+    """Host-only: fail closed when the bundle predates a dispute filed for its lineage."""
+    repo = GitRepository.discover(Path.cwd())
+    try:
+        bundle = _load_bundle(args.bundle_file)
+        store = FileStore(store_root(repo.common_dir(), _state_home(args.state_dir)))
+        current = _lineage_disputes(store, bundle.frozen.task.lineage_id)
+        active = store.active_task_id()
+    except (BundleError, StoreError) as exc:
+        _err(f"ci-bundle-check refused: {exc}")
+        return EXIT_FAIL
+    if bundle.frozen.task.task_id != active:
+        _err(
+            "ci-bundle-check: the bundle is stale (its task is no longer the active task); "
+            "re-export with ci-export and replace the CI secret"
+        )
+        return EXIT_FAIL
+    if current != bundle.disputes:
+        _err(
+            f"ci-bundle-check: the bundle is stale ({bundle.disputes} disputes at export, "
+            f"{current} now); re-export with ci-export and replace the CI secret"
+        )
+        return EXIT_FAIL
+    print("bundle is current")
+    return EXIT_PASS
+
+
 def ci_export(args: argparse.Namespace) -> int:
     out: Path = args.out
     repo = GitRepository.discover(Path.cwd())
@@ -79,13 +115,23 @@ def ci_export(args: argparse.Namespace) -> int:
     if task_id is None:
         _err("ci-export failed: no frozen task")
         return EXIT_USAGE
+    if store.session_disputed(task_id):
+        _err("ci-export refused: the session ended in a dispute")
+        return EXIT_USAGE
     frozen, seed = store.load_task(task_id)
     limit = store.budget(frozen.task.lineage_id, Pool.CI).limit
     ledger = BudgetLedgerRef(
         repo=args.budget_repo, branch=branch_for(frozen.task.lineage_id), root=args.budget_root
     )
     try:
-        raw = encode_bundle(frozen, seed, store.hmac_key(), ci_limit=limit, budget=ledger)
+        raw = encode_bundle(
+            frozen,
+            seed,
+            store.hmac_key(),
+            ci_limit=limit,
+            budget=ledger,
+            disputes=_lineage_disputes(store, frozen.task.lineage_id),
+        )
     except BundleError as exc:
         _err(f"ci-export refused: {exc}")
         return EXIT_USAGE
@@ -263,16 +309,106 @@ def ci_budget_init(args: argparse.Namespace) -> int:
         del token
 
 
+def ci_branch(args: argparse.Namespace) -> int:
+    """Branch-class and changed-path check; no secrets, no budget, no implementation verdict."""
+    for name, value in (("--base", args.base), ("--head", args.head)):
+        if not _SHA.fullmatch(value):
+            _err(f"ci-branch: {name} must be a full 40-character lowercase commit SHA")
+            return EXIT_USAGE
+    try:
+        repo = GitRepository.discover(Path.cwd())
+        author = None
+        if not args.no_author_check:
+            sandbox = BwrapSandbox()
+            author = lambda head: author_check(repo, sandbox, head)  # noqa: E731
+        outcome = check_branch(repo, args.branch, args.base, args.head, author_check=author)
+    except Exception as exc:  # noqa: BLE001 - fail closed, never a trace
+        if args.check_payload:
+            failed = BranchOutcome(False, "check_failed", "unknown")
+            print(json.dumps(check_payload(failed, args.head), sort_keys=True))
+            return EXIT_PASS
+        _err(f"ci-branch failed: {type(exc).__name__}")
+        return EXIT_USAGE
+    if args.check_payload:
+        print(json.dumps(check_payload(outcome, args.head), sort_keys=True))
+        return EXIT_PASS
+    public = outcome.public()
+    if args.json:
+        print(json.dumps(public, indent=2, sort_keys=True))
+    else:
+        print("ok" if outcome.ok else f"refused: {outcome.reason}")
+        for path in outcome.rejected:
+            print(f"  {path}")
+        for note in outcome.advisory:
+            print(f"  advisory: {note}")
+    return EXIT_PASS if outcome.ok else EXIT_FAIL
+
+
+def ci_route(args: argparse.Namespace) -> int:
+    """Validate the live PR (JSON list on stdin); print the routing. No secrets, no verdict."""
+    if not _SHA.fullmatch(args.head):
+        _err("ci-route: --head must be a full 40-character lowercase commit SHA")
+        return EXIT_USAGE
+    try:
+        prs = json.loads(sys.stdin.read())
+        prs = prs if isinstance(prs, list) else []
+    except ValueError:
+        prs = []
+    route = resolve_route(prs, args.head, args.default_branch, args.repo)
+    print(json.dumps(route.public(), sort_keys=True))
+    return EXIT_PASS if route.ok else EXIT_FAIL
+
+
+def _read_json(path: str) -> object:
+    """A JSON file, or None when it is missing, unreadable or not JSON (fail closed)."""
+    if not path:
+        return None
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def ci_gate(args: argparse.Namespace) -> int:
+    """Print the check bodies to publish (JSON list); the first is the required gate check."""
+    if not _SHA.fullmatch(args.head):
+        _err("ci-gate: --head must be a full 40-character lowercase commit SHA")
+        return EXIT_USAGE
+    checks = build_checks(
+        args.head,
+        args.branch_class,
+        _read_json(args.policy),
+        args.judge_code,
+        _read_json(args.verdict),
+        current_base=args.current_base,
+        guards_ok=args.guards_ok == "true",
+    )
+    print(json.dumps(checks, sort_keys=True))
+    return EXIT_PASS
+
+
 def run(args: argparse.Namespace) -> int:
-    commands = {"ci-export": ci_export, "ci-judge": ci_judge, "ci-budget-init": ci_budget_init}
+    commands = {
+        "ci-export": ci_export,
+        "ci-bundle-check": ci_bundle_check,
+        "ci-judge": ci_judge,
+        "ci-budget-init": ci_budget_init,
+        "ci-branch": ci_branch,
+        "ci-route": ci_route,
+        "ci-gate": ci_gate,
+    }
     return commands[args.command](args)
 
 
 __all__ = [
     "BUDGET_TOKEN_ENV",
     "BUNDLE_ENV",
+    "ci_branch",
+    "ci_bundle_check",
     "ci_budget_init",
     "ci_export",
+    "ci_gate",
+    "ci_route",
     "ci_judge",
     "make_ledger_seeder",
     "make_ledger_transport",

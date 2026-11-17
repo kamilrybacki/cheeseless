@@ -143,3 +143,16 @@ def test_result_protojson_round_trip() -> None:
     )
     text = json_format.MessageToJson(original)
     assert json_format.Parse(text, result_pb2.Result()) == original
+
+
+def test_author_error_codes_round_trip_and_rpcs_are_declared():
+    from cheeseless.adapters.inbound.proto import verifier_pb2
+    from cheeseless.adapters.inbound.uds.mapping import gate_error_from_proto, gate_error_to_proto
+    from cheeseless.domain.errors import ErrorCode, gate_error
+
+    for code in (ErrorCode.ROLE_NOT_ALLOWED, ErrorCode.REFERENCE_BLOCKED, ErrorCode.AUTHOR_REFUSED):
+        error = gate_error(code)
+        assert gate_error_from_proto(gate_error_to_proto(error)).code is code
+    methods = {m.name for m in verifier_pb2.DESCRIPTOR.services_by_name["Verifier"].methods}
+    assert {"AuthorCheck", "AuthorCrosscheck", "FreezePropose"} <= methods
+    assert not {"Approve", "Freeze", "Promote", "RecordReference"} & methods

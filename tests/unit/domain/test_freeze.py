@@ -2,7 +2,7 @@
 
 import pytest
 
-from cheeseless.domain.contract import Contract
+from cheeseless.domain.contract import Contract, canonical_contract_bytes
 from cheeseless.domain.freeze import FrozenTask, HiddenBlob, freeze_digest
 from cheeseless.domain.task import Criterion, Task
 
@@ -73,3 +73,14 @@ def test_freeze_digest_binds_every_input() -> None:
     assert base != freeze_digest(OID, "2" * 40, b"task: toy2\n")
     with pytest.raises(ValueError):
         freeze_digest("bad", "2" * 40, b"")
+
+
+def test_legacy_contract_digest_is_stable() -> None:
+    expected = (
+        b'{"build":[],"criteria":[{"description":"does alpha","id":"alpha"}],'
+        b'"env":{},"run":["python","-m","toy"],"task":"toy"}'
+    )
+    assert canonical_contract_bytes(CONTRACT) == expected
+    assert freeze_digest(OID, "2" * 40, expected) == (
+        "a2cd4ea2cf464a81a765af872401c9565da38e7e4ccd4c3d8be65426d01b261d"
+    )

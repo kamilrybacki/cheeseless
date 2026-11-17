@@ -152,3 +152,30 @@ def test_pre_hidden_build_tail_is_dlp_scanned(tmp_path):
     assert isinstance(clean.outcome, GateError)
     assert clean.outcome.code is ErrorCode.BUILD_FAILED
     assert "ordinary build failure" in clean.outcome.pre_hidden_stderr_tail
+
+
+def test_gate_run_publishes_nothing_when_a_dispute_lands_mid_run(toy_repo, tmp_path):
+    """A dispute filed while the suite runs wins: no result is published."""
+    from cheeseless.app.dispute import configure_disputes
+    from cheeseless.domain.dispute import DisputeCode
+
+    repo = GitRepository.discover(toy_repo)
+    sandbox = BwrapSandbox()
+    store = FileStore(store_root(repo.common_dir(), tmp_path / "state"))
+    prepared = prepare(repo, PytestRunner(), sandbox)
+    commit(prepared, store)
+    configure_disputes(store, enabled=True, cap=3)
+    task_id = prepared.task_id
+
+    class DisputingRunner(PytestRunner):
+        def run(self, *args, **kwargs):
+            out = super().run(*args, **kwargs)
+            store.file_dispute(task_id, "toy", "normalize", DisputeCode.UNTESTABLE, "n")
+            return out
+
+    worktree = tmp_path / "wt"
+    repo.create_projection(prepared.projection_tree, worktree)
+    verdict = gate_run(repo, store, DisputingRunner(), sandbox, worktree=worktree)
+    assert isinstance(verdict.outcome, GateError)
+    assert verdict.outcome.code is ErrorCode.SESSION_DISPUTED
+    assert store.latest_result(task_id) is None

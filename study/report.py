@@ -180,6 +180,25 @@ def _exclusions(recs: Sequence[Mapping[str, Any]]) -> list[str]:
     return out
 
 
+def _write_observability(recs: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Runs whose write events were unobserved, per arm and agent (never read as "no write")."""
+    totals: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
+    for r in recs:
+        row = totals[(str(r["arm"]), _agent(r))]
+        row[1] += 1
+        if r.get("writes_observed") is False:
+            row[0] += 1
+    out = [
+        'Runs with unobserved writes are not counted as "no write"; they carry no '
+        "refused-attempt signal.",
+        "",
+        "| arm | agent | unobserved of total |",
+        "|---|---|---|",
+    ]
+    out += [f"| {a} | {ag} | {u} of {n} |" for (a, ag), (u, n) in sorted(totals.items())]
+    return out
+
+
 def _blocked_sensitivity(recs: Sequence[Mapping[str, Any]]) -> list[str]:
     """Cheeseless unsatisfiable-task rates with session_blocked runs as blocked or as missing."""
     cl = [r for r in recs if r["arm"] == ARM_B and not r.get("solvable")]
@@ -327,6 +346,10 @@ def render(
         "",
         *_exclusions(recs),
         "",
+        "## Write observability",
+        "",
+        *_write_observability(recs),
+        "",
         LIMITS,
         NOT_SHOWN,
     ]
@@ -361,9 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = p.parse_args(argv)
     try:
-        review = (
-            json.loads(args.disclosure_review.read_text()) if args.disclosure_review else None
-        )
+        review = json.loads(args.disclosure_review.read_text()) if args.disclosure_review else None
         text = write_report(args.manifest, args.out, args.seed, review)
     except (ValueError, OSError) as exc:
         print(exc)

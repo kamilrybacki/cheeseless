@@ -80,6 +80,28 @@ def test_tree_without_keeps_only_the_contract(repo: GitRepository, tmp_path: Pat
     assert (dest / "src" / "toy" / "__main__.py").read_text() == BASELINE_MAIN
 
 
+def test_replace_subtree_takes_the_prefix_from_another_tree(tmp_path: Path) -> None:
+    root = make_repo(tmp_path / "r2", {"src/a.py": "base\n", "acceptance/contract/s.md": "old\n"})
+    repo = GitRepository(root)
+    base = repo.tree_of(repo.head_commit())
+    write_files(
+        root,
+        {
+            "src/a.py": "moved\n",
+            "acceptance/contract/s.md": "new\n",
+            "acceptance/hidden/h.py": "h\n",
+        },
+    )
+    other = repo.tree_of(commit_all(root))
+    merged = repo.replace_subtree(base, "acceptance", other, "acceptance/contract")
+    dest = tmp_path / "m"
+    dest.mkdir()
+    repo.export(merged, dest)
+    assert (dest / "src" / "a.py").read_text() == "base\n"
+    assert (dest / "acceptance" / "contract" / "s.md").read_text() == "new\n"
+    assert not (dest / "acceptance" / "hidden").exists()
+
+
 def test_export_only_and_exclude(repo: GitRepository, tmp_path: Path) -> None:
     tree = repo.tree_of(repo.head_commit())
     only = tmp_path / "only"
@@ -241,3 +263,123 @@ def test_sparse_hide_removes_hidden_files(repo: GitRepository, toy_repo: Path) -
     assert (toy_repo / "acceptance" / "contract" / "criteria.yaml").is_file()
     assert (toy_repo / "src" / "toy" / "__main__.py").is_file()
     assert repo.dirty_paths("acceptance") == []
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/main", "refs/heads/gates/x", "refs/tags/gate/x"])
+def test_promote_refuses_refs_outside_gate_and_spec(
+    repo: GitRepository, toy_repo: Path, ref: str
+) -> None:
+    baseline = repo.head_commit()
+    tree = repo.tree_of(baseline)
+    with pytest.raises(RepositoryError):
+        repo.promote(baseline, tree, tree, ref)
+
+
+def test_promote_accepts_a_spec_ref(repo: GitRepository, toy_repo: Path) -> None:
+    baseline = repo.head_commit()
+    tree = repo.tree_of(baseline)
+    commit = repo.promote(baseline, tree, tree, "refs/heads/spec/abc")
+    assert git(toy_repo, "rev-parse", "refs/heads/spec/abc") == commit
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/gate/toy", "refs/heads/spec/abc"])
+def test_promote_refuses_a_symbolic_destination_and_leaves_its_target(
+    repo: GitRepository, toy_repo: Path, ref: str
+) -> None:
+    baseline = repo.head_commit()
+    tree = repo.tree_of(baseline)
+    git(toy_repo, "symbolic-ref", ref, "refs/heads/main")
+    write_files(toy_repo, {"src/toy/__main__.py": FIXED_MAIN})
+    with pytest.raises(RepositoryError, match="symbolic"):
+        repo.promote(baseline, tree, repo.snapshot(toy_repo), ref)
+    assert git(toy_repo, "rev-parse", "main") == baseline
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/gate/toy", "refs/heads/spec/abc"])
+def test_a_repeated_promote_fast_forwards_the_ref(
+    repo: GitRepository, toy_repo: Path, ref: str
+) -> None:
+    baseline = repo.head_commit()
+    base_tree = repo.tree_of(baseline)
+    write_files(toy_repo, {"src/toy/__main__.py": FIXED_MAIN})
+    first = repo.promote(baseline, base_tree, repo.snapshot(toy_repo), ref)
+    write_files(toy_repo, {"src/toy/__main__.py": FIXED_MAIN + "\n# again\n"})
+    second = repo.promote(baseline, base_tree, repo.snapshot(toy_repo), ref)
+    assert git(toy_repo, "rev-parse", f"{second}^") == first
+    assert git(toy_repo, "rev-parse", ref) == second
+    # Still baseline + (candidate - base): the tree is the checked snapshot.
+    assert git(toy_repo, "rev-parse", f"{second}^{{tree}}") == repo.snapshot(toy_repo)
+
+
+def test_a_concurrent_publisher_loses_the_compare_and_swap(
+    repo: GitRepository, toy_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    baseline = repo.head_commit()
+    tree = repo.tree_of(baseline)
+    ref = "refs/heads/spec/abc"
+    original = GitRepository._commit
+
+    def racing(git_, tree_, parent=""):
+        made = original(git_, tree_, parent)
+        # Another publisher lands between our read of the head and our update.
+        git(toy_repo, "update-ref", ref, baseline)
+        return made
+
+    monkeypatch.setattr(GitRepository, "_commit", staticmethod(racing))
+    with pytest.raises(RepositoryError):
+        repo.promote(baseline, tree, tree, ref)
+    assert git(toy_repo, "rev-parse", ref) == baseline
+
+
+def _move_main(toy_repo: Path) -> str:
+    """Advance the default branch with an unrelated change, leaving the working tree as it was."""
+    git(toy_repo, "stash", "push", "-u", "-q", "-m", "m1-test")
+    write_files(toy_repo, {"README.md": "main moved\n"})
+    moved = commit_all(toy_repo, "main moved")
+    git(toy_repo, "stash", "pop", "-q")
+    return moved
+
+
+def test_a_repromote_after_main_moved_keeps_the_ref_a_fast_forward_with_the_new_baseline(
+    repo: GitRepository, toy_repo: Path
+) -> None:
+    from cheeseless.app.ci_branch import check_branch
+
+    ref = "refs/heads/spec/lin"
+    old = repo.head_commit()
+    write_files(toy_repo, {"acceptance/hidden/test_extra.py": "def test_x():\n    assert True\n"})
+    first = repo.promote(old, repo.tree_of(old), repo.snapshot(toy_repo), ref)
+    new = _move_main(toy_repo)
+
+    second = repo.promote(new, repo.tree_of(new), repo.snapshot(toy_repo), ref)
+
+    parents = git(toy_repo, "rev-list", "--parents", "-n1", second).split()[1:]
+    assert parents == [first, new]  # a fast-forward of the ref, and the new baseline
+    assert repo.merge_base(new, second) == new
+    assert git(toy_repo, "merge-base", "--is-ancestor", first, second) == ""
+    outcome = check_branch(repo, "spec/lin", new, second)
+    assert outcome.ok, outcome.public()
+
+
+def test_an_implementer_ref_reused_across_baselines_is_also_rebased_by_a_merge(
+    repo: GitRepository, toy_repo: Path
+) -> None:
+    ref = "refs/heads/gate/toy"
+    old = repo.head_commit()
+    write_files(toy_repo, {"src/toy/extra.py": "X = 1\n"})
+    first = repo.promote(old, repo.tree_of(old), repo.snapshot(toy_repo), ref)
+    new = _move_main(toy_repo)
+    second = repo.promote(new, repo.tree_of(new), repo.snapshot(toy_repo), ref)
+    assert git(toy_repo, "rev-list", "--parents", "-n1", second).split()[1:] == [first, new]
+    assert git(toy_repo, "rev-parse", f"{second}^{{tree}}") == repo.snapshot(toy_repo)
+
+
+def test_a_repromote_on_the_same_baseline_still_chains_with_one_parent(
+    repo: GitRepository, toy_repo: Path
+) -> None:
+    ref = "refs/heads/spec/lin"
+    base = repo.head_commit()
+    write_files(toy_repo, {"acceptance/hidden/a.py": "x = 1\n"})
+    first = repo.promote(base, repo.tree_of(base), repo.snapshot(toy_repo), ref)
+    second = repo.promote(base, repo.tree_of(base), repo.snapshot(toy_repo), ref)
+    assert git(toy_repo, "rev-list", "--parents", "-n1", second).split()[1:] == [first]

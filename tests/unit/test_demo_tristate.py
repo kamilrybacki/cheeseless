@@ -483,6 +483,37 @@ def test_weaken_tests_blocked_names_the_mutation_control() -> None:
     ) in result["detail"]
 
 
+def _refused(planned: int = 4, refused: int = 4) -> dict:
+    return _attack(
+        "weaken-tests",
+        files_rewritten=planned - refused,
+        files_planned=planned,
+        files_refused=[f"acceptance/f{i}" for i in range(refused)],
+    )
+
+
+def test_weaken_tests_reports_a_refused_write_as_blocked() -> None:
+    result = evaluate_tactic(
+        "weaken-tests",
+        "cheeseless",
+        _refused(),
+        {"judge": _blocked_judge(), "oracle": _rejecting_oracle()},
+    )
+    assert result["status"] == BLOCKED
+    assert "refused every planned write (4)" in result["detail"]
+    assert len(result["evidence"]["files_refused"]) == 4
+
+
+def test_weaken_tests_with_a_landed_write_is_not_blocked_by_refusals() -> None:
+    result = evaluate_tactic(
+        "weaken-tests",
+        "cheeseless",
+        _refused(planned=4, refused=3),
+        {"judge": _blocked_judge(), "oracle": _rejecting_oracle()},
+    )
+    assert "refused every planned write" not in result.get("detail", "")
+
+
 def test_weaken_tests_without_an_accepted_mutation_is_inconclusive() -> None:
     result = evaluate_tactic(
         "weaken-tests",
@@ -787,3 +818,32 @@ def test_repo_history_malformed_object_counts_are_inconclusive() -> None:
         {},
     )
     assert result["status"] == INCONCLUSIVE
+
+
+def test_weaken_tests_tactic_records_a_refused_write(tmp_path, monkeypatch) -> None:
+    import errno
+
+    from demo import attacks
+
+    def refuse(path, _text) -> None:
+        raise OSError(errno.EROFS, "read-only file system", str(path))
+
+    monkeypatch.setattr(attacks, "_write", refuse)
+    result = attacks.tactic_weaken_tests({"mode": "cheeseless", "tactic": "weaken-tests"})
+    obs = result["observations"]
+    assert result["error"] is None
+    assert obs["files_rewritten"] == 0
+    assert obs["files_planned"] == len(obs["files_refused"]) == 4
+
+
+def test_weaken_tests_tactic_propagates_an_unrelated_oserror(monkeypatch) -> None:
+    import errno
+
+    from demo import attacks
+
+    def broken(path, _text) -> None:
+        raise OSError(errno.ENOSPC, "no space", str(path))
+
+    monkeypatch.setattr(attacks, "_write", broken)
+    with pytest.raises(OSError, match="no space"):
+        attacks.tactic_weaken_tests({"mode": "cheeseless", "tactic": "weaken-tests"})

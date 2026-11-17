@@ -56,6 +56,7 @@ class ArmResult:
     gate_runs: int | None
     judge_in_tree: str | None
     transcript_observed: bool
+    writes_observed: bool
     wall_seconds: float
 
 
@@ -80,9 +81,33 @@ def _no_class() -> Classification:
     return Classification({})
 
 
-def _infra(arm: str, reason: str, started: float, observed: bool) -> ArmResult:
+def _writes_observed(
+    events: tuple[Event, ...] | None, write_events: tuple[Event, ...] | None
+) -> bool:
+    """True when any source of write events exists (``()`` is observed, ``None`` is not)."""
+    return events is not None or write_events is not None
+
+
+def _infra(
+    arm: str,
+    reason: str,
+    started: float,
+    events: tuple[Event, ...] | None,
+    write_events: tuple[Event, ...] | None = None,
+) -> ArmResult:
     return ArmResult(
-        arm, INFRA, reason, None, None, None, _no_class(), None, None, observed, _since(started)
+        arm,
+        INFRA,
+        reason,
+        None,
+        None,
+        None,
+        _no_class(),
+        None,
+        None,
+        events is not None,
+        _writes_observed(events, write_events),
+        _since(started),
     )
 
 
@@ -96,24 +121,39 @@ def _classify(
     before: Mapping[str, str],
     after: Mapping[str, str],
     events: tuple[Event, ...] | None,
+    write_events: tuple[Event, ...] | None = None,
 ) -> Classification:
+    if write_events is None and events is not None:
+        # scripted agents report their writes in the same event log
+        write_events = tuple(e for e in events if e.kind == "write")
     return classify(
         arm=arm,
         before=before,
         after=after,
         expected_literals=expected_literals(task),
         events=events,
+        write_events=write_events,
     )
 
 
-def run_naive(task: Task, root: Path, apply: Apply) -> ArmResult:
-    """One naive-arm run in ``root`` (created if missing)."""
+def run_naive(
+    task: Task,
+    root: Path,
+    apply: Apply,
+    observed_writes: Callable[[], tuple[Event, ...] | None] | None = None,
+) -> ArmResult:
+    """One naive-arm run in ``root`` (created if missing).
+
+    ``observed_writes`` is called once after ``apply`` and returns the write events recovered
+    from the agent transcript (``None`` = unobserved).
+    """
     started = time.monotonic()
     workdir = root / "naive"
     files = {**baseline_files(task), "acceptance/conftest.py": suite.conftest_text(task.package)}
     make_repo(workdir, files)
     before = read_tree(workdir)
     events = apply(workdir)
+    write_events = observed_writes() if observed_writes is not None else None
     after = read_tree(workdir)
     candidate = suite.candidate_snapshot(workdir, root / "naive-candidate")
     pristine = suite.pristine_verdict(task, candidate)
@@ -121,7 +161,7 @@ def run_naive(task: Task, root: Path, apply: Apply) -> ArmResult:
     in_tree = suite.in_tree_verdict(task, workdir)
     verdict = _verdict_label(pristine)
     if verdict is None or oracle == suite.INFRA:
-        return _infra(ARM_NAIVE, "suite_infra_error", started, events is not None)
+        return _infra(ARM_NAIVE, "suite_infra_error", started, events, write_events)
     return ArmResult(
         arm=ARM_NAIVE,
         status=VALID,
@@ -129,10 +169,11 @@ def run_naive(task: Task, root: Path, apply: Apply) -> ArmResult:
         verdict=verdict,
         judge_reason=None,
         oracle=oracle,
-        classification=_classify(ARM_NAIVE, task, before, after, events),
+        classification=_classify(ARM_NAIVE, task, before, after, events, write_events),
         gate_runs=None,
         judge_in_tree=_verdict_label(in_tree),
         transcript_observed=events is not None,
+        writes_observed=_writes_observed(events, write_events),
         wall_seconds=_since(started),
     )
 
@@ -202,6 +243,7 @@ def finish_cheeseless(
     *,
     gate_runs: int | None,
     started: float,
+    write_events: tuple[Event, ...] | None = None,
 ) -> ArmResult:
     """Promote and judge the final projection, then run the oracle on it."""
     after = read_tree(case.projection)
@@ -209,10 +251,10 @@ def finish_cheeseless(
         candidate = suite.candidate_snapshot(case.projection, Path(tmp) / "c")
         oracle = suite.oracle_verdict(task, candidate)
     if oracle == suite.INFRA:
-        return _infra(ARM_CHEESELESS, "suite_infra_error", started, events is not None)
+        return _infra(ARM_CHEESELESS, "suite_infra_error", started, events, write_events)
     verdict, reason, judge_reason = _decide(case)
     if verdict is None:
-        return _infra(ARM_CHEESELESS, reason or "infra_error", started, events is not None)
+        return _infra(ARM_CHEESELESS, reason or "infra_error", started, events, write_events)
     return ArmResult(
         arm=ARM_CHEESELESS,
         status=VALID,
@@ -220,10 +262,11 @@ def finish_cheeseless(
         verdict=verdict,
         judge_reason=judge_reason,
         oracle=oracle,
-        classification=_classify(ARM_CHEESELESS, task, before, after, events),
+        classification=_classify(ARM_CHEESELESS, task, before, after, events, write_events),
         gate_runs=gate_runs,
         judge_in_tree=None,
         transcript_observed=events is not None,
+        writes_observed=_writes_observed(events, write_events),
         wall_seconds=_since(started),
     )
 

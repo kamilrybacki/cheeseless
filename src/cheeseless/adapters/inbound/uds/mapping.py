@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from cheeseless.adapters.inbound.proto import error_pb2, result_pb2, verifier_pb2
 from cheeseless.domain.disclosure import AgentView
+from cheeseless.domain.dispute import ACK_TEXT, DisputeCode
 from cheeseless.domain.errors import (
     CATALOGUE,
     ErrorCode,
@@ -32,6 +35,14 @@ _ERROR_CODE_TO_PROTO = {
     ErrorCode.EXECUTABLE_MISSING: error_pb2.ERROR_CODE_EXECUTABLE_MISSING,
     ErrorCode.STARTUP_CRASH: error_pb2.ERROR_CODE_STARTUP_CRASH,
     ErrorCode.SMOKE_TEST_FAILED: error_pb2.ERROR_CODE_SMOKE_TEST_FAILED,
+    ErrorCode.DISPUTE_DISABLED: error_pb2.ERROR_CODE_DISPUTE_DISABLED,
+    ErrorCode.DISPUTE_CAP_REACHED: error_pb2.ERROR_CODE_DISPUTE_CAP_REACHED,
+    ErrorCode.DISPUTE_INVALID: error_pb2.ERROR_CODE_DISPUTE_INVALID,
+    ErrorCode.DISPUTE_NOT_ALLOWED: error_pb2.ERROR_CODE_DISPUTE_NOT_ALLOWED,
+    ErrorCode.SESSION_DISPUTED: error_pb2.ERROR_CODE_SESSION_DISPUTED,
+    ErrorCode.ROLE_NOT_ALLOWED: error_pb2.ERROR_CODE_ROLE_NOT_ALLOWED,
+    ErrorCode.REFERENCE_BLOCKED: error_pb2.ERROR_CODE_REFERENCE_BLOCKED,
+    ErrorCode.AUTHOR_REFUSED: error_pb2.ERROR_CODE_AUTHOR_REFUSED,
 }
 
 _PROTO_TO_ERROR_CODE = {v: k for k, v in _ERROR_CODE_TO_PROTO.items()}
@@ -300,6 +311,135 @@ def serialize_run_response(msg: verifier_pb2.RunResponse) -> bytes:
 
 
 def serialize_status_response(msg: verifier_pb2.StatusResponse) -> bytes:
+    from google.protobuf import json_format
+
+    return json_format.MessageToJson(msg).encode("utf-8")  # type: ignore[no-any-return]
+
+
+_DISPUTE_CODE_TO_PROTO: dict[DisputeCode, verifier_pb2.DisputeCode] = {
+    DisputeCode.CONTRADICTS_SPEC: verifier_pb2.DISPUTE_CODE_CONTRADICTS_SPEC,
+    DisputeCode.UNTESTABLE: verifier_pb2.DISPUTE_CODE_UNTESTABLE,
+    DisputeCode.AMBIGUOUS_SPEC: verifier_pb2.DISPUTE_CODE_AMBIGUOUS_SPEC,
+    DisputeCode.OTHER: verifier_pb2.DISPUTE_CODE_OTHER,
+}
+_DISPUTE_CODE_FROM_PROTO = {v: k for k, v in _DISPUTE_CODE_TO_PROTO.items()}
+
+
+def dispute_code_to_proto(code: DisputeCode) -> verifier_pb2.DisputeCode:
+    return _DISPUTE_CODE_TO_PROTO[code]
+
+
+def parse_dispute_request(body: bytes) -> verifier_pb2.DisputeRequest:
+    from google.protobuf import json_format
+
+    msg = verifier_pb2.DisputeRequest()
+    text = body.decode("utf-8")
+    if len(text) > 65536:
+        raise MappingError("request too large")
+    try:
+        json_format.Parse(text, msg, ignore_unknown_fields=False)
+    except json_format.ParseError as exc:
+        raise MappingError("malformed dispute request") from exc
+    return msg
+
+
+def dispute_request_fields(msg: verifier_pb2.DisputeRequest) -> tuple[str, str, str, str]:
+    """``(task_id, criterion_id, code, note)`` as plain strings for the use case.
+
+    An unspecified or unknown enum value maps to ``""``, which the use case rejects
+    as invalid input like any other malformed code.
+    """
+    code = _DISPUTE_CODE_FROM_PROTO.get(msg.code)
+    return msg.task_id, msg.criterion_id, code.value if code else "", msg.note
+
+
+def dispute_outcome_to_response(outcome: str | GateError) -> verifier_pb2.DisputeResponse:
+    resp = verifier_pb2.DisputeResponse()
+    if isinstance(outcome, GateError):
+        resp.error.CopyFrom(gate_error_to_proto(outcome))
+    else:
+        # Fixed text, never the caller's input and never per-dispute data.
+        resp.ack.message = ACK_TEXT
+    return resp
+
+
+def dispute_response_to_outcome(msg: verifier_pb2.DisputeResponse) -> str | GateError:
+    which = msg.WhichOneof("outcome")
+    if which == "ack":
+        if msg.ack.message != ACK_TEXT:
+            raise MappingError("unexpected acknowledgement")
+        return ACK_TEXT
+    if which == "error":
+        return gate_error_from_proto(msg.error)
+    raise MappingError("missing outcome oneof")
+
+
+def serialize_dispute_response(msg: verifier_pb2.DisputeResponse) -> bytes:
+    from google.protobuf import json_format
+
+    return json_format.MessageToJson(msg).encode("utf-8")  # type: ignore[no-any-return]
+
+
+# -- author role (ADR 0009): check, crosscheck, propose ------------------------------------
+
+_AUTHOR_REQUESTS = {
+    "check": verifier_pb2.AuthorCheckRequest,
+    "crosscheck": verifier_pb2.AuthorCrosscheckRequest,
+    "propose": verifier_pb2.FreezeProposeRequest,
+}
+_AUTHOR_RESPONSES = {
+    "check": verifier_pb2.AuthorCheckResponse,
+    "crosscheck": verifier_pb2.AuthorCrosscheckResponse,
+    "propose": verifier_pb2.FreezeProposeResponse,
+}
+
+
+def parse_author_request(kind: str, body: bytes) -> str:
+    """The ``task_id`` of an author request; every other field is rejected."""
+    from google.protobuf import json_format
+
+    msg = _AUTHOR_REQUESTS[kind]()
+    text = body.decode("utf-8")
+    if len(text) > 65536:
+        raise MappingError("request too large")
+    try:
+        json_format.Parse(text, msg, ignore_unknown_fields=False)
+    except json_format.ParseError as exc:
+        raise MappingError("malformed author request") from exc
+    return str(msg.task_id)  # type: ignore[attr-defined]
+
+
+def author_outcome_to_response(kind: str, outcome: object) -> Any:
+    """Map an app outcome (or a ``GateError``) to the proto response for ``kind``."""
+    resp = _AUTHOR_RESPONSES[kind]()
+    if isinstance(outcome, GateError):
+        resp.error.CopyFrom(gate_error_to_proto(outcome))  # type: ignore[attr-defined]
+    elif kind == "check":
+        resp.check.ok = outcome.ok  # type: ignore[attr-defined]
+        resp.check.problems.extend(outcome.problems)  # type: ignore[attr-defined]
+        resp.check.tests = outcome.tests  # type: ignore[attr-defined]
+    elif kind == "crosscheck":
+        resp.crosscheck.green = outcome.green  # type: ignore[attr-defined]
+        resp.crosscheck.red_criteria.extend(outcome.red_criteria)  # type: ignore[attr-defined]
+    else:
+        resp.proposal.proposal_id = outcome.proposal_id  # type: ignore[attr-defined]
+    return resp
+
+
+def author_response_to_outcome(kind: str, msg: Any) -> object:
+    which = msg.WhichOneof("outcome")
+    if which == "error":
+        return gate_error_from_proto(msg.error)
+    if which == "check" and kind == "check":
+        return {"ok": msg.check.ok, "problems": list(msg.check.problems), "tests": msg.check.tests}
+    if which == "crosscheck" and kind == "crosscheck":
+        return {"green": msg.crosscheck.green, "red_criteria": list(msg.crosscheck.red_criteria)}
+    if which == "proposal" and kind == "propose":
+        return {"proposal_id": msg.proposal.proposal_id}
+    raise MappingError("missing or unexpected outcome oneof")
+
+
+def serialize_author_response(msg: Any) -> bytes:
     from google.protobuf import json_format
 
     return json_format.MessageToJson(msg).encode("utf-8")  # type: ignore[no-any-return]

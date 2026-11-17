@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from cheeseless.domain import ids
-from cheeseless.domain.task import Criterion
+from cheeseless.domain.task import SPEC_LIMIT, Criterion, Example, check_public_text
 
 CONTRACT_DIR = "acceptance/contract"
 CONTRACT_PATH = f"{CONTRACT_DIR}/criteria.yaml"
@@ -34,8 +34,13 @@ class Contract:
     run: tuple[str, ...]
     build: tuple[tuple[str, ...], ...] = ()
     env: tuple[tuple[str, str], ...] = ()
+    spec: str | None = None
 
     def __post_init__(self) -> None:
+        if self.spec is not None and not isinstance(self.spec, str):
+            raise ValueError("spec must be text")
+        if self.spec is not None:
+            check_public_text(self.spec, SPEC_LIMIT, "spec.md")
         ids.lineage_id(self.lineage_id)
         if not self.criteria:
             raise ValueError("the contract needs at least one criterion")
@@ -76,15 +81,29 @@ def check_env_entry(key: object, value: object) -> None:
 
 
 def _criterion(item: object) -> Criterion:
-    if not isinstance(item, Mapping) or set(item) != _CRITERION_KEYS:
-        raise ValueError("each criterion needs exactly 'id' and 'description'")
+    if (
+        not isinstance(item, Mapping)
+        or not _CRITERION_KEYS <= set(item)
+        or set(item) - (_CRITERION_KEYS | {"examples"})
+    ):
+        raise ValueError("each criterion needs 'id' and 'description', with optional 'examples'")
     description = item["description"]
     if isinstance(description, str) and "::" in description:
         raise ValueError("criterion descriptions may not name test node ids (Q44)")
-    return Criterion(ids.criterion_id(item["id"]), description)
+    examples = item.get("examples", [])
+    if not isinstance(examples, list):
+        raise ValueError("examples must be a list of input/expected_output mappings")
+    parsed = []
+    for example in examples:
+        if not isinstance(example, Mapping) or set(example) != {"input", "expected_output"}:
+            raise ValueError("examples need exactly 'input' and 'expected_output'")
+        parsed.append(Example(example["input"], example["expected_output"]))
+    return Criterion(
+        ids.criterion_id(item["id"]), description, tuple(parsed) if "examples" in item else None
+    )
 
 
-def parse_contract(data: object) -> Contract:
+def parse_contract(data: object, *, spec: str | None = None) -> Contract:
     """Validate the parsed YAML document. Unknown keys are refused (fail closed)."""
     if not isinstance(data, Mapping):
         raise ValueError("criteria.yaml must be a mapping")
@@ -104,6 +123,7 @@ def parse_contract(data: object) -> Contract:
     if not isinstance(env, Mapping):
         raise ValueError("'env' must be a mapping")
     return Contract(
+        spec=spec,
         lineage_id=ids.lineage_id(data["task"]),
         criteria=tuple(_criterion(c) for c in criteria),
         run=_argv(data["run"], "run"),
@@ -113,10 +133,26 @@ def parse_contract(data: object) -> Contract:
 
 
 def contract_data(contract: Contract) -> dict[str, object]:
-    """The inverse of ``parse_contract``: plain data that parses back to ``contract``."""
+    """The inverse of ``parse_contract``: criteria.yaml data (spec text is stored separately)."""
     return {
         "task": contract.lineage_id,
-        "criteria": [{"id": c.id, "description": c.description} for c in contract.criteria],
+        "criteria": [
+            {
+                "id": c.id,
+                "description": c.description,
+                **(
+                    {
+                        "examples": [
+                            {"input": e.input, "expected_output": e.expected_output}
+                            for e in c.examples
+                        ]
+                    }
+                    if c.examples is not None
+                    else {}
+                ),
+            }
+            for c in contract.criteria
+        ],
         "run": list(contract.run),
         "build": [list(step) for step in contract.build],
         "env": dict(contract.env),
@@ -125,6 +161,7 @@ def contract_data(contract: Contract) -> dict[str, object]:
 
 def canonical_contract_bytes(contract: Contract) -> bytes:
     """Deterministic encoding bound into the task id (``freeze_digest``)."""
-    return json.dumps(
-        contract_data(contract), sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode()
+    data = contract_data(contract)
+    if contract.spec is not None:
+        data["spec"] = contract.spec
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()

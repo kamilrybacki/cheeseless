@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from cheeseless.app.author_driver import run_driver_on
 from cheeseless.domain.contract import (
     Contract,
     canonical_contract_bytes,
@@ -26,10 +27,11 @@ from cheeseless.domain.holdout import split as holdout_split
 from cheeseless.domain.task import Task
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.runner import SuiteRunner
-from cheeseless.ports.sandbox import Sandbox
+from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
 from cheeseless.ports.store import Store
 
 CONTRACT_PATH = "acceptance/contract/criteria.yaml"
+SPEC_PATH = "acceptance/contract/spec.md"
 HOLDOUT_SEED_BYTES = 32
 
 
@@ -61,10 +63,17 @@ class FreezeError(Exception):
         self.problems = redacted
 
 
-def _read_contract(repo: Repository, commit: str) -> Contract:
+def read_contract(repo: Repository, commit: str) -> Contract:
     raw = repo.show(commit, CONTRACT_PATH)
     data = yaml.safe_load(raw.decode("utf-8"))
-    return parse_contract(data)
+    paths = {b.path for b in repo.blobs_under(repo.tree_of(commit), "acceptance/contract")}
+    spec = None
+    if SPEC_PATH in paths:
+        try:
+            spec = repo.show(commit, SPEC_PATH).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise FreezeError([f"{SPEC_PATH} must be UTF-8 text"]) from exc
+    return parse_contract(data, spec=spec)
 
 
 def _observations(run: SuiteRun) -> tuple[object, ...]:
@@ -82,42 +91,109 @@ def _hidden_contents(
     return [(blob.path, repo.show(commit, blob.path)) for blob in blobs]
 
 
-def _public_contents(
-    repo: Repository, commit: str, projection_tree: str
+def _projection_contents(
+    repo: Repository, baseline: str, source: str, projection_tree: str
 ) -> list[tuple[bytes, bytes]]:
-    """Agent-visible projection blobs as ``(path, content)`` pairs.
+    """Projection blobs; baseline paths are read from the baseline, the contract from source."""
+    out = []
+    for blob in repo.blobs_under(projection_tree, ""):
+        origin = source if blob.path.startswith("acceptance/contract/") else baseline
+        out.append((blob.path.encode(), repo.show(origin, blob.path)))
+    return out
 
-    A file name is as visible as its content, so callers scan the path bytes too.
-    """
-    return [
-        (blob.path.encode(), repo.show(commit, blob.path))
-        for blob in repo.blobs_under(projection_tree, "")
-    ]
+
+def rebuild_fingerprints(
+    repo: Repository, frozen: FrozenTask, source: str
+) -> tuple[Fingerprints | None, str]:
+    """Rebuild a published task's fingerprints from ``source``; ``(None, why)`` on mismatch.
+
+    Nothing in the stored task is trusted beyond its digest: the acceptance tree, the
+    projection and the hidden blob list are re-derived from the repository and compared."""
+    if repo.tree_of(source, "acceptance") != frozen.acceptance_tree:
+        return None, "the default branch no longer holds the frozen acceptance tree"
+    projection = repo.replace_subtree(
+        repo.tree_of(frozen.baseline_commit),
+        "acceptance",
+        repo.tree_of(source),
+        "acceptance/contract",
+    )
+    hidden = tuple(
+        HiddenBlob(path=f"acceptance/{b.path}", oid=b.oid)
+        for b in repo.blobs_under(frozen.acceptance_tree, "")
+        if not b.path.startswith("contract/")
+    )
+    if projection != frozen.projection_tree or hidden != frozen.hidden_blobs:
+        return None, "the task record disagrees with the repository"
+    public = [c for _, c in _projection_contents(repo, frozen.baseline_commit, source, projection)]
+    return build_fingerprints(
+        frozen.task.task_id, _hidden_contents(repo, source, hidden), public
+    ), ""
+
+
+def _contained_run(
+    author_sandbox: AuthorSandbox, acc_root: Path, cand_root: Path, contract: Contract
+) -> SuiteRun:
+    suite = run_driver_on(
+        author_sandbox, acc_root, "run", cand_root, contract.run, tuple(contract.env)
+    )
+    if suite is None:
+        raise FreezeError(["the contained author runner returned no usable result"])
+    return suite
+
+
+def _host_run(
+    runner: SuiteRunner,
+    acc_root: Path,
+    launcher: tuple[str, ...],
+    contract: Contract,
+    timeout: float,
+) -> SuiteRun:
+    return runner.run(
+        root=acc_root,
+        paths=["hidden"],
+        selected=None,
+        launcher=launcher,
+        run=contract.run,
+        timeout=timeout,
+    ).suite
 
 
 def prepare(
     repo: Repository,
-    runner: SuiteRunner,
+    runner: SuiteRunner | None,
     sandbox: Sandbox,
     *,
+    author_sandbox: AuthorSandbox | None = None,
     baseline_commit: str | None = None,
+    source: str | None = None,
     timeout: float = 300.0,
     tool_version: str = "0.1.0",
 ) -> PreparedFreeze:
+    """Validate a freeze. ``source`` (a commit or tree oid) is where the files are read
+    from; it defaults to the baseline commit. The digest always uses ``baseline_commit``.
+
+    With ``author_sandbox`` the suite is executed by the contained author runner (read-only
+    acceptance, private /tmp, no network, no store or home) instead of ``runner``. Approval
+    of an author-proposed tree must use it: that code is not trusted yet."""
     if baseline_commit is None:
         baseline_commit = repo.head_commit()
-    contract = _read_contract(repo, baseline_commit)
-    baseline_tree = repo.tree_of(baseline_commit)
-    acceptance_tree = repo.tree_of(baseline_commit, "acceptance")
-    projection_tree = repo.tree_without(baseline_tree, "acceptance", "acceptance/contract")
+    if source is None:
+        source = baseline_commit
+    contract = read_contract(repo, source)
+    acceptance_tree = repo.tree_of(source, "acceptance")
+    # The candidate is the baseline code, never ``source``: the digest names the baseline.
+    # Only the public contract (spec.md and public tests) is taken from ``source``.
+    projection_tree = repo.replace_subtree(
+        repo.tree_of(baseline_commit), "acceptance", repo.tree_of(source), "acceptance/contract"
+    )
     hidden_blobs = tuple(
         HiddenBlob(path=f"acceptance/{b.path}", oid=b.oid)
         for b in repo.blobs_under(acceptance_tree, "")
         if not b.path.startswith("contract/")
     )
 
-    hidden_contents = _hidden_contents(repo, baseline_commit, hidden_blobs)
-    projection_blobs = _public_contents(repo, baseline_commit, projection_tree)
+    hidden_contents = _hidden_contents(repo, source, hidden_blobs)
+    projection_blobs = _projection_contents(repo, baseline_commit, source, projection_tree)
     public_contents = [content for _, content in projection_blobs]
     public_surfaces = [content for _, content in projection_blobs] + [
         path for path, _ in projection_blobs
@@ -138,28 +214,20 @@ def prepare(
                 build = sandbox.build(cand_root, contract.build, env)
                 if not build.ok:
                     raise FreezeError([f"build failed: {build.stderr_tail}".strip()])
-                launcher = sandbox.launcher(cand_root, env, scratch)
-                first = runner.run(
-                    root=acc_root,
-                    paths=["hidden"],
-                    selected=None,
-                    launcher=launcher,
-                    run=contract.run,
-                    timeout=timeout,
-                )
-                second = runner.run(
-                    root=acc_root,
-                    paths=["hidden"],
-                    selected=None,
-                    launcher=launcher,
-                    run=contract.run,
-                    timeout=timeout,
-                )
-            suite = first.suite
+                if author_sandbox is not None:
+                    first = _contained_run(author_sandbox, acc_root, cand_root, contract)
+                    second = _contained_run(author_sandbox, acc_root, cand_root, contract)
+                else:
+                    if runner is None:
+                        raise ValueError("prepare needs a runner or an author sandbox")
+                    launcher = sandbox.launcher(cand_root, env, scratch)
+                    first = _host_run(runner, acc_root, launcher, contract, timeout)
+                    second = _host_run(runner, acc_root, launcher, contract, timeout)
+            suite = first
             problems = freeze_problems([c.id for c in contract.criteria], suite)
             if problems:
                 raise FreezeError(problems)
-            if _observations(first.suite) != _observations(second.suite):
+            if _observations(first) != _observations(second):
                 raise FreezeError(["the hidden suite is flaky: two runs disagreed"])
             tests = criterion_by_test(suite)
 
@@ -185,13 +253,21 @@ def commit(
     store: Store,
     *,
     seed: bytes | None = None,
+    waiver: str = "",
 ) -> FreezeCommitResult:
+    task_id = prepared.task_id
+    # Publication is exclusive and resumable: a task already persisted for this id keeps
+    # its seed, so a retry after a partial commit never regenerates the holdout split.
+    persisted = store.load_task(task_id) if store.has_task(task_id) else None
+    if persisted is not None:
+        if seed is not None and seed != persisted[1]:
+            raise FreezeError(["a different holdout seed is already persisted for this task"])
+        seed = persisted[1]
     if seed is None:
         seed = secrets.token_bytes(HOLDOUT_SEED_BYTES)
     if len(seed) != HOLDOUT_SEED_BYTES:
         raise ValueError("holdout seed must be exactly 32 bytes")
     split_result = holdout_split(seed, prepared.tests)
-    task_id = prepared.task_id
     expected = freeze_digest(
         prepared.baseline_commit,
         prepared.acceptance_tree,
@@ -209,8 +285,12 @@ def commit(
         hidden_blobs=prepared.hidden_blobs,
         visible=dict(split_result.visible),
         holdout=dict(split_result.holdout),
+        waiver=waiver,
     )
-    store.save_task(frozen, seed)
+    if persisted is None:
+        store.save_task(frozen, seed)
+    elif persisted[0] != frozen:
+        raise FreezeError(["the persisted task differs from the prepared freeze"])
     store.save_fingerprints(prepared.fingerprints)
     store.set_active(task_id)
     store.log_event(task_id, "freeze", "committed")
@@ -223,4 +303,5 @@ __all__ = [
     "FreezeError",
     "prepare",
     "commit",
+    "read_contract",
 ]

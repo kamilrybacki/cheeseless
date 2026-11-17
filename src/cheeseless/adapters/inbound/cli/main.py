@@ -12,17 +12,29 @@ from typing import Any
 
 from cheeseless import __version__
 from cheeseless.adapters.inbound.mapping import agent_view_to_dict, result_to_dict
+from cheeseless.app.authoring import (
+    AuthorError,
+    AuthorStore,
+    approve_freeze,
+    record_reference,
+    recover_approval,
+    reference_failed,
+    start_reference,
+)
+from cheeseless.app.dispute import configure_disputes, list_disputes, resolve_dispute
 from cheeseless.app.dlp import scanner_for
-from cheeseless.app.freeze import FreezeError, commit, prepare
+from cheeseless.app.freeze import FreezeError, commit, prepare, read_contract
 from cheeseless.app.gate_run import gate_run
-from cheeseless.app.promote import PromoteRejected, promote
+from cheeseless.app.promote import PromoteRejected, promote, promote_author
 from cheeseless.app.status import status
+from cheeseless.domain.authoring import AuthoringError
 from cheeseless.domain.budget import Pool
+from cheeseless.domain.dispute import DEFAULT_CAP, DisputeRecord
 from cheeseless.domain.result import Result
-from cheeseless.ports.repository import Repository
+from cheeseless.ports.repository import Repository, SnapshotRejected
 from cheeseless.ports.runner import SuiteRunner
-from cheeseless.ports.sandbox import Sandbox
-from cheeseless.ports.store import Store
+from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
+from cheeseless.ports.store import Store, StoreError
 
 
 @dataclass
@@ -31,6 +43,8 @@ class Context:
     runner: SuiteRunner
     sandbox: Sandbox
     store: Store
+    # The contained author runner; approval runs author-proposed tests only through it.
+    author_sandbox: AuthorSandbox | None = None
 
 
 def split_agent_argv(argv: Sequence[str]) -> tuple[list[str], list[str] | None]:
@@ -49,6 +63,12 @@ def _add_session_parser(sub: Any) -> None:
     )
     ses.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)
     ses.add_argument("--task", default=None)
+    ses.add_argument(
+        "--role",
+        choices=("author", "reference", "implementer"),
+        default="implementer",
+        help="Session role, bound by the host at launch (default: implementer).",
+    )
     ses.add_argument("--profile", choices=("local", "ci"), default="local")
     ses.add_argument("--timeout", type=float, default=300.0)
     ses.add_argument("--egress-policy", type=Path, default=None, metavar="FILE")
@@ -84,6 +104,42 @@ def build_parser() -> argparse.ArgumentParser:
     freeze.add_argument("--timeout", type=float, default=300.0)
     freeze.add_argument("--yes", action="store_true", help="Skip the approval prompt.")
     freeze.add_argument("--tool-version", default="0.1.0")
+    freeze.add_argument(
+        "--approve",
+        metavar="PROPOSAL_ID",
+        default=None,
+        help="Host only: approve a proposed freeze (ADR 0009).",
+    )
+    freeze.add_argument("--as", dest="actor", default=None, help="Who approves (with --approve).")
+    freeze.add_argument(
+        "--no-reference",
+        action="store_true",
+        help="Waive the reference crosscheck; needs --reason.",
+    )
+    freeze.add_argument("--reason", default="", help="Why the crosscheck is waived.")
+    freeze.add_argument("--json", action="store_true")
+
+    ref = sub.add_parser("reference", help="Host only: reference-session bookkeeping.")
+    rsub = ref.add_subparsers(dest="reference_command")
+    for name, text in (
+        ("record", "Snapshot a reference worktree for the current spec."),
+        ("failed", "Record that a reference session failed (blocks the task)."),
+        ("retry", "Start a reference retry (at most two)."),
+    ):
+        rp = rsub.add_parser(name, help=text)
+        rp.add_argument("--source", default=None, help="Commit or tree with the contract.")
+        rp.add_argument("--json", action="store_true")
+        if name == "record":
+            rp.add_argument("--worktree", type=Path, required=True)
+
+    auth = sub.add_parser("author", help="Host only: authoring lifecycle recovery.")
+    asub = auth.add_subparsers(dest="author_command")
+    rec = asub.add_parser(
+        "recover", help="Clear an approval reservation whose approver died (refuses if alive)."
+    )
+    rec.add_argument("--task", required=True, help="The proposal (task) id.")
+    rec.add_argument("--as", dest="actor", default=None, help="Who recovers (audit log).")
+    rec.add_argument("--json", action="store_true")
 
     run = sub.add_parser("run", help="Run the gate against a candidate worktree.")
     run.add_argument("--worktree", type=Path, default=None)
@@ -97,7 +153,16 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--worktree", type=Path, default=None)
     st.add_argument("--json", action="store_true")
 
-    prom = sub.add_parser("promote", help="Promote an evaluated tree to gate/<task>.")
+    prom = sub.add_parser(
+        "promote",
+        help="Promote an evaluated tree to gate/<task>, or with --role author to spec/<lineage>.",
+    )
+    prom.add_argument(
+        "--role",
+        choices=("implementer", "author"),
+        default="implementer",
+        help="implementer: gate/<task>; author: spec/<lineage> (ledger Q3; acceptance/ only).",
+    )
     prom.add_argument("--worktree", type=Path, default=None)
     prom.add_argument("--task", default=None)
     prom.add_argument("--approve", action="append", default=[])
@@ -105,6 +170,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     doc = sub.add_parser("doctor", help="Check for stray hidden material.")
     doc.add_argument("--json", action="store_true")
+
+    dsp = sub.add_parser(
+        "disputes",
+        help="Host only: list disputes. The note is untrusted and hidden unless --show-note.",
+    )
+    dsp.add_argument("--json", action="store_true")
+    dsp.add_argument("--show-note", action="store_true")
+
+    dis = sub.add_parser("dispute", help="Host only: resolve a dispute or set the policy.")
+    dsub = dis.add_subparsers(dest="dispute_command")
+    res = dsub.add_parser("resolve", help="Record the outcome of one dispute, once.")
+    res.add_argument("dispute_id")
+    outcome = res.add_mutually_exclusive_group(required=True)
+    outcome.add_argument("--upheld", action="store_true")
+    outcome.add_argument("--rejected", action="store_true")
+    res.add_argument("--as", dest="actor", required=True, metavar="ACTOR")
+    res.add_argument("--json", action="store_true")
+    cfg = dsub.add_parser("config", help="Enable or disable disputes and set the lineage cap.")
+    toggle = cfg.add_mutually_exclusive_group(required=True)
+    toggle.add_argument("--enable", action="store_true")
+    toggle.add_argument("--disable", action="store_true")
+    cfg.add_argument("--cap", type=int, default=None, help="Disputes allowed per lineage.")
+    cfg.add_argument("--json", action="store_true")
 
     uds = sub.add_parser("serve-uds", help="Run the verifier UDS server for one session.")
     uds.add_argument("--socket", type=Path, default=None)
@@ -114,6 +202,12 @@ def build_parser() -> argparse.ArgumentParser:
     uds.add_argument("--profile", choices=("local", "ci"), default="local")
     uds.add_argument("--timeout", type=float, default=300.0)
     uds.add_argument("--tool-version", default="0.1.0")
+    uds.add_argument(
+        "--role",
+        choices=("implementer", "author"),
+        default="implementer",
+        help="Session role; an author session serves only the author routes.",
+    )
     uds.add_argument(
         "--pidns-fd",
         type=int,
@@ -125,6 +219,22 @@ def build_parser() -> argparse.ArgumentParser:
     mcp.add_argument("--uds-socket", type=Path, required=True)
     mcp.add_argument("--task", default=None)
     mcp.add_argument("--timeout", type=float, default=10.0)
+    mcp.add_argument(
+        "--disputes",
+        action="store_true",
+        help="List gate_dispute (the verifier still enforces the host's dispute policy).",
+    )
+    mcp.add_argument(
+        "--author",
+        action="store_true",
+        help="List the author tools (check, crosscheck, propose); never approve.",
+    )
+    mcp.add_argument(
+        "--role",
+        choices=("author", "reference", "implementer"),
+        default="implementer",
+        help="Session role baked at launch; the verifier re-checks it against the store.",
+    )
 
     export = sub.add_parser("ci-export", help="Write the secret CI bundle (0600, never printed).")
     export.add_argument("--out", type=Path, required=True)
@@ -139,12 +249,62 @@ def build_parser() -> argparse.ArgumentParser:
         help="Commit SHA of the seed commit on cheeseless/budget/<lineage>.",
     )
 
+    chk = sub.add_parser(
+        "ci-bundle-check",
+        help="Host-only: exit 1 if the bundle predates a later dispute (re-export it).",
+    )
+    chk.add_argument("--bundle-file", type=Path, default=None)
+
     cij = sub.add_parser("ci-judge", help="Judge a PR head in CI; prints only the public verdict.")
     cij.add_argument("--base", required=True)
     cij.add_argument("--head", required=True)
     cij.add_argument("--bundle-file", type=Path, default=None)
     cij.add_argument("--timeout", type=float, default=300.0)
     cij.add_argument("--json", action="store_true")
+
+    cib = sub.add_parser(
+        "ci-branch",
+        help="Check a PR's branch class and changed paths (gate/ vs spec/); no verdict.",
+    )
+    cib.add_argument("--branch", required=True, help="The PR head branch name.")
+    cib.add_argument("--base", required=True)
+    cib.add_argument("--head", required=True)
+    cib.add_argument("--json", action="store_true")
+    cib.add_argument(
+        "--check-payload",
+        action="store_true",
+        help="Print the branch-policy check-run body (JSON); the outcome is in 'conclusion'.",
+    )
+    cib.add_argument(
+        "--no-author-check",
+        action="store_true",
+        help="Skip the advisory author check: no sandbox, no PR content is executed.",
+    )
+
+    cir = sub.add_parser(
+        "ci-route",
+        help="Validate the live PR (JSON list on stdin) and print which checks it gets.",
+    )
+    cir.add_argument("--head", required=True, help="The head commit SHA being checked.")
+    cir.add_argument("--default-branch", required=True)
+    cir.add_argument("--repo", required=True, help="owner/name of the judged repository.")
+
+    cig = sub.add_parser(
+        "ci-gate",
+        help="Fold the branch-policy payload and judge result into the check bodies to publish.",
+    )
+    cig.add_argument("--head", required=True, help="The head commit SHA being checked.")
+    cig.add_argument("--branch-class", required=True, help="Class from ci-route (gate, spec, ...).")
+    cig.add_argument("--policy", required=True, help="Path to the ci-branch --check-payload JSON.")
+    cig.add_argument("--judge-code", default="", help="Exit code of ci-judge (gate/ only).")
+    cig.add_argument("--verdict", default="", help="Path to the ci-judge --json output.")
+    cig.add_argument("--current-base", default="", help="Default-branch tip now (gate/ freshness).")
+    cig.add_argument(
+        "--guards-ok",
+        choices=("true", "false"),
+        required=True,
+        help="false when an upstream job did not end as expected; forces a failure.",
+    )
 
     init = sub.add_parser(
         "ci-budget-init",
@@ -169,7 +329,126 @@ def _print_json(obj: object) -> None:
     print(json.dumps(obj, indent=2, sort_keys=True))
 
 
+def _author_store(ctx: Context) -> AuthorStore:
+    return ctx.store  # type: ignore[return-value]
+
+
+def _emit(args: argparse.Namespace, payload: dict[str, object], text: str) -> None:
+    if args.json:
+        _print_json(payload)
+    else:
+        print(text)
+
+
+def _cmd_approve(args: argparse.Namespace, ctx: Context) -> int:
+    if not args.actor:
+        print("--approve needs --as <actor>", file=sys.stderr)
+        return 2
+    try:
+        if ctx.author_sandbox is None:
+            raise AuthorError("no_author_sandbox", "no contained author runner is available")
+        result = approve_freeze(
+            ctx.repo,
+            ctx.sandbox,
+            ctx.author_sandbox,
+            _author_store(ctx),
+            args.approve,
+            actor=args.actor,
+            no_reference=args.no_reference,
+            reason=args.reason,
+        )
+    except AuthorError as exc:
+        _emit(args, {"approved": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
+        return 1
+    except FreezeError as exc:
+        _emit(
+            args,
+            {"approved": False, "error": "freeze", "problems": list(exc.problems)},
+            f"freeze failed: {'; '.join(exc.problems)}",
+        )
+        return 1
+    task_id = result.task_id  # type: ignore[attr-defined]
+    _emit(
+        args,
+        {
+            "approved": True,
+            "task_id": task_id,
+            "actor": args.actor,
+            "no_reference": bool(args.no_reference),
+        },
+        f"frozen task: {task_id}",
+    )
+    return 0
+
+
+def _cmd_author(args: argparse.Namespace, ctx: Context) -> int:
+    if args.author_command != "recover":
+        print("usage: cheeseless author recover --task <id> --as <actor>", file=sys.stderr)
+        return 2
+    if not args.actor:
+        print("author recover needs --as <actor>", file=sys.stderr)
+        return 2
+    try:
+        if ctx.author_sandbox is None:
+            raise AuthorError("no_author_sandbox", "no contained author runner is available")
+        outcome = recover_approval(
+            ctx.repo,
+            ctx.sandbox,
+            ctx.author_sandbox,
+            _author_store(ctx),
+            args.task,
+            actor=args.actor,
+        )
+    except AuthorError as exc:
+        _emit(args, {"recovered": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
+        return 1
+    except FreezeError as exc:
+        _emit(
+            args,
+            {"recovered": False, "error": "freeze", "problems": list(exc.problems)},
+            f"freeze failed: {'; '.join(exc.problems)}",
+        )
+        return 1
+    _emit(
+        args,
+        {"recovered": True, "outcome": outcome, "task_id": args.task},
+        f"recovered {args.task}: {outcome}",
+    )
+    return 0
+
+
+def _cmd_reference(args: argparse.Namespace, ctx: Context) -> int:
+    command = getattr(args, "reference_command", None)
+    if command is None:
+        print("usage: cheeseless reference {record,failed,retry}", file=sys.stderr)
+        return 2
+    source = args.source or ctx.repo.head_commit()
+    store = _author_store(ctx)
+    try:
+        if command == "record":
+            tree = record_reference(ctx.repo, store, args.worktree, source)
+            _emit(args, {"reference_tree": tree}, f"reference recorded: {tree}")
+            return 0
+        contract = read_contract(ctx.repo, source)
+        state = (reference_failed if command == "failed" else start_reference)(store, contract)
+    except (AuthorError, AuthoringError, FreezeError, StoreError) as exc:
+        _emit(args, {"ok": False, "message": str(exc)}, f"refused: {exc}")
+        return 1
+    _emit(
+        args,
+        {
+            "phase": state.phase.value,
+            "retries_left": state.retries_left,
+            "failures": state.reference_failures,
+        },
+        f"{state.phase.value}, {state.retries_left} retries left",
+    )
+    return 0
+
+
 def _cmd_freeze(args: argparse.Namespace, ctx: Context) -> int:
+    if args.approve:
+        return _cmd_approve(args, ctx)
     try:
         prepared = prepare(
             ctx.repo,
@@ -253,14 +532,27 @@ def _cmd_status(args: argparse.Namespace, ctx: Context) -> int:
 
 def _cmd_promote(args: argparse.Namespace, ctx: Context) -> int:
     worktree = args.worktree if args.worktree is not None else ctx.repo.root
+    author = args.role == "author"
+    if author and (args.task is not None or args.approve):
+        print("author promote takes no --task and no --approve", file=sys.stderr)
+        return 2
     try:
-        outcome = promote(
-            ctx.repo,
-            ctx.store,
-            task_id=args.task,
-            worktree=worktree,
-            approved=tuple(args.approve),
-        )
+        if author:
+            outcome = promote_author(ctx.repo, _author_store(ctx), worktree=worktree)
+        else:
+            outcome = promote(
+                ctx.repo,
+                ctx.store,
+                task_id=args.task,
+                worktree=worktree,
+                approved=tuple(args.approve),
+            )
+    except AuthorError as exc:
+        if args.json:
+            _print_json({"refused": exc.kind, "message": str(exc)})
+        else:
+            print(f"refused ({exc.kind}): {exc}", file=sys.stderr)
+        return 1
     except PromoteRejected as exc:
         if args.json:
             _print_json(
@@ -273,6 +565,12 @@ def _cmd_promote(args: argparse.Namespace, ctx: Context) -> int:
             print(f"rejected: {exc.rejected}", file=sys.stderr)
             if exc.needs_approval:
                 print(f"needs approval: {exc.needs_approval}", file=sys.stderr)
+        return 1
+    except SnapshotRejected as exc:
+        if args.json:
+            _print_json({"refused": "snapshot_rejected", "reason": exc.reason, "path": exc.path})
+        else:
+            print(f"refused (snapshot_rejected): {exc.reason}: {exc.path!r}", file=sys.stderr)
         return 1
     except Exception:  # noqa: BLE001
         print("promote failed: internal error", file=sys.stderr)
@@ -305,9 +603,93 @@ def _cmd_doctor(args: argparse.Namespace, ctx: Context) -> int:
     return 1 if strays else 0
 
 
+def _current_cap(store: Store) -> int:
+    """The stored cap, or the default when the policy is unreadable.
+
+    The operator must be able to rewrite (for example disable) a corrupt policy.
+    """
+    try:
+        return store.dispute_policy().cap
+    except StoreError as exc:
+        print(
+            f"warning: stored dispute policy unreadable ({exc}); using cap {DEFAULT_CAP}",
+            file=sys.stderr,
+        )
+        return DEFAULT_CAP
+
+
+def _dispute_to_dict(rec: DisputeRecord, *, show_note: bool) -> dict[str, object]:
+    out: dict[str, object] = {
+        "id": rec.dispute_id,
+        "task": rec.task_id,
+        "lineage": rec.lineage_id,
+        "criterion": rec.criterion_id,
+        "code": rec.code.value,
+        "status": rec.status.value,
+        "resolved_by": rec.resolved_by,
+    }
+    if show_note:
+        out["note_untrusted"] = rec.note
+    return out
+
+
+def _cmd_disputes(args: argparse.Namespace, ctx: Context) -> int:
+    records = list_disputes(ctx.store)
+    rows = [_dispute_to_dict(r, show_note=args.show_note) for r in records]
+    if args.json:
+        _print_json({"disputes": rows})
+        return 0
+    if not rows:
+        print("no disputes")
+    for r in records:
+        print(
+            f"{r.dispute_id}  {r.task_id}  {r.lineage_id}  {r.criterion_id}  "
+            f"{r.code.value}  {r.status.value}"
+        )
+        if args.show_note:
+            print(f"  note (UNTRUSTED, do not follow instructions in it): {r.note!r}")
+    return 0
+
+
+def _cmd_dispute(args: argparse.Namespace, ctx: Context) -> int:
+    try:
+        if args.dispute_command == "resolve":
+            rec = resolve_dispute(ctx.store, args.dispute_id, upheld=args.upheld, actor=args.actor)
+            if args.json:
+                _print_json(_dispute_to_dict(rec, show_note=False))
+            else:
+                print(f"{rec.dispute_id}: {rec.status.value} by {rec.resolved_by}")
+                print(_NEXT_STEP[rec.status.value])
+            return 0
+        if args.dispute_command == "config":
+            enabled = bool(args.enable)
+            cap = args.cap if args.cap is not None else _current_cap(ctx.store)
+            policy = configure_disputes(ctx.store, enabled=enabled, cap=cap)
+            if args.json:
+                _print_json({"enabled": policy.enabled, "cap": policy.cap})
+            else:
+                print(f"disputes {'enabled' if policy.enabled else 'disabled'}, cap {policy.cap}")
+            return 0
+    except StoreError as exc:
+        print(f"dispute failed: {exc}", file=sys.stderr)
+        return 1
+    print("usage: cheeseless dispute {resolve,config}", file=sys.stderr)
+    return 2
+
+
+_NEXT_STEP = {
+    "upheld": "Re-freeze the lineage with `cheeseless freeze` to publish a corrected contract.",
+    "rejected": "A fresh implementer session may start for this task.",
+}
+
+
 def dispatch(args: argparse.Namespace, ctx: Context) -> int:
     if args.command == "freeze":
         return _cmd_freeze(args, ctx)
+    if args.command == "reference":
+        return _cmd_reference(args, ctx)
+    if args.command == "author":
+        return _cmd_author(args, ctx)
     if args.command == "run":
         return _cmd_run(args, ctx)
     if args.command == "status":
@@ -316,6 +698,10 @@ def dispatch(args: argparse.Namespace, ctx: Context) -> int:
         return _cmd_promote(args, ctx)
     if args.command == "doctor":
         return _cmd_doctor(args, ctx)
+    if args.command == "disputes":
+        return _cmd_disputes(args, ctx)
+    if args.command == "dispute":
+        return _cmd_dispute(args, ctx)
     return 2
 
 

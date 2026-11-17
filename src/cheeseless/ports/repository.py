@@ -33,6 +33,10 @@ class Repository(Protocol):
 
     def head_commit(self) -> str: ...
 
+    def default_branch_commit(self) -> str:
+        """Commit of the trusted default branch; ``RepositoryError`` if it cannot be resolved."""
+        ...
+
     def tree_of(self, commit: str, path: str = "") -> str:
         """Tree oid of ``path`` in ``commit`` ("" means the root tree)."""
         ...
@@ -45,8 +49,12 @@ class Repository(Protocol):
 
     def show(self, commit: str, path: str) -> bytes: ...
 
-    def tree_without(self, tree: str, prefix: str, keep: str) -> str:
+    def tree_without(self, tree: str, prefix: str, keep: str | Sequence[str]) -> str:
         """``tree`` minus everything under ``prefix`` except ``keep``."""
+        ...
+
+    def replace_subtree(self, tree: str, prefix: str, source_tree: str, keep: str) -> str:
+        """``tree`` minus everything under ``prefix``, plus ``source_tree``'s ``keep`` entries."""
         ...
 
     def snapshot(self, worktree: Path) -> str:

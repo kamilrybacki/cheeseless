@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
@@ -48,8 +49,12 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.audit import StoreAuditSink
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.egress_supervisor import EgressBlock, EgressSupervisor
+from cheeseless.app.reference_view import reference_tree
 from cheeseless.domain.budget import Pool
+from cheeseless.domain.dlp import Fingerprints
 from cheeseless.domain.egress_policy import EgressPolicy, PolicyError
+from cheeseless.domain.session_role import SessionRole, acceptance_mount, parse_role
+from cheeseless.ports.store import Store, StoreError
 from cheeseless.session_files import copy_evidence, seed_home, write_projection_list
 from cheeseless.session_options import (
     SessionExtras,
@@ -86,7 +91,14 @@ def _state_home(state_dir: Path | None) -> Path:
 def build_context(state_dir: Path | None = None, cwd: Path | None = None) -> Context:
     repo = GitRepository.discover(cwd or Path.cwd())
     store = FileStore(store_root(repo.common_dir(), _state_home(state_dir)))
-    return Context(repo=repo, runner=PytestRunner(), sandbox=BwrapSandbox(), store=store)
+    sandbox = BwrapSandbox(protected=[store.root, repo.root])
+    return Context(
+        repo=repo,
+        runner=PytestRunner(),
+        sandbox=sandbox,
+        store=store,
+        author_sandbox=sandbox,
+    )
 
 
 def _pool(profile: str) -> Pool:
@@ -349,24 +361,51 @@ def _link_or_copy(source: str, destination: str) -> str:
     return destination
 
 
-def _mcp_shim_source(python: str, site: Path, socket_path: Path, task_id: str) -> str:
+def _disputes_enabled(store: Store) -> bool:
+    """The host's dispute switch, read from the trusted store; any error means off."""
+    try:
+        return store.dispute_policy().enabled
+    except Exception:  # noqa: BLE001 - fail closed: an unreadable policy hides the tool
+        return False
+
+
+def _mcp_shim_source(
+    python: str,
+    site: Path,
+    socket_path: Path,
+    task_id: str,
+    *,
+    disputes: bool = False,
+    role: SessionRole = SessionRole.IMPLEMENTER,
+) -> str:
     """The staged MCP stdio shim; socket and task are quoted literals, never env.
 
     A client that filters ``CHEESELESS_SOCKET``/``CHEESELESS_TASK`` out of the MCP
     server environment, or that sets conflicting values, still reaches the one verifier
     UDS this session created for the one frozen task. Nothing mutable (the projection or
-    the environment) can redirect it.
+    the environment) can redirect it. The dispute switch is a literal too, so the
+    agent cannot make ``gate_dispute`` appear; the verifier still enforces the policy.
+    The role is baked the same way, but only for non-implementer roles: the implementer's
+    shim stays byte-identical to the pre-role one.
     """
+    role_arg = "" if role is SessionRole.IMPLEMENTER else f", role={role.value!r}"
     return (
         f"#!{python}\n"
         "import sys\n"
         f"sys.path.insert(0, {str(site)!r})\n"
         "from cheeseless.bootstrap import serve_mcp\n"
-        f"raise SystemExit(serve_mcp({str(socket_path)!r}, task_id={task_id!r}))\n"
+        f"raise SystemExit(serve_mcp({str(socket_path)!r}, task_id={task_id!r}, "
+        f"disputes={bool(disputes)!r}{role_arg}))\n"
     )
 
 
-def _stage_runtime(socket_path: Path, task_id: str) -> TrustedRuntime:
+def _stage_runtime(
+    socket_path: Path,
+    task_id: str,
+    *,
+    disputes: bool = False,
+    role: SessionRole = SessionRole.IMPLEMENTER,
+) -> TrustedRuntime:
     """Stage the agent client runtime outside the repo; the sandbox mounts it read-only.
 
     The sandbox mounts only this staging directory, never the repository, the venv
@@ -405,7 +444,7 @@ def _stage_runtime(socket_path: Path, task_id: str) -> TrustedRuntime:
     mcp = bin_dir / "cheeseless-mcp"
     python = os.path.realpath(sys.executable)
     mcp.write_text(
-        _mcp_shim_source(python, site, socket_path, task_id),
+        _mcp_shim_source(python, site, socket_path, task_id, disputes=disputes, role=role),
         encoding="utf-8",
     )
     os.chmod(mcp, 0o500)
@@ -464,6 +503,7 @@ def serve_uds(
     expected_pidns_inode: int | None = None,
     expected_pidns_fd: int | None = None,
     namespace_fd: int | None = None,
+    role: str = "implementer",
 ) -> int:
     ctx = build_context(state_dir, cwd)
     if task_id is None:
@@ -475,6 +515,9 @@ def serve_uds(
         directory = _private_dir("cheeseless-uds-")
         socket_path = directory / "verifier.sock"
         dir_owned = True
+    session_id, binding = (
+        (None, None) if task_id is None else ctx.store.register_session(task_id, role)
+    )
     session = SessionConfig(
         task_id=task_id,
         worktree=worktree,
@@ -490,12 +533,18 @@ def serve_uds(
         expected_pidns_inode=expected_pidns_inode,
         expected_pidns_fd=expected_pidns_fd,
         namespace_fd=namespace_fd,
+        role=role,
+        session_id=session_id,
+        generation=None if binding is None else binding.generation,
+        author_sandbox=ctx.sandbox if role == "author" else None,  # type: ignore[arg-type]
     )
     server = UdsVerifierServer(socket_path, session, socket_dir_owned=dir_owned)
     try:
         server.serve_forever()
     finally:
         session.close_namespace_fds()
+        if session_id is not None:
+            _end_session_reported(ctx.store, session_id, task_id)
     return 0
 
 
@@ -504,12 +553,16 @@ def serve_mcp(
     *,
     task_id: str | None = None,
     timeout: float = 10.0,
+    disputes: bool = False,
+    author: bool = False,
+    role: str = "implementer",
 ) -> int:
     """MCP stdio server. It needs only the verifier socket and task, never a store."""
     if uds_socket is None:
         raise ValueError("uds_socket is required")
-    client = UdsVerifierClient(uds_socket, task_id=task_id, timeout=timeout)
-    run_stdio(build_mcp_server(client))
+    bound = parse_role(role)
+    client = UdsVerifierClient(uds_socket, task_id=task_id, timeout=timeout, role=bound.value)
+    run_stdio(build_mcp_server(client, disputes=disputes, author=author, role=bound))
     return 0
 
 
@@ -534,6 +587,7 @@ def _run_session_command(args: Any, agent: list[str] | None) -> int:
             extra_env=env,
             evidence_dir=args.evidence_dir,
             projection_dir=args.projection,
+            role=args.role,
         )
     except (SessionOptionError, PolicyError) as exc:
         print(f"session: {exc}", file=sys.stderr)
@@ -562,21 +616,67 @@ def main(argv: list[str] | None = None) -> int:
             timeout=getattr(args, "timeout", 300.0),
             tool_version=getattr(args, "tool_version", "0.1.0"),
             expected_pidns_fd=getattr(args, "pidns_fd", None),
+            role=getattr(args, "role", "implementer"),
         )
     if args.command == "serve-mcp":
         return serve_mcp(
             uds_socket=getattr(args, "uds_socket", None),
             task_id=getattr(args, "task", None),
             timeout=getattr(args, "timeout", 10.0),
+            disputes=bool(getattr(args, "disputes", False)),
+            author=bool(getattr(args, "author", False)),
+            role=getattr(args, "role", "implementer"),
         )
     if args.command == "session":
         return _run_session_command(args, agent)
-    if args.command in ("ci-export", "ci-judge", "ci-budget-init"):
+    if args.command in (
+        "ci-export",
+        "ci-bundle-check",
+        "ci-judge",
+        "ci-budget-init",
+        "ci-branch",
+        "ci-route",
+        "ci-gate",
+    ):
         from cheeseless.bootstrap_ci import run as run_ci  # noqa: PLC0415 - avoids a cycle
 
         return run_ci(args)
     ctx = build_context(getattr(args, "state_dir", None))
     return dispatch(args, ctx)
+
+
+def _end_session_reported(store: Any, session_id: str, task_id: str | None) -> None:
+    """Teardown must not raise, but a failed ``end_session`` is reported, never swallowed.
+
+    A stale record stays unreachable (the id is random), so this is non-fatal; the operator
+    still learns that the state directory could not be cleaned.
+    """
+    try:
+        store.end_session(session_id)
+    except Exception as exc:  # noqa: BLE001 - teardown is best effort, but loud
+        print(
+            f"session teardown: end_session failed for session {session_id} "
+            f"(task {task_id}): {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+
+def _projection_tree(repo: Any, frozen: Any, role: SessionRole) -> str:
+    """The tree a session's projection repo is built from.
+
+    A reference session never sees a test, so its tree is cut down to the allowlist before the
+    projection's ``.git`` is written, before or after a freeze.
+    """
+    tree = frozen.projection_tree if frozen is not None else repo.tree_of(repo.head_commit())
+    return reference_tree(repo, tree) if role is SessionRole.REFERENCE else tree
+
+
+def _close_pins(pins: list[tuple[int, str]]) -> None:
+    """Close and forget every pinned fd (idempotent: the list is emptied)."""
+    while pins:
+        fd, _ = pins.pop()
+        with contextlib.suppress(OSError):
+            os.close(fd)
 
 
 @contextmanager
@@ -599,6 +699,7 @@ def host_session(
     home_seed: Mapping[str, Path] | None = None,
     extra_env: Mapping[str, str] | None = None,
     evidence_dir: Path | None = None,
+    role: SessionRole | str = SessionRole.IMPLEMENTER,
 ) -> Iterator[dict[str, Any]]:
     """Run one isolated agent session with authenticated verifier and DLP egress.
 
@@ -611,16 +712,28 @@ def host_session(
     ``extra_read_only``, ``home_seed`` and ``extra_env`` are opt-in and validated against
     the protected locations (and their ancestors) before anything starts; ``extra_env``
     is additive and can never override a variable the session sets.
+
+    ``role`` is bound by the host at launch and recorded in the trusted store; the agent
+    cannot choose or change it. An implementer needs a FROZEN task and keeps the read-only
+    acceptance mount. An author or reference session works on the pre-freeze spec tree
+    (HEAD): the author's acceptance tree stays writable, the reference's is hidden.
     """
+    bound = parse_role(role) if isinstance(role, str) else role
     ctx = build_context(state_dir, cwd)
     if task_id is None:
         task_id = ctx.store.active_task_id()
     if task_id is None:
         raise ValueError("no active task")
-    frozen, _ = ctx.store.load_task(task_id)
+    if bound is SessionRole.IMPLEMENTER:
+        frozen: Any = ctx.store.load_task(task_id)[0]
+    else:
+        try:
+            frozen = ctx.store.load_task(task_id)[0]
+        except StoreError:
+            frozen = None  # pre-freeze: there are no hidden blobs to withhold yet
     protected = _protected_roots(ctx, state_dir, projection_dir, socket_dir)
     hidden_inodes: frozenset[tuple[int, int]] = frozenset()
-    if extra_read_only or home_seed:
+    if (extra_read_only or home_seed) and frozen is not None:
         hidden_inodes = _hidden_inodes(ctx, frozen, state_dir)
     extras = _validate_extras(protected, hidden_inodes, extra_read_only, home_seed, extra_env)
 
@@ -638,6 +751,8 @@ def host_session(
     proc: subprocess.Popen[Any] | None = None
     ns_fd: int | None = None
     seccomp_fd: int | None = None
+    acceptance_fd: int | None = None
+    contract_pins: list[tuple[int, str]] = []
     ready_path: Path | None = None
     egress_ready: Path | None = None
     blocked = threading.Event()
@@ -652,12 +767,18 @@ def host_session(
             raise RuntimeError("host sessions require the bubblewrap sandbox")
         bwrap = sandbox.binary()
         fingerprints = ctx.store.load_fingerprints(task_id)
-        if fingerprints is None:
+        if fingerprints is None and bound is SessionRole.IMPLEMENTER:
             raise RuntimeError("the frozen task has no DLP fingerprints; re-freeze it")
+        if fingerprints is None:
+            # Pre-freeze there is nothing hidden to fingerprint; the egress policy still applies.
+            fingerprints = Fingerprints(task_id=task_id, k=8, kgrams=frozenset(), literals=())
         policy = egress_policy or EgressPolicy(allowed_hosts=frozenset())
         identity_markers = {
             marker
-            for marker in (frozen.contract.lineage_id, Path(ctx.repo.root).name.lower())
+            for marker in (
+                frozen.contract.lineage_id if frozen is not None else "",
+                Path(ctx.repo.root).name.lower(),
+            )
             if marker
         }
         policy = replace(
@@ -693,13 +814,19 @@ def host_session(
         if _within(egress_dir, projection_dir) or _within(egress_dir, socket_dir_path):
             raise RuntimeError("egress directory must be separate from the session paths")
         egress_socket = egress_dir / "egress.sock"
-        runtime = _stage_runtime(socket_path, task_id)
+        runtime = _stage_runtime(
+            socket_path, task_id, disputes=_disputes_enabled(ctx.store), role=bound
+        )
 
-        ctx.repo.create_projection(frozen.projection_tree, projection_dir)
-        strays = ctx.repo.stray_hidden(projection_dir, frozen.hidden_blobs)
+        tree = _projection_tree(ctx.repo, frozen, bound)
+        ctx.repo.create_projection(tree, projection_dir)
+        strays = (
+            ctx.repo.stray_hidden(projection_dir, frozen.hidden_blobs) if frozen is not None else []
+        )
         if strays:
             raise RuntimeError(f"stray hidden material in the projection: {strays}")
 
+        session_id, binding = ctx.store.register_session(task_id, bound.value)
         session = SessionConfig(
             task_id=task_id,
             worktree=projection_dir,
@@ -712,6 +839,10 @@ def host_session(
             runner=ctx.runner,
             sandbox=sandbox,
             dlp=scanner_for(ctx.store, task_id),
+            role=bound.value,
+            author_sandbox=sandbox if bound is SessionRole.AUTHOR else None,
+            session_id=session_id,
+            generation=binding.generation,
         )
         server = UdsVerifierServer(socket_path, session, socket_dir_owned=dir_owned)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -787,9 +918,18 @@ def host_session(
         command = _bridge_command(python, ready_path, egress_ready, agent_args)
 
         seccomp_fd = seccomp.program_fd()
+        mount_mode = acceptance_mount(bound)
+        if mount_mode == "ro":
+            acceptance_fd = profiles.open_acceptance(projection_dir)
+        elif mount_mode == "contract":
+            contract_pins = profiles.open_contract_files(projection_dir)
+        pinned_acceptance = acceptance_fd
         env = _merge_env(agent_env, egress_ready_env, extras.env)
 
-        pinned_read_only = tuple((mount.fd, str(mount.path)) for mount in extras.read_only)
+        pinned_read_only = (
+            *((mount.fd, str(mount.path)) for mount in extras.read_only),
+            *((fd, dest) for fd, dest in contract_pins),
+        )
 
         def build_argv(info_fd: int) -> list[str]:
             return profiles.agent(
@@ -798,6 +938,8 @@ def host_session(
                 sockets=[socket_path, egress_socket],
                 home=home_dir,
                 read_only=[runtime.root, python_root, proxy.ca_cert_path],
+                acceptance_fd=pinned_acceptance,
+                acceptance_mode=mount_mode,
                 pinned_read_only=pinned_read_only,
                 env=env,
                 command=command,
@@ -805,11 +947,19 @@ def host_session(
                 info_fd=info_fd,
             )
 
-        mount_fds = tuple(mount.fd for mount in extras.read_only)
-        proc, ns_fd = _launch_agent(build_argv, (*mount_fds, seccomp_fd), stdio=agent_stdio)
+        mount_fds = (*(mount.fd for mount in extras.read_only), *(fd for fd, _ in contract_pins))
+        proc, ns_fd = _launch_agent(
+            build_argv,
+            (*mount_fds, seccomp_fd, *(() if acceptance_fd is None else (acceptance_fd,))),
+            stdio=agent_stdio,
+        )
         holder["proc"] = proc
         os.close(seccomp_fd)
         seccomp_fd = None
+        if acceptance_fd is not None:
+            os.close(acceptance_fd)
+            acceptance_fd = None
+        _close_pins(contract_pins)
         session.expected_pidns_fd = ns_fd
         _wait_for_bridge(egress_ready, proc)
         ready_path.write_text("ready\n", encoding="ascii")
@@ -845,12 +995,16 @@ def host_session(
             thread.join(timeout=SESSION_START_TIMEOUT)
         if session is not None:
             session.close_namespace_fds()
+            if session.session_id is not None:
+                _end_session_reported(ctx.store, session.session_id, task_id)
         ns_fd = None
-        if seccomp_fd is not None:
-            try:
-                os.close(seccomp_fd)
-            except OSError:
-                pass
+        _close_pins(contract_pins)
+        for leftover in (seccomp_fd, acceptance_fd):
+            if leftover is not None:
+                try:
+                    os.close(leftover)
+                except OSError:
+                    pass
         if home_dir is not None:
             force_remove(home_dir)
         if egress_dir is not None:
