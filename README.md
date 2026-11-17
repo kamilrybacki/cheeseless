@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/cheeseless-logo.png" alt="cheeseless: agent countermeasures" width="360">
+</p>
+
 # cheeseless
 
 A git-native black-box quality gate for coding agents: frozen acceptance tests the agent
