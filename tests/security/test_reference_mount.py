@@ -2,7 +2,6 @@
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 from cheeseless.adapters.outbound.sandbox import profiles
@@ -62,7 +61,9 @@ def _run(tmp_path: Path) -> list[str]:
             acceptance_fd=fd,
             acceptance_mode=mode,
         )
-        out = subprocess.run(argv, capture_output=True, text=True, pass_fds=(fd,), timeout=60)
+        out = subprocess.run(  # noqa: S603
+            argv, capture_output=True, text=True, pass_fds=(fd,), timeout=60
+        )
     finally:
         os.close(fd)
     assert out.returncode == 0, out.stderr

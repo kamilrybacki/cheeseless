@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
@@ -959,10 +960,8 @@ def host_session(
         if session is not None:
             session.close_namespace_fds()
             if session.session_id is not None:
-                try:
+                with contextlib.suppress(Exception):  # a stale record is unreachable: random id
                     ctx.store.end_session(session.session_id)
-                except Exception:  # noqa: BLE001 - a stale record is unreachable: random id
-                    pass
         ns_fd = None
         for leftover in (seccomp_fd, acceptance_fd):
             if leftover is not None:
