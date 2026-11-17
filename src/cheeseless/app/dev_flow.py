@@ -15,7 +15,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from cheeseless.domain.dev_session import DevPhase, DevSessionError, resume_target
+from cheeseless.domain.reference_attempt import ReferenceState
 from cheeseless.ports.dev_session import DevSessionStore
+from cheeseless.ports.reference_attempt import ReferenceAttemptStore
 
 CREDENTIAL_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 CREDENTIAL_HINT = "claude setup-token"
@@ -23,6 +25,10 @@ CREDENTIAL_HINT = "claude setup-token"
 
 class DevFlowError(Exception):
     """A precondition of the dev loop does not hold; nothing has been staged."""
+
+
+class DevTestsPhaseError(DevFlowError):
+    """The tests phase cannot close yet; the message says which check failed."""
 
 
 def require_clean_tree(dirty: Callable[[], bool] | bool) -> None:
@@ -97,12 +103,47 @@ def start_phase(store: DevSessionStore, lineage_id: str) -> PhaseStart:
     )
 
 
+def reference_ready(store: ReferenceAttemptStore, lineage_id: str, spec_digest: str) -> bool:
+    """True when the tests phase of ``lineage_id`` may close for ``spec_digest``.
+
+    The reference attempt for *this* spec must be ``done`` and carry a snapshot: a
+    ``running``, ``failed`` or ``cancelled`` attempt is not a pass, and a ``done`` attempt
+    of another digest is stale. Read-only: it never writes, so calling it cannot move an
+    attempt or bind a snapshot.
+
+    A crosscheck is required as well and is checked by ``author_crosscheck`` and
+    ``_crosscheck_problem`` at freeze time; this predicate answers only the reference half.
+    """
+    attempts = [
+        attempt
+        for attempt in store.reference_attempts(lineage_id)
+        if attempt.spec_digest == spec_digest
+    ]
+    if not attempts:
+        seen = store.reference_attempts(lineage_id)
+        if seen:
+            raise DevTestsPhaseError(
+                "the reference is stale: it ran for another spec, run it again"
+            )
+        raise DevTestsPhaseError("no reference has run for this spec yet")
+    attempt = attempts[-1]
+    if attempt.state is not ReferenceState.DONE:
+        raise DevTestsPhaseError(
+            f"the reference is {attempt.state.value}: it must be done before the tests close"
+        )
+    if attempt.result_tree is None:
+        raise DevTestsPhaseError("the reference is done but has no snapshot bound to it")
+    return True
+
+
 __all__ = [
     "CREDENTIAL_HINT",
     "CREDENTIAL_VAR",
     "DevFlowError",
     "PhaseStart",
+    "DevTestsPhaseError",
     "require_clean_tree",
     "require_token",
     "start_phase",
+    "reference_ready",
 ]

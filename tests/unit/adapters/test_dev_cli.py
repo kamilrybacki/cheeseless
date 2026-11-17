@@ -88,3 +88,70 @@ def test_json_output_is_one_object(flag, toy_repo: Path, tmp_path, monkeypatch, 
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "dev:" in captured.err
+
+
+# -- the tests phase ----------------------------------------------------------
+
+
+def _in_tests_phase(toy_repo: Path, state_dir: Path) -> None:
+    """Record a tests-phase dev session in the same store the CLI will resolve."""
+    from cheeseless.adapters.outbound.git.repository import GitRepository
+    from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
+    from cheeseless.app.dev_session import open_session
+
+    repo = GitRepository.discover(toy_repo)
+    store = FileStore(store_root(repo.common_dir(), state_dir))
+    state = open_session(store, "demo", resume=False)[0]
+    author = "0b7d4c1e-2f3a-4b5c-8d9e-0f1a2b3c4d5e"
+    store.save_dev_state(state.author_started(author).spec_done("1" * 64))
+
+
+def test_the_tests_phase_refuses_without_a_done_reference(
+    toy_repo: Path, tmp_path, monkeypatch, capsys
+) -> None:
+    from cheeseless.bootstrap_dev import run_dev_command
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "t")
+    monkeypatch.chdir(toy_repo)
+    state_dir = tmp_path / "state"
+    _in_tests_phase(toy_repo, state_dir)
+    args = build_parser().parse_args(
+        ["dev", "--lineage", "demo", "--resume", "--state-dir", str(state_dir)]
+    )
+    assert run_dev_command(args, ["/bin/true"]) == 1
+    captured = capsys.readouterr()
+    assert "reference is stale" in captured.err or "no reference" in captured.err
+
+
+def test_the_tests_phase_points_at_the_reference_command(
+    toy_repo: Path, tmp_path, monkeypatch, capsys
+) -> None:
+    from cheeseless.bootstrap_dev import run_dev_command
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "t")
+    monkeypatch.chdir(toy_repo)
+    state_dir = tmp_path / "state"
+    _in_tests_phase(toy_repo, state_dir)
+    args = build_parser().parse_args(
+        ["dev", "--lineage", "demo", "--resume", "--state-dir", str(state_dir)]
+    )
+    run_dev_command(args, ["/bin/true"])
+    assert "dev-reference" in capsys.readouterr().err
+
+
+def test_the_tests_phase_never_approves_a_freeze(
+    toy_repo: Path, tmp_path, monkeypatch, capsys
+) -> None:
+    """ADR 0013: the host may approve as cheeseless-dev only after a strength review."""
+    from cheeseless.bootstrap_dev import run_dev_command
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "t")
+    monkeypatch.chdir(toy_repo)
+    state_dir = tmp_path / "state"
+    _in_tests_phase(toy_repo, state_dir)
+    args = build_parser().parse_args(
+        ["dev", "--lineage", "demo", "--resume", "--state-dir", str(state_dir)]
+    )
+    run_dev_command(args, ["/bin/true"])
+    output = capsys.readouterr()
+    assert "cheeseless-dev" not in output.out + output.err

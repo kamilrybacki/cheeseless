@@ -31,6 +31,7 @@ from cheeseless.app.dev_flow import (
     CREDENTIAL_VAR,
     DevFlowError,
     PhaseStart,
+    reference_ready,
     require_clean_tree,
     require_token,
     start_phase,
@@ -39,6 +40,7 @@ from cheeseless.app.dev_session import open_session
 from cheeseless.bootstrap import build_context, host_session
 from cheeseless.domain.dev_session import DevSessionError, DevState
 from cheeseless.ports.dev_session import DevSessionStore
+from cheeseless.ports.reference_attempt import ReferenceAttemptStore
 
 # Only the author interviews the user, so only it needs the user's own CLI credential.
 _AUTHOR_ROLE = "author"
@@ -65,7 +67,7 @@ def _next_instruction(start: PhaseStart, lineage: str) -> str:
 
 def _preflight(
     args: argparse.Namespace, agent: Sequence[str] | None
-) -> tuple[str, DevState, PhaseStart]:
+) -> tuple[str, DevState, PhaseStart, DevSessionStore]:
     """Everything that must hold before a phase is staged; raises ``DevFlowError``."""
     lineage = args.lineage
     ctx = build_context(getattr(args, "state_dir", None), None)
@@ -78,13 +80,13 @@ def _preflight(
     if start.role == _AUTHOR_ROLE:
         # The author's credential comes from the environment only (ADR 0013).
         require_token(os.environ.get(CREDENTIAL_VAR))
-    return lineage, state, start
+    return lineage, state, start, store
 
 
 def run_dev_command(args: argparse.Namespace, agent: Sequence[str] | None) -> int:
     """Drive one dev phase. ``agent`` is the argv after ``--``, as for ``session``."""
     try:
-        lineage, state, start = _preflight(args, agent)
+        lineage, state, start, store = _preflight(args, agent)
     except DevFlowError as exc:
         print(f"dev: {exc}", file=sys.stderr)
         return 1
@@ -105,9 +107,32 @@ def run_dev_command(args: argparse.Namespace, agent: Sequence[str] | None) -> in
         + _next_instruction(start, lineage),
     )
     if start.reference:
-        # The reference is its own host process (ADR 0014); never nest a second sandbox.
-        return 0
+        return _tests_phase(args, lineage, start, store)
     return _run_session(args, start, list(agent or ()))
+
+
+def _tests_phase(
+    args: argparse.Namespace, lineage: str, start: PhaseStart, store: DevSessionStore
+) -> int:
+    """The tests phase cannot close without a done reference (ADR 0013 point 3).
+
+    The reference is its own host process (ADR 0014), so this reports the next command
+    rather than nesting a second sandbox. It never approves a freeze: ADR 0013 lets the
+    host approve as ``cheeseless-dev`` only after a strength review, and no store record
+    can prove one yet (planning/dev-tests-phase.md, D13-6a).
+    """
+    digest = start.spec_digest or ""
+    try:
+        ready = reference_ready(cast(ReferenceAttemptStore, store), lineage, digest)
+    except DevFlowError as exc:
+        print(f"dev: {exc}\n{_next_instruction(start, lineage)}", file=sys.stderr)
+        return 1
+    _emit(
+        args,
+        {"lineage": lineage, "reference_ready": ready, "spec_digest": digest},
+        "the reference is done for this spec: run `cheeseless freeze` to propose and approve",
+    )
+    return 0 if ready else 1
 
 
 def _run_session(
