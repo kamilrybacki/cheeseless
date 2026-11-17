@@ -49,3 +49,27 @@ def test_launch_host_session_returns_when_the_agent_exits(toy_repo, tmp_path):
         agent_command=["/bin/true"],
     )
     assert code == 0
+
+
+def test_launch_agent_rejects_pty_with_stdio():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _launch_agent(lambda fd: ["true"], (), stdio=True, pty_slave=0)
+
+
+def test_launch_agent_gives_the_pty_slave_to_all_three_stdio_streams(monkeypatch):
+    import subprocess
+
+    seen: dict[str, object] = {}
+
+    class _Stop(Exception):
+        pass
+
+    def fake_popen(argv, **kwargs):
+        seen.update(kwargs)
+        raise _Stop
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    with pytest.raises(_Stop):
+        _launch_agent(lambda fd: ["true"], (), pty_slave=77)
+    assert (seen["stdin"], seen["stdout"], seen["stderr"]) == (77, 77, 77)
+    assert seen["close_fds"] is True

@@ -22,7 +22,7 @@ ENV_LIMIT = 32
 _ENV_KEY = re.compile(r"[A-Z_][A-Z0-9_]{0,63}")
 # The candidate sandbox owns these; a contract may not override them.
 _RESERVED_ENV = frozenset({"PATH", "HOME", "TMPDIR", "PWD", "SHELL", "USER", "LOGNAME"})
-_RESERVED_ENV_PREFIXES = ("LD_", "CHEESELESS_", "PYTEST_", "BASH_")
+_RESERVED_ENV_PREFIXES = ("LD_", "CHEESELESS_", "PYTEST_", "BASH_", "TMUX")
 _TOP_KEYS = frozenset({"task", "build", "run", "env", "criteria"})
 _CRITERION_KEYS = frozenset({"id", "description"})
 

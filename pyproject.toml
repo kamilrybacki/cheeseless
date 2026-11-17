@@ -119,6 +119,7 @@ modules = [
     "cheeseless.adapters.outbound.store",
     "cheeseless.adapters.outbound.egress",
     "cheeseless.adapters.outbound.ci",
+    "cheeseless.adapters.outbound.pane",
 ]
 
 [[tool.importlinter.contracts]]

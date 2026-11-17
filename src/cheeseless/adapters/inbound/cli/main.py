@@ -194,6 +194,11 @@ def build_parser() -> argparse.ArgumentParser:
     cfg.add_argument("--cap", type=int, default=None, help="Disputes allowed per lineage.")
     cfg.add_argument("--json", action="store_true")
 
+    relay = sub.add_parser(
+        "pane-relay", help="Attach this terminal to a reference pane relay (host-side)."
+    )
+    relay.add_argument("--socket", type=Path, required=True, help="Relay socket path.")
+
     uds = sub.add_parser("serve-uds", help="Run the verifier UDS server for one session.")
     uds.add_argument("--socket", type=Path, default=None)
     uds.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)

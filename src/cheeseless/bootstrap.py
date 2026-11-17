@@ -270,13 +270,22 @@ def _launch_agent(
     pass_fds: tuple[int, ...],
     *,
     stdio: bool = False,
+    pty_slave: int | None = None,
     timeout: float = SESSION_START_TIMEOUT,
 ) -> tuple[subprocess.Popen[Any], int]:
     """Start bwrap with ``--info-fd`` and pin the sandbox PID namespace.
 
     Reading the info pipe is bounded: a child that never reports readiness, or a
     pipe that stays open, cannot hang the host. Any failure tears the child down.
+
+    ``pty_slave`` is the opt-in pty mode (ADR 0014): the slave of a pty pair dedicated to
+    this sandbox becomes the child's stdin, stdout and stderr. The caller keeps the master
+    and closes the slave after this returns. ``--new-session`` stays in the profile, so the
+    child cannot use ``TIOCSTI`` against the host terminal; it only ever sees this pty.
+    ``pty_slave`` and ``stdio`` are mutually exclusive.
     """
+    if pty_slave is not None and stdio:
+        raise ValueError("pty_slave and stdio are mutually exclusive")
     read_fd, write_fd = os.pipe()
     proc: subprocess.Popen[Any] | None = None
     try:
@@ -285,8 +294,9 @@ def _launch_agent(
             argv,
             pass_fds=(*pass_fds, write_fd),
             close_fds=True,
-            stdin=subprocess.PIPE if stdio else None,
-            stdout=subprocess.PIPE if stdio else None,
+            stdin=pty_slave if pty_slave is not None else (subprocess.PIPE if stdio else None),
+            stdout=pty_slave if pty_slave is not None else (subprocess.PIPE if stdio else None),
+            stderr=pty_slave,
             text=stdio,
         )
     except BaseException:
@@ -619,6 +629,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 2
+    if args.command == "pane-relay":
+        from cheeseless.adapters.inbound.cli.pane_client import run_pane_client  # noqa: PLC0415
+
+        return run_pane_client(args.socket)
     if args.command == "serve-uds":
         return serve_uds(
             socket_path=getattr(args, "socket", None),
