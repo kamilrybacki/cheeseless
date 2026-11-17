@@ -1,7 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-11-17
-reviewers: []
+reviewers: [gpt-6.1-sol]
 ---
 # 0010. Reach the candidate from the author sandbox only through a host broker
 
@@ -24,11 +24,12 @@ sandbox profile, fresh per-call namespaces and process-group kill. Requests carr
 refused. The tree is host-pinned to the bound reference. The socket lives in a private 0700
 directory, bound read-only into that sandbox only; the candidate profile binds no socket.
 Admission is bounded before any read: 8 connections, then closed. Candidate calls are a separate
-cap of 4 concurrent. Aggregate call time (300 s) is reserved at admission, which is not suite
+cap of 4 concurrent. Each call reserves its limit plus a 1 s allowance (0.5 s SIGTERM grace,
+enforced by SIGKILL; 0.5 s overhead, measured only) from a 300 s aggregate; it is not suite
 wall time. Per-call time is capped at 30 s. Reads have an absolute deadline.
 With `--no-reference` no broker starts and every call is refused.
-This extends ADR 0009 and does not edit it: its "reference mounted read-only" clause changes.
-The reference is now absent from the author sandbox and reached only via the broker.
+This extends ADR 0009 without editing it: the reference is no longer mounted read-only in the
+author sandbox; it is absent there and reached only via the broker.
 
 ## Consequences
 - ✅ Equivalent by construction: profile, namespaces, kill and deadline. Probed: markers, abstract
