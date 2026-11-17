@@ -35,7 +35,6 @@ author sandbox; it is absent there and reached only via the broker.
 - ✅ Equivalent by construction: profile, namespaces, kill and deadline. Probed: markers, abstract
   sockets, permission and same-mtime changes, stdin bytes, suite /tmp output. Not claimed: timing.
 - ✅ No candidate path, env, cwd or profile can be chosen by untrusted code.
-- ⚠️ No peer-credential check. 0700 does not exclude other host processes with the same UID;
-  residual risk under ADR 0001/0003.
+- ⚠️ No peer-credential check: 0700 does not exclude same-UID host processes (ADR 0001/0003 risk).
 - ⚠️ Every call pays a bwrap start, as in the normal path.
 Author model: Sonnet 5.5 (`claude-sonnet-5-5`); reviewers must differ, one from another vendor.
