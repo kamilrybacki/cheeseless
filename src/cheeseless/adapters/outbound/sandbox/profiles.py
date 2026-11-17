@@ -226,21 +226,42 @@ def open_acceptance(projection: Path) -> int:
     return fd
 
 
-def open_contract(projection: Path) -> int | None:
-    """An O_PATH fd on ``acceptance/contract/`` (spec and examples), or None when absent.
+# The only files of acceptance/ a reference session may read (ADR 0009: the spec and the
+# criteria examples, never a test). Anything else, including contract/test_*, stays masked.
+REFERENCE_ALLOWLIST: tuple[str, ...] = ("contract/spec.md", "contract/criteria.yaml")
 
-    The reference session gets only this subtree of ``acceptance/``. A symlink or a
-    non-directory fails closed (SandboxError); an absent directory (a pre-freeze
-    projection) simply leaves nothing to re-expose. The caller closes the fd.
+
+def open_contract_files(projection: Path) -> list[tuple[int, str]]:
+    """Pinned ``(fd, destination)`` pairs for the reference allowlist; absent files are skipped.
+
+    Each file is opened O_PATH|O_NOFOLLOW below a pinned ``contract/`` directory fd, so a swapped
+    path cannot redirect it. Only regular files are exposed: a symlink, directory or other
+    node is left masked. The caller closes every returned fd.
     """
-    contract = projection / "acceptance" / "contract"
+    acceptance = projection / "acceptance"
+    flags = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
-        fd = os.open(contract, os.O_PATH | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC)
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise SandboxError(f"the contract directory cannot be mounted safely: {contract}") from exc
-    return fd
+        dir_fd = os.open(acceptance / "contract", flags | os.O_DIRECTORY)
+    except OSError:  # absent, a symlink or not a directory: nothing is re-exposed
+        return []
+    pinned: list[tuple[int, str]] = []
+    try:
+        for rel in REFERENCE_ALLOWLIST:
+            try:
+                fd = os.open(rel.split("/", 1)[1], flags, dir_fd=dir_fd)
+            except OSError:
+                continue
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                pinned.append((fd, str(acceptance / rel)))
+            else:
+                os.close(fd)
+    except BaseException:
+        for fd, _ in pinned:
+            os.close(fd)
+        raise
+    finally:
+        os.close(dir_fd)
+    return pinned
 
 
 def agent(
@@ -267,17 +288,16 @@ def agent(
     # Applied after the writable projection bind, so it lands on top of it. Bound by the fd
     # opened with O_NOFOLLOW (see open_acceptance), so a swapped path cannot redirect it.
     # `rw` (author) leaves the writable projection bind; `contract` (reference) masks the
-    # tree with an empty tmpfs and re-exposes only contract/. Default `ro` is the implementer's.
+    # tree with an empty tmpfs and re-exposes only the spec and criteria (pinned files).
+    # Default `ro` is the implementer's.
     if acceptance_mode == "ro":
         if acceptance_fd is None:
             raise ValueError("a read-only acceptance mount needs a pinned fd")
         args += ["--ro-bind-fd", str(acceptance_fd), str(acceptance_dir)]
     elif acceptance_mode == "contract":
-        # The reference: the tests are masked by an empty tmpfs, then only the contract
-        # (spec and examples, ADR 0009) is bound back read-only from a pinned fd.
+        # The reference: everything is masked by an empty tmpfs; the allowlisted spec and
+        # criteria arrive later through ``pinned_read_only`` and land on top of it.
         args += ["--tmpfs", str(acceptance_dir)]
-        if acceptance_fd is not None:
-            args += ["--ro-bind-fd", str(acceptance_fd), str(acceptance_dir / "contract")]
     elif acceptance_mode != "rw":
         raise ValueError(f"unknown acceptance mode: {acceptance_mode!r}")
     for path in read_only:

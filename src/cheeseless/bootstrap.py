@@ -644,6 +644,14 @@ def main(argv: list[str] | None = None) -> int:
     return dispatch(args, ctx)
 
 
+def _close_pins(pins: list[tuple[int, str]]) -> None:
+    """Close and forget every pinned fd (idempotent: the list is emptied)."""
+    while pins:
+        fd, _ = pins.pop()
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
 @contextmanager
 def host_session(
     *,
@@ -717,6 +725,7 @@ def host_session(
     ns_fd: int | None = None
     seccomp_fd: int | None = None
     acceptance_fd: int | None = None
+    contract_pins: list[tuple[int, str]] = []
     ready_path: Path | None = None
     egress_ready: Path | None = None
     blocked = threading.Event()
@@ -890,11 +899,14 @@ def host_session(
         if mount_mode == "ro":
             acceptance_fd = profiles.open_acceptance(projection_dir)
         elif mount_mode == "contract":
-            acceptance_fd = profiles.open_contract(projection_dir)
+            contract_pins = profiles.open_contract_files(projection_dir)
         pinned_acceptance = acceptance_fd
         env = _merge_env(agent_env, egress_ready_env, extras.env)
 
-        pinned_read_only = tuple((mount.fd, str(mount.path)) for mount in extras.read_only)
+        pinned_read_only = (
+            *((mount.fd, str(mount.path)) for mount in extras.read_only),
+            *((fd, dest) for fd, dest in contract_pins),
+        )
 
         def build_argv(info_fd: int) -> list[str]:
             return profiles.agent(
@@ -912,7 +924,7 @@ def host_session(
                 info_fd=info_fd,
             )
 
-        mount_fds = tuple(mount.fd for mount in extras.read_only)
+        mount_fds = (*(mount.fd for mount in extras.read_only), *(fd for fd, _ in contract_pins))
         proc, ns_fd = _launch_agent(
             build_argv,
             (*mount_fds, seccomp_fd, *(() if acceptance_fd is None else (acceptance_fd,))),
@@ -924,6 +936,7 @@ def host_session(
         if acceptance_fd is not None:
             os.close(acceptance_fd)
             acceptance_fd = None
+        _close_pins(contract_pins)
         session.expected_pidns_fd = ns_fd
         _wait_for_bridge(egress_ready, proc)
         ready_path.write_text("ready\n", encoding="ascii")
@@ -963,6 +976,7 @@ def host_session(
                 with contextlib.suppress(Exception):  # a stale record is unreachable: random id
                     ctx.store.end_session(session.session_id)
         ns_fd = None
+        _close_pins(contract_pins)
         for leftover in (seccomp_fd, acceptance_fd):
             if leftover is not None:
                 try:

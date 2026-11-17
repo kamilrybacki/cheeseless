@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -176,8 +177,12 @@ def test_an_author_never_lists_run_or_dispute_even_if_disputes_are_on():
 def _argv(role: SessionRole, tmp_path: Path) -> list[str]:
     proj = tmp_path / "proj"
     (proj / "acceptance" / "contract").mkdir(parents=True, exist_ok=True)
+    (proj / "acceptance" / "contract" / "spec.md").write_text("s")
+    (proj / "acceptance" / "contract" / "criteria.yaml").write_text("c")
+    (proj / "acceptance" / "contract" / "test_smoke.py").write_text("t")
     mode = acceptance_mount(role)
-    fd = profiles.open_contract(proj) if mode == "contract" else profiles.open_acceptance(proj)
+    fd = profiles.open_acceptance(proj) if mode == "ro" else None
+    pinned = profiles.open_contract_files(proj) if mode == "contract" else []
     try:
         return profiles.agent(
             bwrap="bwrap",
@@ -189,12 +194,12 @@ def _argv(role: SessionRole, tmp_path: Path) -> list[str]:
             command=["true"],
             acceptance_fd=fd,
             acceptance_mode=mode,
+            pinned_read_only=pinned,
         )
     finally:
-        import os
-
-        if fd is not None:
-            os.close(fd)
+        for open_fd in (fd, *(f for f, _ in pinned)):
+            if open_fd is not None:
+                os.close(open_fd)
 
 
 def test_mounts_follow_the_role(tmp_path):
@@ -204,15 +209,15 @@ def test_mounts_follow_the_role(tmp_path):
     author = _argv(SessionRole.AUTHOR, tmp_path)
     assert "--ro-bind-fd" not in author and acc not in author  # writable via the projection bind
     reference = _argv(SessionRole.REFERENCE, tmp_path)
-    # the tests are masked by a tmpfs, then ONLY the contract is bound back, read-only
+    # the tree is masked by a tmpfs, then ONLY the spec and criteria are bound back, read-only
     assert reference[reference.index("--tmpfs", reference.index(acc) - 2) + 1] == acc
-    bind = reference.index("--ro-bind-fd")
-    assert reference[bind + 2] == acc + "/contract"
-    assert bind > reference.index(acc)  # the bind lands on top of the tmpfs
+    dests = [reference[i + 2] for i, a in enumerate(reference) if a == "--ro-bind-fd"]
+    assert dests == [acc + "/contract/spec.md", acc + "/contract/criteria.yaml"]
+    assert all(reference.index(d) > reference.index(acc) for d in dests)
 
 
 def test_a_reference_session_cannot_read_hidden_tests_canary(tmp_path):
-    """The reference mount masks acceptance/ except the contract."""
+    """The reference mount masks acceptance/ except the spec and criteria."""
     proj = tmp_path / "proj"
     (proj / "acceptance").mkdir(parents=True, exist_ok=True)
     (proj / "acceptance" / "test_hidden.py").write_text("CANARY-REF-91c2")
@@ -220,4 +225,4 @@ def test_a_reference_session_cannot_read_hidden_tests_canary(tmp_path):
     i = reference.index(str(proj / "acceptance"))
     assert reference[i - 1] == "--tmpfs"  # an empty tmpfs lands on top of the tree
     assert acceptance_mount(SessionRole.REFERENCE) == "contract"
-    assert reference.count("--ro-bind-fd") == 1  # nothing but the contract is re-exposed
+    assert reference.count("--ro-bind-fd") == 2  # nothing but the spec and criteria
