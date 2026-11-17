@@ -110,6 +110,27 @@ def test_a_reference_session_has_no_route_at_all(store):
             assert _refused(_wire(server, path, claimed)), (path, claimed)
 
 
+def test_serve_uds_with_no_active_task_answers_status_read_only_and_refuses_the_rest(store):
+    cfg = SessionConfig(
+        task_id=None,  # type: ignore[arg-type]
+        worktree=Path("."),
+        profile="local",
+        pool=None,  # type: ignore[arg-type]
+        timeout=1.0,
+        tool_version="0",
+        repo=Boom(),
+        store=Boom(),  # nothing may be read from the store without a task
+        runner=Boom(),
+        sandbox=Boom(),  # type: ignore[arg-type]
+        role="implementer",
+    )
+    server = UdsVerifierServer("/nonexistent/sock", cfg)
+    status = _wire(server, "/status")
+    assert not _refused(status) and status  # a clear answer, not a role refusal
+    for path in ("/run", "/dispute", "/author-check", "/freeze-propose"):
+        assert _refused(_wire(server, path)), path
+
+
 def test_the_session_record_is_host_written_and_keyed_per_session(store):
     a, rec_a = store.register_session(_tid(), "author")
     b, rec_b = store.register_session(_tid(), "reference")

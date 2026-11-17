@@ -502,7 +502,13 @@ class UdsVerifierServer:
         author_kind = _AUTHOR_ROUTES.get(path)
         implementer_kind = _IMPLEMENTER_ROUTES.get(path)
         known = author_kind or implementer_kind
-        if known is not None and not self._role_ok(claimed_role):
+        if (
+            implementer_kind == "status"
+            and self.session.task_id is None
+            and self.session.role == "implementer"
+        ):
+            self._no_task_status(wfile)
+        elif known is not None and not self._role_ok(claimed_role):
             self._role_refused(wfile, known)
         elif author_kind is not None:
             if self.session.role != "author":
@@ -516,6 +522,17 @@ class UdsVerifierServer:
                 getattr(self, "_" + implementer_kind)(wfile, body)
         else:
             self._write_error(wfile, 404, "not found")
+
+    def _no_task_status(self, wfile: Any) -> None:
+        """No task is frozen, so there is no session to bind: answer read-only, touch no store.
+
+        This is the pre-stage-(c) answer (an infra error: nothing to report), kept so
+        `serve-uds` without a frozen task stays informative instead of refusing as a role error.
+        """
+        view = AgentView(gate_error(ErrorCode.INFRA_ERROR), ())
+        self._write_response(
+            wfile, 200, serialize_status_response(agent_view_to_status_response(view))
+        )
 
     def _role_refused(self, wfile: Any, kind: str) -> None:
         err = gate_error(ErrorCode.ROLE_NOT_ALLOWED)
