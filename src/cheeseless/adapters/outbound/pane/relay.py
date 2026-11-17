@@ -66,11 +66,14 @@ class PaneRelay:
         base_dir: Path | None = None,
         host_uid: int | None = None,
         peer_uid_of: Callable[[socket.socket], int] = peer_uid,
+        on_attach: Callable[[], None] | None = None,
     ) -> None:
         self._master = master_fd
         self._base_dir = base_dir
         self._host_uid = os.getuid() if host_uid is None else host_uid
         self._peer_uid_of = peer_uid_of
+        self._on_attach = on_attach
+        self._attached = False
         self._dir: Path | None = None
         self._listener: socket.socket | None = None
         self._client: socket.socket | None = None
@@ -91,6 +94,11 @@ class PaneRelay:
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def attached(self) -> bool:
+        """True once an admitted client has connected (evidence only, not a guarantee)."""
+        return self._attached
 
     def start(self) -> Path:
         self._dir = Path(tempfile.mkdtemp(prefix="cheeseless-pane-", dir=self._base_dir))
@@ -157,6 +165,13 @@ class PaneRelay:
         self._client = conn
         self._decoder = FrameDecoder()
         self._sel.register(conn, selectors.EVENT_READ, _CLIENT)
+        if not self._attached:
+            self._attached = True
+            if self._on_attach is not None:
+                try:
+                    self._on_attach()
+                except Exception:  # noqa: BLE001 - evidence must never stop the relay
+                    _LOG.warning("pane relay attach hook failed")
 
     def _peer_allowed(self, conn: socket.socket) -> bool:
         try:

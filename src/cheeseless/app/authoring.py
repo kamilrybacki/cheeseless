@@ -172,9 +172,20 @@ def author_check(
 
 def record_reference(repo: Repository, store: AuthoringStore, worktree: Path, source: str) -> str:
     """Snapshot the reference worktree and bind it to the current spec (host-side)."""
+    tree = repo.snapshot(worktree)
+    return record_reference_snapshot(repo, store, tree, source)
+
+
+def record_reference_snapshot(
+    repo: Repository, store: AuthoringStore, tree: str, source: str
+) -> str:
+    """Bind an already-taken snapshot to the contract at ``source`` (host-side).
+
+    The dev reference runner has to snapshot before the sandbox projection is removed, so
+    it takes the snapshot itself and binds it here without a second walk of the tree.
+    """
     contract = read_contract(repo, source)
     state = _require_open(store, contract)
-    tree = repo.snapshot(worktree)
     _publish(
         lambda: store.save_reference(
             contract.lineage_id, spec_of(contract), tree, expected_version=state.version

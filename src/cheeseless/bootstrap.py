@@ -41,8 +41,9 @@ from cheeseless.adapters.outbound.egress.bridge import (
 )
 from cheeseless.adapters.outbound.egress.proxy import EgressProxy, ProxyConfig
 from cheeseless.adapters.outbound.git.repository import GitRepository
+from cheeseless.adapters.outbound.pane.relay import PaneRelay
 from cheeseless.adapters.outbound.runner.pytest_runner import PytestRunner
-from cheeseless.adapters.outbound.sandbox import profiles, seccomp
+from cheeseless.adapters.outbound.sandbox import profiles, pty_launch, seccomp
 from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
 from cheeseless.adapters.outbound.sandbox.launch import force_remove
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
@@ -54,6 +55,13 @@ from cheeseless.domain import ids
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.dlp import Fingerprints
 from cheeseless.domain.egress_policy import EgressPolicy, PolicyError
+from cheeseless.domain.reference_attempt import (
+    AttemptOwner,
+    NewReferenceAttempt,
+    ReferenceAttempt,
+    ReferenceMode,
+    ReferenceState,
+)
 from cheeseless.domain.session_role import (
     SessionRole,
     acceptance_mount,
@@ -61,6 +69,7 @@ from cheeseless.domain.session_role import (
     parse_role,
 )
 from cheeseless.ports.dev_session import DevSessionStore
+from cheeseless.ports.reference_attempt import ReferenceAttemptStore
 from cheeseless.ports.store import Store, StoreError
 from cheeseless.session_files import copy_evidence, seed_home, write_projection_list
 from cheeseless.session_options import (
@@ -271,6 +280,7 @@ def _launch_agent(
     *,
     stdio: bool = False,
     pty_slave: int | None = None,
+    log_fd: int | None = None,
     timeout: float = SESSION_START_TIMEOUT,
 ) -> tuple[subprocess.Popen[Any], int]:
     """Start bwrap with ``--info-fd`` and pin the sandbox PID namespace.
@@ -282,10 +292,21 @@ def _launch_agent(
     this sandbox becomes the child's stdin, stdout and stderr. The caller keeps the master
     and closes the slave after this returns. ``--new-session`` stays in the profile, so the
     child cannot use ``TIOCSTI`` against the host terminal; it only ever sees this pty.
-    ``pty_slave`` and ``stdio`` are mutually exclusive.
+    ``log_fd`` (headless reference) sends stdin to ``/dev/null`` and both output streams to
+    the host's log file, so nothing is inherited from or flushed to the operator terminal.
+    ``pty_slave``, ``stdio`` and ``log_fd`` are mutually exclusive.
     """
-    if pty_slave is not None and stdio:
-        raise ValueError("pty_slave and stdio are mutually exclusive")
+    if sum(option is not None for option in (pty_slave, log_fd)) + int(stdio) > 1:
+        raise ValueError("pty_slave, log_fd and stdio are mutually exclusive")
+    if pty_slave is not None:
+        stdin = stdout = stderr = pty_slave
+    elif log_fd is not None:
+        stdin, stdout, stderr = subprocess.DEVNULL, log_fd, log_fd
+    else:
+        if stdio:
+            stdin, stdout, stderr = subprocess.PIPE, subprocess.PIPE, None
+        else:
+            stdin, stdout, stderr = None, None, None
     read_fd, write_fd = os.pipe()
     proc: subprocess.Popen[Any] | None = None
     try:
@@ -294,9 +315,9 @@ def _launch_agent(
             argv,
             pass_fds=(*pass_fds, write_fd),
             close_fds=True,
-            stdin=pty_slave if pty_slave is not None else (subprocess.PIPE if stdio else None),
-            stdout=pty_slave if pty_slave is not None else (subprocess.PIPE if stdio else None),
-            stderr=pty_slave,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
             text=stdio,
         )
     except BaseException:
@@ -404,11 +425,12 @@ def _mcp_shim_source(
     the environment) can redirect it. The dispute switch is a literal too, so the
     agent cannot make ``gate_dispute`` appear; the verifier still enforces the policy.
     The role is baked the same way, but only for non-implementer roles: the implementer's
-    shim stays byte-identical to the pre-role one. ``dev`` (ADR 0013) is baked only into
-    an author shim; every other role's shim ignores it and stays byte-identical.
+    shim stays byte-identical to the pre-role one. ``dev`` adds the one dev-only tool of
+    the role (ADR 0013 ``spec_done`` for an author, ADR 0014 ``reference_done`` for a TUI
+    reference); every other shim ignores it and stays byte-identical.
     """
     role_arg = "" if role is SessionRole.IMPLEMENTER else f", role={role.value!r}"
-    if dev and role is SessionRole.AUTHOR:
+    if dev and role in (SessionRole.AUTHOR, SessionRole.REFERENCE):
         role_arg += ", dev=True"
     return (
         f"#!{python}\n"
@@ -633,6 +655,10 @@ def main(argv: list[str] | None = None) -> int:
         from cheeseless.adapters.inbound.cli.pane_client import run_pane_client  # noqa: PLC0415
 
         return run_pane_client(args.socket)
+    if args.command == "dev-reference":
+        from cheeseless.bootstrap_reference import run_reference_command  # noqa: PLC0415
+
+        return run_reference_command(args, agent)
     if args.command == "serve-uds":
         return serve_uds(
             socket_path=getattr(args, "socket", None),
@@ -728,6 +754,10 @@ def host_session(
     evidence_dir: Path | None = None,
     role: SessionRole | str = SessionRole.IMPLEMENTER,
     dev_lineage: str | None = None,
+    new_reference: NewReferenceAttempt | None = None,
+    on_reference_stop: Callable[[str], None] | None = None,
+    agent_pty: tuple[int, int] | None = None,
+    log_file: Path | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Run one isolated agent session with authenticated verifier and DLP egress.
 
@@ -748,6 +778,13 @@ def host_session(
 
     ``dev_lineage`` marks an author session of an open ``cheeseless dev`` session
     (ADR 0013): only then does the agent get the ``spec_done`` tool and command.
+
+    ``new_reference`` (ADR 0014) binds a reference sandbox to one stored attempt. A TUI
+    attempt needs ``agent_pty`` (rows, cols): the child gets the pty slave and the host
+    starts the relay on the master, exposed as ``info["relay"]``. A headless attempt needs
+    ``log_file`` instead; the relay and the ``reference_done`` tool do not exist for it.
+    ``on_reference_stop`` is the host seam the verifier calls once after ``running`` became
+    ``stopping``.
     """
     bound = parse_role(role) if isinstance(role, str) else role
     ctx = build_context(state_dir, cwd)
@@ -757,7 +794,26 @@ def host_session(
             raise SessionOptionError("only an author session can belong to a dev session")
         if cast(DevSessionStore, ctx.store).dev_state(dev_lineage) is None:
             raise SessionOptionError(f"no dev session is open for {dev_lineage}")
-    dev = dev_lineage is not None
+    if new_reference is not None:
+        if bound is not SessionRole.REFERENCE:
+            raise SessionOptionError("only a reference session can run a reference attempt")
+        if dev_lineage is not None:
+            raise SessionOptionError("a dev author session cannot be a reference attempt")
+        tui = new_reference.mode is ReferenceMode.TUI
+        if tui != (agent_pty is not None):
+            raise SessionOptionError(
+                "a TUI attempt needs a pty and a headless one must not have one"
+            )
+        if not tui and log_file is None:
+            raise SessionOptionError("a headless attempt needs a host log file")
+        if tui and log_file is not None:
+            raise SessionOptionError("a TUI attempt writes no host log file")
+        if agent_stdio:
+            raise SessionOptionError("a reference attempt cannot use stdio")
+    elif agent_pty is not None or log_file is not None:
+        raise SessionOptionError("a pty or log file is only for a reference attempt")
+    reference_tui = new_reference is not None and new_reference.mode is ReferenceMode.TUI
+    dev = dev_lineage is not None or reference_tui
     if task_id is None:
         task_id = ctx.store.active_task_id()
     if task_id is None:
@@ -787,6 +843,11 @@ def host_session(
     supervisor: EgressSupervisor | None = None
     thread: threading.Thread | None = None
     proc: subprocess.Popen[Any] | None = None
+    relay: PaneRelay | None = None
+    reference_attempt: ReferenceAttempt | None = None
+    pty_master: int | None = None
+    pty_slave: int | None = None
+    log_fd: int | None = None
     ns_fd: int | None = None
     seccomp_fd: int | None = None
     acceptance_fd: int | None = None
@@ -883,7 +944,33 @@ def host_session(
             session_id=session_id,
             generation=binding.generation,
             dev_lineage=dev_lineage,
+            dev_reference=None if new_reference is None else new_reference.attempt_id,
+            on_reference_stop=None if new_reference is None else on_reference_stop,
         )
+        if new_reference is not None:
+            reference_attempt = ReferenceAttempt(
+                new_reference.attempt_id,
+                session_id,
+                binding.generation,
+                new_reference.spec_digest,
+                new_reference.mode,
+                False,
+                ReferenceState.RUNNING,
+                lineage_id=new_reference.lineage_id,
+            )
+            cast(ReferenceAttemptStore, ctx.store).save_reference_attempt(reference_attempt)
+        saved_attempt = reference_attempt
+
+        def on_attach() -> None:
+            """Record that the pane client reached the relay; evidence only."""
+            attempt = saved_attempt
+            if attempt is None:
+                return
+            owner = AttemptOwner(attempt.session_id, attempt.generation, attempt.mode)
+            cast(ReferenceAttemptStore, ctx.store).bind_reference_attempt(
+                attempt.attempt_id, owner=owner, attached=True
+            )
+
         server = UdsVerifierServer(socket_path, session, socket_dir_owned=dir_owned)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -956,6 +1043,22 @@ def host_session(
             raise RuntimeError("the client interpreter must live outside the repository")
         agent_args = list(agent_command) if agent_command is not None else list(_DEFAULT_AGENT)
         command = _bridge_command(python, ready_path, egress_ready, agent_args)
+        launch_command = command
+        if new_reference is not None and new_reference.mode is ReferenceMode.TUI:
+            # --new-session leaves the child with no controlling tty, so a resize on the
+            # master would not reach it (D14-3b-2). The trusted wrapper restores that.
+            launch_command = pty_launch.with_controlling_tty(python, command)
+        if log_file is not None:
+            _ensure_outside(log_file, ctx.repo, "reference log")
+            if _within(log_file, projection_dir) or _within(projection_dir, log_file):
+                raise SessionOptionError("the reference log must live outside the projection")
+            log_fd = os.open(
+                log_file,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+            )
+            if not stat.S_ISREG(os.fstat(log_fd).st_mode):
+                raise SessionOptionError("the reference log must be a regular file")
 
         seccomp_fd = seccomp.program_fd()
         mount_mode = acceptance_mount(bound)
@@ -982,17 +1085,27 @@ def host_session(
                 acceptance_mode=mount_mode,
                 pinned_read_only=pinned_read_only,
                 env=env,
-                command=command,
+                command=launch_command,
                 seccomp_fd=seccomp_fd,
                 info_fd=info_fd,
             )
 
         mount_fds = (*(mount.fd for mount in extras.read_only), *(fd for fd, _ in contract_pins))
+        if agent_pty is not None:
+            pty_master, pty_slave = pty_launch.open_pty(*agent_pty)
         proc, ns_fd = _launch_agent(
             build_argv,
             (*mount_fds, seccomp_fd, *(() if acceptance_fd is None else (acceptance_fd,))),
             stdio=agent_stdio,
+            pty_slave=pty_slave,
+            log_fd=log_fd,
         )
+        if pty_slave is not None:
+            os.close(pty_slave)
+            pty_slave = None
+        if log_fd is not None:
+            os.close(log_fd)
+            log_fd = None
         holder["proc"] = proc
         os.close(seccomp_fd)
         seccomp_fd = None
@@ -1003,6 +1116,10 @@ def host_session(
         session.expected_pidns_fd = ns_fd
         _wait_for_bridge(egress_ready, proc)
         ready_path.write_text("ready\n", encoding="ascii")
+        if pty_master is not None:
+            relay = PaneRelay(pty_master, on_attach=on_attach)
+            relay.start()
+            pty_master = None  # the relay owns the master now
 
         yield {
             "socket_path": socket_path,
@@ -1016,6 +1133,8 @@ def host_session(
             "server": server,
             "blocked": blocked,
             "protected_roots": protected,
+            "relay": relay,
+            "reference_attempt": reference_attempt,
         }
     finally:
         for path in (ready_path, egress_ready):
@@ -1029,6 +1148,15 @@ def host_session(
         if proc is not None:
             _terminate(proc)
         holder["proc"] = None
+        if relay is not None:
+            relay.close()
+            relay = None
+        for leftover_fd in (pty_slave, pty_master, log_fd):
+            if leftover_fd is not None:
+                try:
+                    os.close(leftover_fd)
+                except OSError:
+                    pass
         if server is not None:
             server.shutdown()
         if thread is not None:

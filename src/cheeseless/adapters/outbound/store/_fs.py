@@ -95,6 +95,31 @@ def create_exclusive(path: Path, data: bytes) -> bool:
     return True
 
 
+def open_append(path: Path) -> int:
+    """Open (or create) a private append-only regular file; the caller owns the fd."""
+    try:
+        return _open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+    except OSError as exc:
+        raise StoreError(f"cannot open {path}: {exc}") from exc
+
+
+def list_regular(directory: Path) -> tuple[Path, ...]:
+    """Regular files directly under ``directory``, sorted; a symlink fails closed."""
+    try:
+        entries = list(os.scandir(directory))
+    except FileNotFoundError:
+        return ()
+    except OSError as exc:
+        raise StoreError(f"cannot list {directory}: {exc}") from exc
+    files: list[Path] = []
+    for entry in entries:
+        if entry.is_symlink():
+            raise StoreError(f"store entry is a symlink: {entry.path}")
+        if entry.is_file(follow_symlinks=False):
+            files.append(Path(entry.path))
+    return tuple(sorted(files, key=lambda path: path.name))
+
+
 def append_line(path: Path, line: bytes) -> None:
     try:
         fd = _open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)

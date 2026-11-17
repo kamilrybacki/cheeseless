@@ -78,3 +78,38 @@ def test_the_record_is_frozen():
 def test_invalid_fields_are_refused(bad):
     with pytest.raises(ValueError):
         attempt(**bad)
+
+
+def test_host_bookkeeping_fields_are_validated():
+    assert attempt(lineage_id="toy", pane_id="%7").lineage_id == "toy"
+    assert attempt(result_tree="b" * 40).result_tree == "b" * 40
+    for bad in (
+        {"lineage_id": "../x"},
+        {"pane_id": "7"},
+        {"pane_id": "%x"},
+        {"result_tree": "short"},
+    ):
+        with pytest.raises(ValueError):
+            attempt(**bad)
+
+
+def test_new_attempt_validates_its_four_fields():
+    from cheeseless.domain.reference_attempt import NewReferenceAttempt
+
+    new = NewReferenceAttempt("att-1", "toy", DIGEST, ReferenceMode.TUI)
+    assert new.mode is ReferenceMode.TUI
+    for bad in (
+        {"attempt_id": "../x"},
+        {"lineage_id": "../x"},
+        {"spec_digest": "short"},
+        {"mode": "tui"},
+    ):
+        fields = {
+            "attempt_id": "att-1",
+            "lineage_id": "toy",
+            "spec_digest": DIGEST,
+            "mode": ReferenceMode.TUI,
+            **bad,
+        }
+        with pytest.raises(ValueError):
+            NewReferenceAttempt(**fields)  # type: ignore[arg-type]

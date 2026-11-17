@@ -139,16 +139,17 @@ def test_spec_done_is_listed_only_for_a_dev_author(disputes):
             assert ("spec_done" in listed) is wanted, (role, dev)
 
 
-def test_the_shim_bakes_dev_only_for_a_dev_author(tmp_path):
+def test_the_shim_bakes_dev_only_for_the_roles_that_have_a_dev_tool(tmp_path):
     def shim(role: SessionRole, dev: bool) -> str:
         return _mcp_shim_source("/py", tmp_path, tmp_path / "s.sock", "t", role=role, dev=dev)
 
     for role in SessionRole:
         assert "dev=" not in shim(role, False)
+    # dev carries exactly the one dev-only tool of the role (ADR 0013 author, ADR 0014 reference)
     assert "dev=True" in shim(SessionRole.AUTHOR, True)
-    # dev is ignored for any other role: their shims stay byte-identical
-    for role in (SessionRole.IMPLEMENTER, SessionRole.REFERENCE):
-        assert shim(role, True) == shim(role, False)
+    assert "dev=True" in shim(SessionRole.REFERENCE, True)
+    # dev is ignored for any other role: its shim stays byte-identical
+    assert shim(SessionRole.IMPLEMENTER, True) == shim(SessionRole.IMPLEMENTER, False)
 
 
 def test_the_spec_done_command_is_seeded_only_for_a_dev_author():

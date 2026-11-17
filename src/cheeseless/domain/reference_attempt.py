@@ -49,6 +49,12 @@ class ReferenceAttempt:
     mode: ReferenceMode
     attached: bool
     state: ReferenceState
+    # Host bookkeeping beyond the ADR field list: the lineage scopes reaping, the pane id
+    # lets a later host kill a stale pane, and the result tree binds the snapshot to the
+    # attempt. All three are written by the host, never by an agent.
+    lineage_id: str | None = None
+    pane_id: str | None = None
+    result_tree: str | None = None
 
     def __post_init__(self) -> None:
         ids.attempt_id(self.attempt_id)
@@ -62,6 +68,29 @@ class ReferenceAttempt:
             raise ValueError(f"invalid mode: {self.mode!r}")
         if not isinstance(self.state, ReferenceState):
             raise ValueError(f"invalid state: {self.state!r}")
+        if self.lineage_id is not None:
+            ids.lineage_id(self.lineage_id)
+        if self.pane_id is not None:
+            ids.pane_id(self.pane_id)
+        if self.result_tree is not None:
+            ids.git_oid(self.result_tree)
+
+
+@dataclass(frozen=True, slots=True)
+class NewReferenceAttempt:
+    """What the host knows before a session exists: its id, lineage, spec and mode."""
+
+    attempt_id: str
+    lineage_id: str
+    spec_digest: str
+    mode: ReferenceMode
+
+    def __post_init__(self) -> None:
+        ids.attempt_id(self.attempt_id)
+        ids.lineage_id(self.lineage_id)
+        ids.sha256_hex(self.spec_digest, "spec digest")
+        if not isinstance(self.mode, ReferenceMode):
+            raise ValueError(f"invalid mode: {self.mode!r}")
 
 
 @dataclass(frozen=True, slots=True)

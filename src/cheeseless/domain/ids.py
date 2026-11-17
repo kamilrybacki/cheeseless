@@ -9,6 +9,7 @@ _GIT_OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _SESSION_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _ATTEMPT_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _GATE_SESSION_ID = re.compile(r"[0-9a-f]{32}")
+_PANE_ID = re.compile(r"%[0-9]{1,9}")
 _HOST = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*")
 
 
@@ -47,6 +48,11 @@ def attempt_id(value: object) -> str:
 def gate_session_id(value: object) -> str:
     """A host-registered gate session id (``register_session``: 32 lowercase hex digits)."""
     return _check(_GATE_SESSION_ID, value, "gate session id")
+
+
+def pane_id(value: object) -> str:
+    """A tmux pane id as tmux prints it (``%`` and up to nine digits)."""
+    return _check(_PANE_ID, value, "pane id")
 
 
 def host(value: object) -> str:

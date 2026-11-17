@@ -199,6 +199,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     relay.add_argument("--socket", type=Path, required=True, help="Relay socket path.")
 
+    devref = sub.add_parser(
+        "dev-reference",
+        help="Host only: run one dev reference attempt and snapshot it "
+        "(dev-reference [options] -- AGENT [ARGS...]).",
+    )
+    devref.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)
+    devref.add_argument("--lineage", required=True, help="The open dev lineage.")
+    devref.add_argument("--spec-digest", required=True, help="Spec digest of the attempt.")
+    devref.add_argument("--source", default=None, help="Commit with the contract (default HEAD).")
+    devref.add_argument(
+        "--task",
+        default=None,
+        help="Pre-freeze placeholder task id (default: 64 zeros).",
+    )
+    devref.add_argument("--headless", action="store_true", help="Force the no-pane fallback.")
+    devref.add_argument("--timeout", type=float, default=1800.0)
+    devref.add_argument("--rows", type=int, default=24)
+    devref.add_argument("--cols", type=int, default=80)
+    devref.add_argument("--attempt", default=None, help="Attempt id (default: generated).")
+    devref.add_argument("--json", action="store_true")
+
     uds = sub.add_parser("serve-uds", help="Run the verifier UDS server for one session.")
     uds.add_argument("--socket", type=Path, default=None)
     uds.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)
