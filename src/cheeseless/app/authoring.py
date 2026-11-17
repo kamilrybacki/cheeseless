@@ -108,11 +108,12 @@ def _run_driver(
     mode: str,
     reference: Path | None,
     run_argv: tuple[str, ...],
+    env: tuple[tuple[str, str], ...] = (),
 ) -> SuiteRun | None:
     with tempfile.TemporaryDirectory(prefix="cheeseless-author-") as tmp:
         acceptance = Path(tmp) / "acceptance"
         repo.export(repo.tree_of(source, "acceptance"), acceptance)
-        return run_driver_on(sandbox, acceptance, mode, reference, run_argv)
+        return run_driver_on(sandbox, acceptance, mode, reference, run_argv, env)
 
 
 def _hidden_and_public(
@@ -207,7 +208,9 @@ def author_crosscheck(
     with tempfile.TemporaryDirectory(prefix="cheeseless-ref-") as tmp:
         ref_root = Path(tmp) / "reference"
         repo.export(reference_tree, ref_root)
-        suite = _run_driver(repo, sandbox, source, "run", ref_root, contract.run)
+        suite = _run_driver(
+            repo, sandbox, source, "run", ref_root, contract.run, tuple(contract.env)
+        )
     valid = {c.id for c in contract.criteria}
     green = False
     red: list[str] = []

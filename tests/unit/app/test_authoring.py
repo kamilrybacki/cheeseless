@@ -124,6 +124,17 @@ def test_crosscheck_green_and_red_are_recorded_and_do_not_need_a_budget(world):
     assert not rec.green and rec.red_criteria == ("score",)
 
 
+def test_crosscheck_runs_the_reference_with_the_contract_env(world):
+    """A src-layout reference needs the contract's env (PYTHONPATH) just like a candidate."""
+    repo, store, _ = world
+    _record(repo, store)
+    sandbox = FakeAuthorSandbox(_line(outcomes={t["node_id"]: "passed" for t in TESTS}))
+    uc.author_crosscheck(repo, sandbox, store, _source(repo))
+    contract = uc.read_contract(repo, _source(repo))
+    assert contract.env
+    assert sandbox.calls[0][3] == tuple(contract.env)
+
+
 def test_crosscheck_needs_a_reference_for_the_current_spec(world):
     repo, store, _ = world
     with pytest.raises(AuthorError) as caught:
