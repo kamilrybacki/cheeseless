@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>cheeseless: the author side</title>
+<style>
+body{background:#111;color:#ddd;font:14px/1.45 ui-monospace,monospace;margin:2rem}
+pre{white-space:pre-wrap;max-width:110ch}
+h1{font-size:1rem;color:#fff}
+</style></head><body>
+<h1>cheeseless: the author side (scripted agents)</h1>
+<pre>
+# Author side of cheeseless. The agents below are scripted stand-ins, not LLMs.
+# The repo has a spec and a smoke test; there are no hidden tests yet.
+$ git ls-files
+README.md
+acceptance/contract/criteria.yaml
+acceptance/contract/spec.md
+acceptance/contract/test_smoke.py
+src/toy/__init__.py
+src/toy/__main__.py
+
+# 1. A reference session sees only the contract (spec + criteria), never tests.
+#    It writes a reference implementation from the spec.
+$ cheeseless session --role reference --task &lt;placeholder-task&gt; --projection &lt;ref-worktree&gt; -- &lt;scripted agent: reference&gt;
+  agent&gt; I can see 5 files: README.md, acceptance/contract/criteria.yaml, acceptance/contract/spec.md, src/toy/__init__.py, src/toy/__main__.py
+  agent&gt; test files visible to me: 0
+  agent&gt; implementing from the spec: words of equal length keep their input order (a stable sort)
+  agent&gt; wrote src/toy/__main__.py
+$ cheeseless reference record --worktree &lt;ref-worktree&gt;
+reference recorded: &lt;id-1&gt;
+
+# 2. The author writes hidden tests. One of them is deliberate bait:
+#    test_ties_alphabetical contradicts the spec&#x27;s stable tie rule.
+#    author_crosscheck runs the tests against the reference and goes red.
+$ cheeseless session --role author --task &lt;placeholder-task&gt; --projection &lt;author-worktree-1&gt; -- &lt;scripted agent: author-bait&gt;
+  agent&gt; writing hidden tests, including test_ties_alphabetical (contradicts the spec)
+  agent&gt; wrote acceptance/hidden/test_normalize.py
+  agent&gt; wrote acceptance/hidden/test_score.py
+  agent&gt; author_check       -&gt; ok=True, problems=[], tests=4
+  agent&gt; author_crosscheck  -&gt; green=False, red_criteria=[&#x27;score&#x27;]
+  agent&gt; freeze_propose     -&gt; proposal_id=&lt;proposal-1&gt;
+$ cheeseless promote --role author --worktree &lt;author-worktree-1&gt;
+promoted refs/heads/spec/toy &lt;id-2&gt;
+$ git merge --ff-only spec/toy
+
+#    The host tries to approve anyway; the red crosscheck blocks it.
+$ cheeseless freeze --approve &lt;proposal-1&gt; --as host
+refused: the reference failed the author&#x27;s tests: score
+
+# 3. The author fixes only the test that contradicted the spec.
+#    The crosscheck turns green and the host approves the freeze.
+$ cheeseless session --role author --task &lt;placeholder-task&gt; --projection &lt;author-worktree-2&gt; -- &lt;scripted agent: author-fix&gt;
+  agent&gt; the crosscheck was red on score; fixing only the test that contradicts the spec
+  agent&gt; wrote acceptance/hidden/test_normalize.py
+  agent&gt; wrote acceptance/hidden/test_score.py
+  agent&gt; author_check       -&gt; ok=True, problems=[], tests=4
+  agent&gt; author_crosscheck  -&gt; green=True, red_criteria=[]
+  agent&gt; freeze_propose     -&gt; proposal_id=&lt;proposal-2&gt;
+$ cheeseless promote --role author --worktree &lt;author-worktree-2&gt;
+promoted refs/heads/spec/toy &lt;id-3&gt;
+$ git merge --ff-only spec/toy
+$ cheeseless freeze --approve &lt;proposal-2&gt; --as host
+frozen task: &lt;proposal-2&gt;
+
+# 4. After the freeze the author can no longer change the suite.
+$ cheeseless session --role author --projection &lt;author-worktree-3&gt; -- &lt;scripted agent: author-late&gt;
+  agent&gt; trying to change the frozen suite
+  agent&gt; author_check       -&gt; refused: author_refused
+  agent&gt; freeze_propose     -&gt; refused: author_refused
+
+# 5. The implementer never sees the hidden tests. It guessed alphabetical ties,
+#    fails score, and disputes the criterion. The ack says nothing about tests.
+$ cheeseless dispute config --enable
+disputes enabled, cap 3
+$ cheeseless session --role implementer --projection &lt;impl-worktree&gt; -- &lt;scripted agent: implementer&gt;
+  agent&gt; hidden test files visible to me: 0
+  agent&gt; wrote src/toy/__main__.py
+  agent&gt; run -&gt; fail (normalize=pass, score=fail)
+  agent&gt; dispute(score, contradicts_spec) -&gt; Dispute recorded. This session is closed.
+$ cheeseless disputes --show-note --json
+{
+  &quot;disputes&quot;: [
+    {
+      &quot;code&quot;: &quot;contradicts_spec&quot;,
+      &quot;criterion&quot;: &quot;score&quot;,
+      &quot;id&quot;: &quot;d-1&quot;,
+      &quot;lineage&quot;: &quot;toy&quot;,
+      &quot;note_untrusted&quot;: &quot;score fails but my output is sorted; I think the tie rule is wrong&quot;,
+      &quot;resolved_by&quot;: &quot;&quot;,
+      &quot;status&quot;: &quot;open&quot;,
+      &quot;task&quot;: &quot;&lt;proposal-2&gt;&quot;
+    }
+  ]
+}
+
+#    The host reads the note, checks the spec and rejects the dispute.
+$ cheeseless dispute resolve d-1 --rejected --as host
+d-1: rejected by host
+A fresh implementer session may start for this task.
+
+# The crosscheck checks the tests against the spec (via the reference).
+# The implementer gate catches gaming. They are two separate controls.
+</pre>
+</body></html>
