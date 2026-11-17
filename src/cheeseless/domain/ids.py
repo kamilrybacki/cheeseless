@@ -6,6 +6,7 @@ _CRITERION_ID = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
 _LINEAGE_ID = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _GIT_OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+_SESSION_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _HOST = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*")
 
 
@@ -29,6 +30,11 @@ def sha256_hex(value: object, what: str = "digest") -> str:
 
 def git_oid(value: object) -> str:
     return _check(_GIT_OID, value, "git object id")
+
+
+def session_id(value: object) -> str:
+    """An agent session id (a lowercase UUID, as Claude Code issues them)."""
+    return _check(_SESSION_ID, value, "session id")
 
 
 def host(value: object) -> str:
