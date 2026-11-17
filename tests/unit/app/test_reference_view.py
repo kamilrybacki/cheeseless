@@ -33,3 +33,22 @@ def test_the_rest_of_the_repo_is_kept(tmp_path):
     repo = _repo(tmp_path)
     tree = reference_tree(repo, repo.tree_of(repo.head_commit()))
     assert [b.path for b in repo.blobs_under(tree, "src")] == ["src/app.py"]
+
+
+def test_a_directory_named_like_an_allowlisted_file_is_dropped_whole(tmp_path):
+    files = dict(FILES)
+    del files["acceptance/contract/spec.md"]
+    files["acceptance/contract/spec.md/test_inside.py"] = "HIDDEN-IN-DIR\n"
+    root = make_repo(tmp_path / "r", files)
+    repo = GitRepository.discover(root)
+    tree = reference_tree(repo, repo.tree_of(repo.head_commit()))
+    paths = {b.path for b in repo.blobs_under(tree, "acceptance")}
+    assert paths == {"acceptance/contract/criteria.yaml"}
+
+
+def test_a_repo_without_acceptance_is_returned_without_it(tmp_path):
+    root = make_repo(tmp_path / "r", {"src/app.py": "print('app')\n"})
+    repo = GitRepository.discover(root)
+    tree = reference_tree(repo, repo.tree_of(repo.head_commit()))
+    assert repo.blobs_under(tree, "acceptance") == ()
+    assert [b.path for b in repo.blobs_under(tree, "src")] == ["src/app.py"]
