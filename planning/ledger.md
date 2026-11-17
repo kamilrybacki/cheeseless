@@ -767,6 +767,20 @@ Role-aware promote and the CI author job. No ADR changed; every choice below is 
 | B10 | The author job's author check is advisory: its problems are reported, a crash is reported as `author check unavailable`, and neither fails the job. The job never calls `ci-judge`, so it posts no implementation verdict. Blocking conditions are path confinement and the unknown class only. | The brief calls the check advisory. Making it blocking would let a flaky sandbox block spec PRs; the blocking promote-time check (R15) already exists. | `tests/unit/app/test_ci_branch.py` |
 | B11 | Process note: the domain `ci_branch` test and code were written in one step, breaking strict red-first. The app, CLI, workflow and promote-ref fix were run red first. | Honest record. | commit order |
 
+### Round 9 review (stage (b)): findings and dispositions
+
+| # | Finding | Disposition |
+|---|---------|-------------|
+| S1 | Author promote raced with approval | Fixed: publication runs under the lifecycle lock (`hold_open`). |
+| S2 | `branch.yml` published no enforceable check | Fixed: design (a), one trusted workflow `judge.yml` (jobs `route`, `judge`, `branch-policy`); `branch.yml` removed. `branch-policy` publishes `cheeseless branch policy` via the judge App on the validated PR head. Logic is in `ci-route` and `ci-branch --check-payload`. |
+| S3 | `judge.yml` ran for every PR | Fixed: only `gate/` reaches `ci-judge`; unknown classes get a failing policy check; an unverifiable PR publishes nothing. B9 is superseded by this design. |
+| S4 | Canary test inspected nothing | Fixed: scans host objects, fails on error, proven by a contaminated control. |
+| S5 | Symbolic refs | Fixed: refs are never symbolic (`update-ref --no-deref`). |
+| S6 | Repeated promote rewrote history | Fixed: ancestry check plus compare-and-swap. |
+| S7 | Acceptance symlink gave "internal error" | Fixed: `SnapshotRejected` maps to a stable refusal. |
+
+Decisions: `spec/<lineage_id>` is kept; ADR 0009 says `spec/<task>`, and the lineage id identifies the task's authoring lineage, so the meaning is the same (flagged for the operator, B1). `--role` is the operator's publication mode, not session authentication; session role binding stays deferred. Author path set stays `acceptance/` only. The author check output is advisory; path confinement and unknown-class rejection are blocking, and the promote-time PASS and approve checks stay mandatory.
+
 Open for the operator (not settled by ADR 0009): whether the `author` job should become blocking, and whether `spec/<lineage>` should be renamed `spec/<task>` once a task id exists at propose time.
 
 Remaining (out of scope here): G12/G13 dispute budget reset; `session --role author|reference` launching; real reference-agent sessions.
