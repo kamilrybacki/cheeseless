@@ -20,6 +20,9 @@ class PromoteOutcome:
     commit: str
 
 
+GATE_REF = "refs/heads/gate/"
+
+
 class PromoteRejected(Exception):
     """Raised when the promote path filter rejects or requires approval."""
 
@@ -62,6 +65,8 @@ def promote(
 
     if ref is None:
         ref = f"refs/heads/gate/{task_id}"
+    if not ref.startswith(GATE_REF):
+        raise ValueError(f"implementer promote only writes under {GATE_REF}: {ref}")
 
     changes = repo.diff_modes(frozen.projection_tree, candidate_tree)
     decision = decide_promote(changes, approved=approved)
