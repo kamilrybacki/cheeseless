@@ -862,3 +862,17 @@ Remaining (out of scope here): real reference-agent sessions. Role-bound session
 | ID | Item | Disposition |
 |---|---|---|
 | S52 | Stale review of stage (b) (`b415c5b`, verdict REJECT), re-checked against main | (1) aggregate required check: addressed, `ci-gate` folds the branch policy and the verdict into the single required `cheeseless gate` check. (2) retarget: `ci.yml` fires on `edited` and re-routes; the gap left was that `post` re-checked only the PR head before publishing, so a run started before a retarget could still publish. Fixed: `post` also requires `.base.ref` to equal the default branch (`test_post_rechecks_head_and_base_just_before_publishing`). (3) stale successes on reused heads: addressed by `--current-base` (the verdict must be judged against the current default-branch tip) and the head re-check. (4) `spec/<lineage_id>`: already decided in B1 and S16; no new ADR. |
+
+### ADR 0013 review round 1 (2026-11-17)
+
+Reviewer: gpt-6.1-sol (Codex, other vendor; verdict ACCEPT WITH CHANGES). A second reviewer
+(DeepSeek via opencode) was refused by the routing policy for this work, so the review has one
+cross-vendor model. Every finding is accepted and addressed in the ADR and in
+`planning/dev-mode.md`; none is rejected.
+
+| # | Finding | Resolution |
+|---|---------|------------|
+| S53-1 | `--resume` semantics undefined; resuming the implementer could reuse a context that saw a holdout outcome or the author transcript | Accepted: the host store binds phase, spec digest, proposal and per-role session ids; `--resume` resumes only the author, the implementer always starts fresh. |
+| S53-2 | The full judgment after a green `gate_run` runs the holdout locally, which ADR 0005 reserves for CI and budgets separately | Accepted: the judgment plays the CI role (the ADR says it extends ADR 0005), reserves a run from the lineage's CI pool in the host store before any hidden input, and reports only red criterion names. After 3 holdout fails or an empty pool the user decides. |
+| S53-3 | "Queue disputes and let the implementer continue" contradicts ADR 0009 (a dispute ends the session `DISPUTED`, never resumed) | Accepted: a dispute ends the session at once; rejected starts a fresh implementer, upheld returns to the author for a re-freeze in the same lineage. |
+| S53-4 | The OAuth token could leak into runners or candidates | Accepted: only `CLAUDE_CODE_OAUTH_TOKEN` is forwarded, and only into agent sandboxes (author, reference, implementer); a security test must prove runners and candidates never get it. |

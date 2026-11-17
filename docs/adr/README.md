@@ -15,3 +15,4 @@ Only critical, long-lived decisions live here. Everything else goes to
 | [0008](0008-agent-facing-error-model.md) | One typed agent-facing error and staged disclosure | accepted |
 | [0009](0009-author-and-implementer-roles.md) | Separate author and implementer roles, reference crosscheck, dispute channel | accepted |
 | [0010](0010-author-runner-candidate-broker.md) | Reach the candidate from the author sandbox only through a host broker | accepted |
+| [0013](0013-interactive-dev-mode.md) | Drive spec, tests and code from one host command, `cheeseless dev` | proposed |
