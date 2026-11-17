@@ -11,17 +11,15 @@ import socket
 import time
 from pathlib import Path
 
-import pytest
-
 from cheeseless.adapters.outbound.git.repository import GitRepository
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.bootstrap import host_session
+from cheeseless.domain.pane_frames import encode_resize
 from cheeseless.domain.reference_attempt import (
     NewReferenceAttempt,
     ReferenceMode,
     ReferenceState,
 )
-from cheeseless.domain.pane_frames import encode_resize
 from cheeseless.session_options import within
 from tests.requirements import needs
 from tests.toy import make_repo

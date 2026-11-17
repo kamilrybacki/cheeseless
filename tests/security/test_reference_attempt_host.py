@@ -5,7 +5,6 @@ A headless attempt is ``done`` only on exit 0 and binds its snapshot; a non-zero
 that exits without it fails. Stale attempts a dead host left behind are reaped first.
 """
 
-import json
 import os
 from pathlib import Path
 

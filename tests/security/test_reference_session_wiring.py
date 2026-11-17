@@ -111,6 +111,7 @@ from cheeseless.domain.reference_attempt import (  # noqa: E402
     ReferenceMode,
     ReferenceState,
 )
+
 DIGEST = "a" * 64
 ATTEMPT = "att-wiring"
 LINEAGE = "toy"
