@@ -33,6 +33,7 @@ from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.authoring import author_check
 from cheeseless.app.ci_branch import BranchOutcome, check_branch, check_payload
+from cheeseless.app.ci_gate import build_checks
 from cheeseless.app.ci_judge import CiVerdict, FreezeDrift, JudgeReason, judge
 from cheeseless.app.ci_route import resolve_route
 from cheeseless.bootstrap import _ensure_outside, _state_home
@@ -322,6 +323,32 @@ def ci_route(args: argparse.Namespace) -> int:
     return EXIT_PASS if route.ok else EXIT_FAIL
 
 
+def _read_json(path: str) -> object:
+    """A JSON file, or None when it is missing, unreadable or not JSON (fail closed)."""
+    if not path:
+        return None
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def ci_gate(args: argparse.Namespace) -> int:
+    """Print the check bodies to publish (JSON list); the first is the required gate check."""
+    if not _SHA.fullmatch(args.head):
+        _err("ci-gate: --head must be a full 40-character lowercase commit SHA")
+        return EXIT_USAGE
+    checks = build_checks(
+        args.head,
+        args.branch_class,
+        _read_json(args.policy),
+        args.judge_code,
+        _read_json(args.verdict),
+    )
+    print(json.dumps(checks, sort_keys=True))
+    return EXIT_PASS
+
+
 def run(args: argparse.Namespace) -> int:
     commands = {
         "ci-export": ci_export,
@@ -329,6 +356,7 @@ def run(args: argparse.Namespace) -> int:
         "ci-budget-init": ci_budget_init,
         "ci-branch": ci_branch,
         "ci-route": ci_route,
+        "ci-gate": ci_gate,
     }
     return commands[args.command](args)
 
@@ -339,6 +367,7 @@ __all__ = [
     "ci_branch",
     "ci_budget_init",
     "ci_export",
+    "ci_gate",
     "ci_route",
     "ci_judge",
     "make_ledger_seeder",

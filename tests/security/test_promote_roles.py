@@ -1,8 +1,8 @@
 """Role-aware promote is confined per role and never carries hidden content (ADR 0009, R2/R15/R17).
 
-Author promote may carry acceptance/ only and only onto spec/<lineage>; implementer promote may
-carry anything except acceptance/ and only onto gate/<task>. A stale tree is refused, and neither
-side ever publishes hidden-test or holdout content.
+Author promote may carry acceptance/ only and only onto spec/<lineage> (ledger Q3);
+implementer promote may carry anything except acceptance/ and only onto gate/<task>. A stale
+tree is refused, and neither side ever publishes hidden-test or holdout content.
 """
 
 import os

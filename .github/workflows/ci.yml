@@ -3,6 +3,8 @@ name: ci
 on:
   push:
   pull_request:
+    # `edited` fires on a base retarget, so the trusted routing is recomputed.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read

@@ -126,3 +126,51 @@ def test_ci_route_validates_the_live_pr_from_stdin(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
     assert main(["ci-route", "--head", head, "--default-branch", "main", "--repo", "o/r"]) == 1
     assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def _gate(tmp_path, capsys, *extra, head="a" * 40, cls="spec"):
+    policy = tmp_path / "policy.json"
+    args = ["ci-gate", "--head", head, "--branch-class", cls, "--policy", str(policy), *extra]
+    code = main(args)
+    return code, {c["name"]: c for c in json.loads(capsys.readouterr().out)}
+
+
+def test_ci_gate_spec_success_is_labelled_not_an_implementation_verdict(tmp_path, capsys):
+    from cheeseless.app.ci_branch import BranchOutcome, check_payload
+
+    head = "a" * 40
+    (tmp_path / "policy.json").write_text(
+        json.dumps(check_payload(BranchOutcome(True, "ok", "spec"), head))
+    )
+    code, checks = _gate(tmp_path, capsys)
+    gate = checks["cheeseless gate"]
+    assert code == 0 and gate["conclusion"] == "success"
+    assert "NOT an implementation verdict" in gate["output"]["title"]
+
+
+def test_ci_gate_fails_closed_on_a_missing_policy_file(tmp_path, capsys):
+    code, checks = _gate(tmp_path, capsys, cls="gate")
+    assert code == 0 and checks["cheeseless gate"]["conclusion"] == "failure"
+
+
+def test_ci_gate_gate_class_needs_the_judge_pass(tmp_path, capsys):
+    from cheeseless.app.ci_branch import BranchOutcome, check_payload
+
+    head = "a" * 40
+    (tmp_path / "policy.json").write_text(
+        json.dumps(check_payload(BranchOutcome(True, "ok", "gate"), head))
+    )
+    (tmp_path / "v.json").write_text(json.dumps({"status": "pass", "criteria": []}))
+    _, ok = _gate(
+        tmp_path, capsys, "--judge-code", "0", "--verdict", str(tmp_path / "v.json"), cls="gate"
+    )
+    assert ok["cheeseless gate"]["conclusion"] == "success"
+    _, bad = _gate(
+        tmp_path, capsys, "--judge-code", "1", "--verdict", str(tmp_path / "v.json"), cls="gate"
+    )
+    assert bad["cheeseless gate"]["conclusion"] == "failure"
+
+
+def test_ci_gate_rejects_a_non_sha_head(tmp_path, capsys):
+    code = main(["ci-gate", "--head", "main", "--branch-class", "spec", "--policy", "x"])
+    assert code == 2

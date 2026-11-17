@@ -1,4 +1,4 @@
-"""The single trusted CI workflow: route first, then judge (gate/) or branch policy (R8, S2/S3)."""
+"""The single trusted CI workflow: route, judge (gate/), evaluate, post (R8, S2/S3, H1, M3)."""
 
 import re
 from pathlib import Path
@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 
 from cheeseless.app.ci_branch import BRANCH_POLICY_CHECK
+from cheeseless.app.ci_gate import GATE_CHECK, JUDGE_CHECK
 
 DOCS = Path(__file__).resolve().parents[2] / "docs" / "ci"
 WORKFLOW = DOCS / "judge.yml"
@@ -27,9 +28,18 @@ def _runs(job: str) -> str:
     return "\n".join(s.get("run", "") for s in _jobs()[job]["steps"])
 
 
+def _dump(job: str) -> str:
+    return yaml.safe_dump(_jobs()[job])
+
+
+def _fetches_or_runs_pr_code(job: str) -> bool:
+    runs = _runs(job)
+    return "refs/pull/" in runs or "ci-judge" in runs or "ci-branch" in runs
+
+
 def test_there_is_one_workflow_and_no_second_route_around_it():
     assert not (DOCS / "branch.yml").exists()
-    assert set(_jobs()) == {"route", "judge", "branch-policy"}
+    assert set(_jobs()) == {"route", "judge", "evaluate", "post"}
     assert _wf()["permissions"] == {}
 
 
@@ -44,29 +54,73 @@ def test_the_route_job_holds_no_secrets_and_decides_through_python():
 
 def test_only_a_gate_route_reaches_the_implementation_judge():
     judge = _jobs()["judge"]
-    assert judge["needs"] == "route" or "route" in judge["needs"]
+    assert "route" in judge["needs"]
     assert "run_judge" in judge["if"] and "'true'" in judge["if"]
-    assert "ci-judge" in _runs("judge")
-    assert "ci-judge" not in _runs("branch-policy")
-    assert "ci-judge" not in _runs("route")
+    for other in ("route", "evaluate", "post"):
+        assert "ci-judge" not in _runs(other)
 
 
-def test_branch_policy_runs_for_every_validated_pr_and_publishes_the_policy_check():
-    policy = _jobs()["branch-policy"]
-    assert "route" in policy["needs"] and "if" not in policy
-    runs = _runs("branch-policy")
+def test_evaluate_is_unprivileged_and_runs_for_every_validated_pr():
+    evaluate = _jobs()["evaluate"]
+    assert "route" in evaluate["needs"] and "if" not in evaluate
+    assert "environment" not in evaluate
+    text = _dump("evaluate")
+    for forbidden in ("secrets.", "vars.", "create-github-app-token", "check-runs"):
+        assert forbidden not in text
+    runs = _runs("evaluate")
     assert "cheeseless ci-branch" in runs and "--check-payload" in runs
-    assert "repos/${REPO}/check-runs" in runs and "--input" in runs
-    assert BRANCH_POLICY_CHECK in runs
-    assert "cheeseless judge" not in runs
-    assert policy["environment"] == "cheeseless-judge"
-    assert any("create-github-app-token" in s.get("uses", "") for s in policy["steps"])
+    assert any("upload-artifact" in s.get("uses", "") for s in evaluate["steps"])
+
+
+def test_no_job_that_fetches_or_runs_pr_code_can_see_the_app_key_or_post_checks():
+    """M3: the checks credential and any PR code never share a job."""
+    for name in _jobs():
+        if _fetches_or_runs_pr_code(name):
+            text = _dump(name)
+            assert (
+                "CHEESELESS_JUDGE_APP_KEY" not in text.replace("permission-contents", "")
+                or name == "judge"
+            ), name
+            assert "permission-checks" not in text, name
+            assert "check-runs" not in text, name
+
+
+def test_the_judge_job_uses_the_app_key_only_for_the_budget_token():
+    judge = _jobs()["judge"]
+    mints = [s for s in judge["steps"] if "create-github-app-token" in s.get("uses", "")]
+    assert len(mints) == 1
+    assert mints[0]["with"]["permission-contents"] == "write"
+    assert "permission-checks" not in mints[0]["with"]
+    assert "check-runs" not in _dump("judge")
+
+
+def test_the_post_job_is_the_only_publisher_and_never_touches_pr_code():
+    post = _jobs()["post"]
+    assert post["environment"] == "cheeseless-judge"
+    assert {"route", "judge", "evaluate"} <= set(post["needs"])
+    assert "always()" in post["if"]
+    runs = _runs("post")
+    assert not _fetches_or_runs_pr_code("post") and "git fetch" not in runs
+    assert "cheeseless ci-gate" in runs
+    assert "pulls/${PR_NUMBER}" in runs and ".head.sha" in runs
+    assert "repos/${REPO}/check-runs" in runs
+    checkout = [s for s in post["steps"] if "checkout" in s.get("uses", "")]
+    assert len(checkout) == 1
+    assert checkout[0]["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    for name in ("route", "judge", "evaluate"):
+        assert "check-runs" not in _dump(name)
+
+
+def test_the_required_gate_check_name_is_the_one_ci_gate_publishes():
+    assert GATE_CHECK == "cheeseless gate"
+    assert BRANCH_POLICY_CHECK == "cheeseless branch policy"
+    assert JUDGE_CHECK == "cheeseless judge"
 
 
 def test_the_published_check_is_bound_to_the_validated_head_and_pr():
-    runs = _runs("branch-policy")
-    assert "pulls/${PR_NUMBER}" in runs and ".head.sha" in runs
-    assert "head_sha" in runs and '"$HEAD_SHA"' in runs
+    runs = _runs("post")
+    assert '"$HEAD_SHA"' in runs and "check-runs" in runs
+    assert "--head" in runs and "--branch-class" in runs
 
 
 def test_the_branch_name_reaches_a_shell_only_through_an_env_var():
@@ -74,11 +128,12 @@ def test_the_branch_name_reaches_a_shell_only_through_an_env_var():
         for step in job.get("steps", []):
             run = step.get("run", "")
             assert "head_branch" not in run and "outputs.branch" not in run, step
-    lines = [ln.strip() for ln in WORKFLOW.read_text().splitlines() if "outputs.branch" in ln]
+    lines = [ln.strip() for ln in WORKFLOW.read_text().splitlines() if "outputs.branch }}" in ln]
     assert sorted(lines) == [
         "BRANCH: ${{ needs.route.outputs.branch }}",
         "branch: ${{ steps.route.outputs.branch }}",
     ]
+    assert "BRANCH_CLASS: ${{ needs.route.outputs.branch_class }}" in WORKFLOW.read_text()
 
 
 def test_the_pr_head_is_fetched_as_objects_only_and_actions_are_pinned():
@@ -87,3 +142,16 @@ def test_the_pr_head_is_fetched_as_objects_only_and_actions_are_pinned():
         for step in job.get("steps", []):
             if "uses" in step:
                 assert PINNED.match(step["uses"]), step["uses"]
+
+
+def test_every_downloaded_or_uploaded_artifact_action_is_pinned():
+    text = WORKFLOW.read_text()
+    assert "upload-artifact@" in text and "download-artifact@" in text
+
+
+def test_ci_workflow_reruns_routing_when_the_base_is_retargeted():
+    """L1: a retarget fires `edited`, so the route is recomputed against the new base."""
+    ci = yaml.safe_load((DOCS.parents[1] / ".github" / "workflows" / "ci.yml").read_text())
+    triggers = ci.get("on", ci.get(True))
+    types = set(triggers["pull_request"]["types"])
+    assert {"opened", "synchronize", "reopened", "edited"} <= types

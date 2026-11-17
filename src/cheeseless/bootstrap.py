@@ -599,7 +599,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "session":
         return _run_session_command(args, agent)
-    if args.command in ("ci-export", "ci-judge", "ci-budget-init", "ci-branch", "ci-route"):
+    if args.command in (
+        "ci-export",
+        "ci-judge",
+        "ci-budget-init",
+        "ci-branch",
+        "ci-route",
+        "ci-gate",
+    ):
         from cheeseless.bootstrap_ci import run as run_ci  # noqa: PLC0415 - avoids a cycle
 
         return run_ci(args)

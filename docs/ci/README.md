@@ -47,25 +47,46 @@ posts a check run with the aggregate status and visible-criterion statuses only.
    branch.
 6. Copy `judge.yml` to `.github/workflows/judge.yml` on the default branch. Adjust the
    `workflows:` name to match your PR workflow.
-7. Make the `cheeseless branch policy` check required for every PR, and `cheeseless judge`
-   required for `gate/*` PRs (a ruleset can scope a required check by branch name). Pin the
-   **expected source of both to the judge App**. Without the pin, a check run with the same
-   name posted by any workflow (the shared `github-actions` app) would satisfy it.
+7. Require ONE check on the default branch: `cheeseless gate`. Add a single ruleset (or
+   branch protection rule) that targets the default branch (required status checks are
+   scoped by the PR's **base** branch, never by its head branch, so a per-`gate/*` rule can
+   never match) with the required status check `cheeseless gate`, and pin its **expected
+   source to the judge App**. Without the pin, a check run with the same name posted by any
+   workflow (the shared `github-actions` app) would satisfy it. Do not require
+   `cheeseless judge` or `cheeseless branch policy`: they are published for information and
+   are folded into the gate. The gate is class-aware:
+   - `gate/<task>`: `success` only if the implementation judge PASSED and the branch policy
+     passed;
+   - `spec/<lineage>`: `success` if the branch policy passed. Its title and summary say it is
+     **NOT an implementation verdict** (see the ledger's stage (b) rows; `<lineage>` is the
+     task's stable authoring lineage id, ADR 0009's `spec/<task>`);
+   - any other class, or any failure: `failure`.
+
+   The gate is always `success` or `failure`. `neutral` and `skipped` are never used,
+   because GitHub treats them as satisfying a required check.
 
 ## How it behaves
 
-- Runs from the default branch (`workflow_run`), never from PR code. One workflow, three
-  jobs. `route` (no secrets) resolves the live PR from the head SHA and verifies its base,
-  head and branch class with `cheeseless ci-route`. Then:
-  - `gate/<task>`: `judge` (implementation verdict) and `branch-policy` (no `acceptance/`).
-  - `spec/<lineage>`: `branch-policy` only (`acceptance/` paths only, plus the advisory
-    author check, which is reported and never blocks). The implementation judge never runs,
-    so an author PR can never earn an implementation PASS.
-  - any other branch: `branch-policy` posts a failing check.
-  - a PR that cannot be verified (not exactly one open PR, non-default base, head moved)
-    publishes nothing, so the required checks stay missing and the merge stays blocked.
-  `branch-policy` publishes through the judge App token (`checks: write`), minted only after
-  the sandboxed evaluation, exactly like the judge check.
+- Runs from the default branch (`workflow_run`), never from PR code. One workflow, four
+  jobs:
+  - `route` (no secrets) resolves the live PR from the head SHA and verifies its base, head,
+    head repository (a fork PR is refused) and branch class with `cheeseless ci-route`.
+  - `judge` runs only for `gate/<task>`. It fetches the PR objects and runs the sandboxed
+    implementation judge. It holds only the budget token (see below), never the checks
+    credential, and hands the verdict to `post` as an artifact and an output.
+  - `evaluate` runs for every validated PR and is unprivileged: no environment, no secrets.
+    It fetches the PR objects, runs `cheeseless ci-branch --check-payload` (path
+    confinement for `gate/` and `spec/`; the advisory author check for `spec/` is reported
+    and never blocks) and hands `payload.json` to `post` as an artifact.
+  - `post` is the only job that can publish checks. It has the environment and the App key
+    but checks out only the default branch and never fetches or runs PR code. It runs
+    `cheeseless ci-gate`, which validates the payload (exact schema, head SHA, class) and
+    builds the check bodies, re-checks that `pulls/N` still has the same head SHA, mints the
+    checks token and posts `cheeseless gate` (required) plus the informational
+    `cheeseless judge` (`gate/` only) and `cheeseless branch policy` checks.
+  An author PR can never earn an implementation PASS. A PR that cannot be verified (not
+  exactly one open PR, non-default base, fork head, head moved) publishes nothing, so the
+  required check stays missing and the merge stays blocked.
 - Resolves the PR from the head SHA, refuses a non-default base, fetches the head as objects
   only and never checks it out.
 - A PR that touches `acceptance/` or other protected paths (measured from its merge base
@@ -76,17 +97,17 @@ posts a check run with the aggregate status and visible-criterion statuses only.
   (`FREEZE_DRIFT`): re-freeze first.
 - Exit codes: 0 PASS, 1 FAIL/BLOCKED, 2 usage or infrastructure error, 3 FREEZE_DRIFT.
   The check is `success` only for exit 0 with status `pass`; anything else is `failure`.
-- Two App tokens, never the App key, reach steps:
+- Two App tokens, in two different jobs; the App key itself reaches only the mint steps:
   - the **budget token** (Contents write, ledger repository only) is minted right before
     the judge step, is passed only to it as `CHEESELESS_BUDGET_TOKEN`, and is revoked in the
     step right after it, whatever the judge did. The judge removes it from its own
     environment before it builds any sandbox, and the candidate sandbox env is an allowlist
     that never includes it;
-  - the **checks token** (Checks write only) is minted after the judge step and used only to
-    post the verdict.
+  - the **checks token** (Checks write only) is minted only in the `post` job, which has no
+    PR code, and used only to post the checks.
 
-  Both are revoked again at the end of the job. `GITHUB_TOKEN` stays read-only. The bundle is
-  exposed only to the judge step.
+  Both are revoked again at the end of their job. `GITHUB_TOKEN` stays read-only. The bundle
+  is exposed only to the judge step.
 
 ## CI budget ledger
 

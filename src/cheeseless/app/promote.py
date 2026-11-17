@@ -84,7 +84,7 @@ def promote(
 def promote_author(
     repo: Repository, store: AuthoringStore, *, worktree: str | Path
 ) -> PromoteOutcome:
-    """Publish the author's acceptance/ change onto spec/<lineage> (ADR 0009, R15, R17).
+    """Publish the author's acceptance/ change onto spec/<lineage> (ledger Q3; ADR 0009, R15, R17).
 
     Requires an author_check PASS recorded on the same acceptance tree and spec, refuses once
     approval has begun, and carries only acceptance/ paths relative to the default branch.

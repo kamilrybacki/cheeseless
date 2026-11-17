@@ -155,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--role",
         choices=("implementer", "author"),
         default="implementer",
-        help="implementer: gate/<task>; author: spec/<lineage> (acceptance/ only).",
+        help="implementer: gate/<task>; author: spec/<lineage> (ledger Q3; acceptance/ only).",
     )
     prom.add_argument("--worktree", type=Path, default=None)
     prom.add_argument("--task", default=None)
@@ -265,6 +265,16 @@ def build_parser() -> argparse.ArgumentParser:
     cir.add_argument("--head", required=True, help="The head commit SHA being checked.")
     cir.add_argument("--default-branch", required=True)
     cir.add_argument("--repo", required=True, help="owner/name of the judged repository.")
+
+    cig = sub.add_parser(
+        "ci-gate",
+        help="Fold the branch-policy payload and judge result into the check bodies to publish.",
+    )
+    cig.add_argument("--head", required=True, help="The head commit SHA being checked.")
+    cig.add_argument("--branch-class", required=True, help="Class from ci-route (gate, spec, ...).")
+    cig.add_argument("--policy", required=True, help="Path to the ci-branch --check-payload JSON.")
+    cig.add_argument("--judge-code", default="", help="Exit code of ci-judge (gate/ only).")
+    cig.add_argument("--verdict", default="", help="Path to the ci-judge --json output.")
 
     init = sub.add_parser(
         "ci-budget-init",

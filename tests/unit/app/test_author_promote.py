@@ -1,4 +1,4 @@
-"""Author promote onto spec/<lineage>: needs a fresh author_check PASS (ADR 0009, R15, R17)."""
+"""Author promote onto spec/<lineage> (ledger Q3): needs a fresh author_check PASS (R15, R17)."""
 
 import subprocess
 
