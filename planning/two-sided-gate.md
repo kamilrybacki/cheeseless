@@ -45,5 +45,6 @@ policy passed and says it is NOT an implementation verdict; any other class or f
 neutral or skipped. `cheeseless judge` and `cheeseless branch policy` stay as informational checks. An author check is
 never an implementation PASS. `spec/<lineage>` is ADR 0009's `spec/<task>` (ledger, stage (b) row Q3).
 
-`promote --role` is the operator's publication mode on the host, not session authentication. Binding a session to a role at
-launch stays deferred (see the ledger's "Remaining" line).
+`promote --role` is the operator's publication mode on the host, not session authentication. A session's role is bound at launch by
+`session --role` and re-checked on every call against the trusted store (ledger S27). A rejected dispute reopens the task
+for a new session generation with a fresh attempt window (S28).

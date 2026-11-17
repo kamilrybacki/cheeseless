@@ -38,6 +38,9 @@ posts a check run with the aggregate status and visible-criterion statuses only.
    The path must be outside the repository. The bundle is written with mode 0600 and never
    printed. It pins the ledger repository, the lineage branch and the root commit; a bundle
    without them (version 1) is refused, so re-export after upgrading.
+   The bundle records how many disputes the lineage had at export. After any dispute (even a
+   rejected one) it is stale: run `cheeseless ci-bundle-check --bundle-file PATH` (exit 1 when
+   stale), then re-export and replace the CI secret. The judge has no store and cannot check this.
 5. Create the environment `cheeseless-judge`. Under *Deployment branches and tags* choose
    *Selected branches and tags* and allow exactly the default branch, with no tag rule.
    Add no required reviewers (the judge runs unattended). In that environment store:
