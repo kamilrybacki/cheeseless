@@ -25,10 +25,50 @@ material; the ADR holds the decision.
 - `spec_done` exists only in dev mode (not in the normal author profile).
 - Accepted risk (ADR 0013): the agent may call `spec_done` unprompted.
 
-## Phase 2: reference (background)
-- Fresh headless `claude -p` in a test-free reference sandbox, same model by default.
-- Its log goes to a host file, not to the TUI.
-- A spec change gives a new digest, which re-runs the reference.
+## Phase 2: reference (second tmux pane, ADR 0014)
+- After `spec_done` the host starts a fresh reference sandbox, test-free, same model by default.
+  The host itself launches bwrap on a pty it holds and keeps the `Popen`, the pinned PID
+  namespace and the teardown. A new tmux pane (`split-window`) runs only a host-side relay
+  (`cheeseless pane-relay`) that copies bytes between the pane's tty and that pty. The relay
+  talks to a host-only relay socket, never the verifier socket. Closing the pane only ends
+  the relay.
+- No tmux socket, `TMUX*`/`TMUX_PANE` variable or pane fd reaches either sandbox: bwrap
+  `--clearenv` plus the existing env allowlist. The author pane gets the same scrub.
+- First prompt: the `spec_done` snapshot (spec + criteria only), staged as a file. Never
+  sent with `send-keys`.
+- Attempt record in the store (`dev-reference/<attempt_id>.json`):
+  - `attempt_id`, `session_id`, `generation`, `spec_digest`, `mode` (`tui|headless`),
+    `attached` (whether the relay ever connected), and `state`.
+  - `state` is `running → stopping → done`, or `running|stopping → failed|cancelled`, changed
+    only by compare-and-set under the store lock. Only the winner of `running → stopping`
+    tears down and snapshots; a timeout or new digest during `stopping` makes it `failed` or
+    `cancelled` and drops the snapshot.
+- `reference_done`:
+  - takes no arguments;
+  - is listed only for a TUI attempt (`tool_names(REFERENCE, dev=True)`), never headless;
+  - is routed through `_REFERENCE_KINDS`, which `_role_ok` admits only for a reference session
+    whose `SessionConfig.dev_reference` names the running attempt, after the usual namespace,
+    record and generation checks.
+- On `reference_done`, in this order:
+  1. CAS `running → stopping`.
+  2. TERM the PID namespace, then KILL after a bounded wait.
+  3. Snapshot the reference tree.
+  4. CAS `stopping → done`, binding the snapshot to the attempt's digest.
+  5. Kill the pane.
+
+  A duplicate or stale call gets a typed refusal and never snapshots.
+- Failure: a sandbox exit without the tool, a timeout, or a host that died gives `failed`
+  (infra). A new spec digest gives `cancelled` and starts a new attempt. On start the host reaps
+  attempts left in `running`/`stopping` and kills their panes.
+- Headless fallback (no `$TMUX`, or `--headless-reference`) is chosen before launch, with a
+  visible warning. It has no `reference_done`. An observed exit 0 starts `running → stopping`,
+  then the same quiesce, snapshot and `done`. A nonzero exit is `failed`. Its log goes to a host
+  file.
+- Security tests (`tests/security/`):
+  - `reference_done` is refused on every path form outside a running dev attempt;
+  - a stale or duplicate call is refused, with the attempt record as the canary;
+  - `TMUX*` is absent in both sandboxes;
+  - the hidden-test canary is absent from the reference projection.
 
 ## Phase 3: tests (same conversation as the spec)
 - The author writes hidden tests.
