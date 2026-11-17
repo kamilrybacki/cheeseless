@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cheeseless.domain.promote_policy import decide_promote
+from cheeseless.app.authoring import AuthorError, _require_open, read_contract, spec_of
+from cheeseless.domain.promote_policy import decide_author_promote, decide_promote
 from cheeseless.domain.result import verify
+from cheeseless.ports.authoring import AuthoringStore
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.store import Store
 
@@ -71,4 +73,32 @@ def promote(
     return PromoteOutcome(ref=ref, commit=commit)
 
 
-__all__ = ["PromoteOutcome", "PromoteRejected", "promote"]
+def promote_author(
+    repo: Repository, store: AuthoringStore, *, worktree: str | Path
+) -> PromoteOutcome:
+    """Publish the author's acceptance/ change onto spec/<lineage> (ADR 0009, R15, R17).
+
+    Requires an author_check PASS recorded on the same acceptance tree and spec, refuses once
+    approval has begun, and carries only acceptance/ paths relative to the default branch.
+    """
+    tree = repo.snapshot(Path(worktree))
+    contract = read_contract(repo, tree)
+    _require_open(store, contract)
+    saved = store.load_author_check(contract.lineage_id)
+    if saved is None:
+        raise AuthorError("no_author_check", "no author_check PASS is recorded for this task")
+    if saved != (spec_of(contract), repo.tree_of(tree, "acceptance")):
+        raise AuthorError(
+            "stale_author_check", "the acceptance tree changed since the last author_check PASS"
+        )
+    baseline = repo.default_branch_commit()
+    base_tree = repo.tree_of(baseline)
+    decision = decide_author_promote(repo.diff_modes(base_tree, tree))
+    if not decision.ok:
+        raise PromoteRejected(decision.rejected, decision.needs_approval)
+    ref = f"refs/heads/spec/{contract.lineage_id}"
+    commit = repo.promote(baseline, base_tree, tree, ref)
+    return PromoteOutcome(ref=ref, commit=commit)
+
+
+__all__ = ["PromoteOutcome", "PromoteRejected", "promote", "promote_author"]

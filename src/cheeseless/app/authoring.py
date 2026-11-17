@@ -147,8 +147,7 @@ def author_check(
         contract = read_contract(repo, source)
     except (FreezeError, ValueError, OSError) as exc:
         return AuthorCheckResult(False, (redact_sentinels(f"contract: {exc}"),), 0)
-    if store is not None:
-        _require_open(store, contract)
+    state = _require_open(store, contract) if store is not None else None
     hidden, public = _hidden_and_public(repo, source)
     problems = list(sentinel_problems(hidden, public))
     suite = _run_driver(repo, sandbox, source, "collect", None, ())
@@ -159,6 +158,14 @@ def author_check(
     # The RED-on-baseline and flakiness checks belong to approval; collection is all we run.
     problems = [p for p in problems if "not RED" not in p]
     redacted = tuple(redact_sentinels(p) for p in problems)
+    if store is not None and state is not None and not redacted:
+        # R15: a PASS is what author promote later requires, on this exact acceptance tree.
+        tree = repo.tree_of(source, "acceptance")
+        _publish(
+            lambda: store.save_author_check(
+                contract.lineage_id, spec_of(contract), tree, expected_version=state.version
+            )
+        )
     return AuthorCheckResult(not redacted, redacted, len(suite.collected))
 
 

@@ -21,6 +21,7 @@ from cheeseless.domain.freeze import HiddenBlob
 from cheeseless.ports.repository import RepositoryError, SnapshotRejected
 
 GATE_REF_PREFIX = "refs/heads/gate/"
+SPEC_REF_PREFIX = "refs/heads/spec/"
 _PROJECTION_MESSAGE = b"cheeseless projection\n"
 
 
@@ -266,8 +267,10 @@ class GitRepository:
         return paths
 
     def promote(self, baseline: str, base_tree: str, candidate_tree: str, ref: str) -> str:
-        if not ref.startswith(GATE_REF_PREFIX):
-            raise RepositoryError(f"promote only writes under {GATE_REF_PREFIX}: {ref}")
+        if not ref.startswith((GATE_REF_PREFIX, SPEC_REF_PREFIX)):
+            raise RepositoryError(
+                f"promote only writes under {GATE_REF_PREFIX} or {SPEC_REF_PREFIX}: {ref}"
+            )
         self._git.run("check-ref-format", ref)
         changes = self._changes(base_tree, candidate_tree)
         for mode, _oid, path in changes:
