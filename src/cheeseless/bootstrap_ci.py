@@ -82,8 +82,15 @@ def ci_bundle_check(args: argparse.Namespace) -> int:
         bundle = _load_bundle(args.bundle_file)
         store = FileStore(store_root(repo.common_dir(), _state_home(args.state_dir)))
         current = _lineage_disputes(store, bundle.frozen.task.lineage_id)
+        active = store.active_task_id()
     except (BundleError, StoreError) as exc:
         _err(f"ci-bundle-check refused: {exc}")
+        return EXIT_FAIL
+    if bundle.frozen.task.task_id != active:
+        _err(
+            "ci-bundle-check: the bundle is stale (its task is no longer the active task); "
+            "re-export with ci-export and replace the CI secret"
+        )
         return EXIT_FAIL
     if current != bundle.disputes:
         _err(

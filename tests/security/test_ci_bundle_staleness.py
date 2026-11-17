@@ -75,6 +75,25 @@ def test_re_export_after_a_rejection_is_fresh(world, capsys):
     assert code == 0
 
 
+def test_a_same_lineage_re_freeze_without_a_dispute_makes_the_bundle_stale(world, capsys):
+    import dataclasses
+
+    store = _store(world)
+    frozen, seed = store.load_task(store.active_task_id())
+    refrozen = dataclasses.replace(frozen, task=dataclasses.replace(frozen.task, task_id="c" * 64))
+    store.save_task(refrozen, seed)
+    store.set_active(refrozen.task.task_id)
+    assert _lineage_count(store, frozen) == 0  # no dispute was filed: the old check passes
+    code, err = _check(world, capsys)
+    assert code != 0 and "task" in err
+
+
+def _lineage_count(store, frozen) -> int:
+    from cheeseless.bootstrap_ci import _lineage_disputes
+
+    return _lineage_disputes(store, frozen.task.lineage_id)
+
+
 def test_a_missing_or_unreadable_bundle_fails_closed(world, capsys):
     world.bundle.write_bytes(b"not a bundle")
     code, _ = _check(world, capsys)
