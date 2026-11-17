@@ -145,3 +145,23 @@ class FreezeProposeResponse(_message.Message):
     proposal: FreezeProposeAck
     error: _error_pb2.Error
     def __init__(self, proposal: _Optional[_Union[FreezeProposeAck, _Mapping]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ...) -> None: ...
+
+class SpecDoneRequest(_message.Message):
+    __slots__ = ("task_id",)
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    def __init__(self, task_id: _Optional[str] = ...) -> None: ...
+
+class SpecDoneAck(_message.Message):
+    __slots__ = ("spec_digest",)
+    SPEC_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    spec_digest: str
+    def __init__(self, spec_digest: _Optional[str] = ...) -> None: ...
+
+class SpecDoneResponse(_message.Message):
+    __slots__ = ("ack", "error")
+    ACK_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    ack: SpecDoneAck
+    error: _error_pb2.Error
+    def __init__(self, ack: _Optional[_Union[SpecDoneAck, _Mapping]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ...) -> None: ...

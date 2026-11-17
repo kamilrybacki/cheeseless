@@ -20,8 +20,8 @@ material; the ADR holds the decision.
 - The author TUI runs in the author sandbox, with a built-in interview prompt (grill-me style)
   that `--skill` can replace.
 - Output: `acceptance/contract/spec.md` and `criteria.yaml`, one criterion per named spec rule.
-- Ends only via the user's `/spec-done`: a custom command in the projection's
-  `.claude/commands/` that tells the agent to call the MCP tool `spec_done`.
+- Ends only via the user's `/spec-done`: a custom command seeded into the agent's HOME
+  (`~/.claude/commands/`, ledger D13-2a) that tells the agent to call the MCP tool `spec_done`.
 - `spec_done` exists only in dev mode (not in the normal author profile).
 - Accepted risk (ADR 0013): the agent may call `spec_done` unprompted.
 

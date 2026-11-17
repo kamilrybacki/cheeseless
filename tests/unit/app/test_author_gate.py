@@ -53,3 +53,38 @@ def test_unexpected_failures_are_infra_errors(monkeypatch):
     out = author_gate.gate_author_check(_Repo(), object(), object(), "wt")
     assert isinstance(out, GateError) and out.code is ErrorCode.INFRA_ERROR
     assert "secret" not in repr(out)
+
+
+def test_spec_done_returns_the_saved_state(monkeypatch):
+    saved = object()
+    seen = {}
+
+    def fake(repo, store, source, lineage):
+        seen.update(source=source, lineage=lineage)
+        return saved
+
+    monkeypatch.setattr(author_gate, "record_spec_done", fake)
+    assert author_gate.gate_spec_done(_Repo(), object(), "wt", "demo") is saved
+    assert seen == {"source": "a" * 40, "lineage": "demo"}
+
+
+def test_spec_done_refusals_map_to_author_refused(monkeypatch):
+    from cheeseless.domain.dev_session import DevSessionError
+
+    def raiser(*a, **k):
+        raise DevSessionError("not allowed in the tests phase")
+
+    monkeypatch.setattr(author_gate, "record_spec_done", raiser)
+    out = author_gate.gate_spec_done(_Repo(), object(), "wt", "demo")
+    assert isinstance(out, GateError) and out.code is ErrorCode.AUTHOR_REFUSED
+    assert "tests phase" not in repr(out)
+
+
+def test_spec_done_unexpected_failures_are_infra_errors(monkeypatch):
+    def raiser(*a, **k):
+        raise RuntimeError("secret detail")
+
+    monkeypatch.setattr(author_gate, "record_spec_done", raiser)
+    out = author_gate.gate_spec_done(_Repo(), object(), "wt", "demo")
+    assert isinstance(out, GateError) and out.code is ErrorCode.INFRA_ERROR
+    assert "secret" not in repr(out)

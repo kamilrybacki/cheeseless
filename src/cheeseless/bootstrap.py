@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import cheeseless
 from cheeseless.adapters.inbound.cli.main import (
@@ -50,10 +50,17 @@ from cheeseless.app.audit import StoreAuditSink
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.egress_supervisor import EgressBlock, EgressSupervisor
 from cheeseless.app.reference_view import reference_tree
+from cheeseless.domain import ids
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.dlp import Fingerprints
 from cheeseless.domain.egress_policy import EgressPolicy, PolicyError
-from cheeseless.domain.session_role import SessionRole, acceptance_mount, parse_role
+from cheeseless.domain.session_role import (
+    SessionRole,
+    acceptance_mount,
+    dev_home_entries,
+    parse_role,
+)
+from cheeseless.ports.dev_session import DevSessionStore
 from cheeseless.ports.store import Store, StoreError
 from cheeseless.session_files import copy_evidence, seed_home, write_projection_list
 from cheeseless.session_options import (
@@ -377,6 +384,7 @@ def _mcp_shim_source(
     *,
     disputes: bool = False,
     role: SessionRole = SessionRole.IMPLEMENTER,
+    dev: bool = False,
 ) -> str:
     """The staged MCP stdio shim; socket and task are quoted literals, never env.
 
@@ -386,9 +394,12 @@ def _mcp_shim_source(
     the environment) can redirect it. The dispute switch is a literal too, so the
     agent cannot make ``gate_dispute`` appear; the verifier still enforces the policy.
     The role is baked the same way, but only for non-implementer roles: the implementer's
-    shim stays byte-identical to the pre-role one.
+    shim stays byte-identical to the pre-role one. ``dev`` (ADR 0013) is baked only into
+    an author shim; every other role's shim ignores it and stays byte-identical.
     """
     role_arg = "" if role is SessionRole.IMPLEMENTER else f", role={role.value!r}"
+    if dev and role is SessionRole.AUTHOR:
+        role_arg += ", dev=True"
     return (
         f"#!{python}\n"
         "import sys\n"
@@ -405,6 +416,7 @@ def _stage_runtime(
     *,
     disputes: bool = False,
     role: SessionRole = SessionRole.IMPLEMENTER,
+    dev: bool = False,
 ) -> TrustedRuntime:
     """Stage the agent client runtime outside the repo; the sandbox mounts it read-only.
 
@@ -444,7 +456,7 @@ def _stage_runtime(
     mcp = bin_dir / "cheeseless-mcp"
     python = os.path.realpath(sys.executable)
     mcp.write_text(
-        _mcp_shim_source(python, site, socket_path, task_id, disputes=disputes, role=role),
+        _mcp_shim_source(python, site, socket_path, task_id, disputes=disputes, role=role, dev=dev),
         encoding="utf-8",
     )
     os.chmod(mcp, 0o500)
@@ -556,13 +568,14 @@ def serve_mcp(
     disputes: bool = False,
     author: bool = False,
     role: str = "implementer",
+    dev: bool = False,
 ) -> int:
     """MCP stdio server. It needs only the verifier socket and task, never a store."""
     if uds_socket is None:
         raise ValueError("uds_socket is required")
     bound = parse_role(role)
     client = UdsVerifierClient(uds_socket, task_id=task_id, timeout=timeout, role=bound.value)
-    run_stdio(build_mcp_server(client, disputes=disputes, author=author, role=bound))
+    run_stdio(build_mcp_server(client, disputes=disputes, author=author, role=bound, dev=dev))
     return 0
 
 
@@ -700,6 +713,7 @@ def host_session(
     extra_env: Mapping[str, str] | None = None,
     evidence_dir: Path | None = None,
     role: SessionRole | str = SessionRole.IMPLEMENTER,
+    dev_lineage: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Run one isolated agent session with authenticated verifier and DLP egress.
 
@@ -717,9 +731,19 @@ def host_session(
     cannot choose or change it. An implementer needs a FROZEN task and keeps the read-only
     acceptance mount. An author or reference session works on the pre-freeze spec tree
     (HEAD): the author's acceptance tree stays writable, the reference's is hidden.
+
+    ``dev_lineage`` marks an author session of an open ``cheeseless dev`` session
+    (ADR 0013): only then does the agent get the ``spec_done`` tool and command.
     """
     bound = parse_role(role) if isinstance(role, str) else role
     ctx = build_context(state_dir, cwd)
+    if dev_lineage is not None:
+        dev_lineage = ids.lineage_id(dev_lineage)
+        if bound is not SessionRole.AUTHOR:
+            raise SessionOptionError("only an author session can belong to a dev session")
+        if cast(DevSessionStore, ctx.store).dev_state(dev_lineage) is None:
+            raise SessionOptionError(f"no dev session is open for {dev_lineage}")
+    dev = dev_lineage is not None
     if task_id is None:
         task_id = ctx.store.active_task_id()
     if task_id is None:
@@ -799,7 +823,8 @@ def host_session(
         _ensure_outside(projection_dir, ctx.repo, "projection")
 
         home_dir = _private_dir("cheeseless-home-")
-        seed_home(home_dir, extras.seeds)
+        seed_home(home_dir, dev_home_entries(bound, dev=dev))
+        seed_home(home_dir, extras.seeds)  # an operator seed can never replace a dev entry
         if socket_dir is None:
             socket_dir_path = _private_dir("cheeseless-uds-")
         else:
@@ -815,7 +840,7 @@ def host_session(
             raise RuntimeError("egress directory must be separate from the session paths")
         egress_socket = egress_dir / "egress.sock"
         runtime = _stage_runtime(
-            socket_path, task_id, disputes=_disputes_enabled(ctx.store), role=bound
+            socket_path, task_id, disputes=_disputes_enabled(ctx.store), role=bound, dev=dev
         )
 
         tree = _projection_tree(ctx.repo, frozen, bound)
@@ -843,6 +868,7 @@ def host_session(
             author_sandbox=sandbox if bound is SessionRole.AUTHOR else None,
             session_id=session_id,
             generation=binding.generation,
+            dev_lineage=dev_lineage,
         )
         server = UdsVerifierServer(socket_path, session, socket_dir_owned=dir_owned)
         thread = threading.Thread(target=server.serve_forever, daemon=True)

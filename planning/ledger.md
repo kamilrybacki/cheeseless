@@ -899,3 +899,12 @@ resolved; no new conflict with ADR 0009.
 
 Final confirmation: gpt-6.1-sol on 4c6dd5c, verdict ACCEPT (S53-6 resolved, no regressions in
 S53-1..S53-5, no new conflicts with ADR 0005 or 0009). ADR 0013 accepted.
+
+## 2026-11-17 — ADR 0013 stage 2: dev-only `spec_done`
+
+| # | Decision | Why |
+|---|----------|-----|
+| D13-2a | `/spec-done` is seeded into the agent's HOME (`~/.claude/commands/`), not the projection's `.claude/commands/` as `planning/dev-mode.md` drafted | The author projection is what `repo.snapshot` reads and freezes; a host file there would end up in the frozen tree or need a carve-out in the snapshot. HOME is host-owned and per session. Operator `home_seed` entries are written after it and cannot replace it (`seed_home` refuses an existing destination). |
+| D13-2b | `spec_done` is an author route gated a second time by `SessionConfig.dev_lineage` | Reusing `_AUTHOR_ROUTES` keeps the claim, record and generation checks of `_role_ok`; the extra check makes it absent from a plain author session on every path form, not only from the MCP list. |
+| D13-2c | `host_session(dev_lineage=...)` validates the id, refuses any role but author and needs an open dev state, all before anything is staged | Fail fast; a dev flag can never reach an implementer or reference session. No CLI flag yet: stage 4/5 starts dev sessions from `cheeseless dev`. |
+| D13-2d | `record_spec_done` checks that the contract read from the author's snapshot has the dev session's lineage and a non-empty spec | The digest bound to the phase must be of the spec the user agreed to, in this lineage. |

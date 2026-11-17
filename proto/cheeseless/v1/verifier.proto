@@ -117,6 +117,22 @@ message FreezeProposeResponse {
   }
 }
 
+// Closes the spec phase of a cheeseless dev session (ADR 0013). Dev author sessions only.
+message SpecDoneRequest {
+  string task_id = 1;
+}
+
+message SpecDoneAck {
+  string spec_digest = 1;
+}
+
+message SpecDoneResponse {
+  oneof outcome {
+    SpecDoneAck ack = 1;
+    Error error = 2;
+  }
+}
+
 service Verifier {
   rpc Run(RunRequest) returns (RunResponse);
   rpc Status(StatusRequest) returns (StatusResponse);
@@ -124,4 +140,5 @@ service Verifier {
   rpc AuthorCheck(AuthorCheckRequest) returns (AuthorCheckResponse);
   rpc AuthorCrosscheck(AuthorCrosscheckRequest) returns (AuthorCrosscheckResponse);
   rpc FreezePropose(FreezeProposeRequest) returns (FreezeProposeResponse);
+  rpc SpecDone(SpecDoneRequest) returns (SpecDoneResponse);
 }

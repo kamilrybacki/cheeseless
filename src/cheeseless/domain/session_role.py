@@ -42,11 +42,31 @@ def acceptance_mount(role: SessionRole) -> str:
     return "ro"
 
 
-def tool_names(role: SessionRole, *, disputes: bool = False) -> tuple[str, ...]:
-    """The agent-visible MCP tool names for a role."""
+def tool_names(role: SessionRole, *, disputes: bool = False, dev: bool = False) -> tuple[str, ...]:
+    """The agent-visible MCP tool names for a role.
+
+    ``spec_done`` exists only in a host-started ``cheeseless dev`` author session."""
     if role is SessionRole.AUTHOR:
-        return ("author_check", "author_crosscheck", "freeze_propose")
+        author: tuple[str, ...] = ("author_check", "author_crosscheck", "freeze_propose")
+        return (*author, "spec_done") if dev else author
     if role is SessionRole.REFERENCE:
         return ()
     base = ("gate_run", "gate_status")
     return (*base, "gate_dispute") if disputes else base
+
+
+SPEC_DONE_COMMAND = ".claude/commands/spec-done.md"
+_SPEC_DONE_TEXT = b"""---
+description: Close the spec phase of this cheeseless dev session
+---
+Call this only once the user has agreed to the spec in spec.md. Then call the MCP tool
+spec_done. It binds this session to the spec as it is now in the worktree and moves the
+session to the tests phase. Write the acceptance tests only after it succeeds.
+"""
+
+
+def dev_home_entries(role: SessionRole, *, dev: bool) -> tuple[tuple[str, bytes], ...]:
+    """Files seeded into the agent's HOME for a dev session: only a dev author gets any."""
+    if role is SessionRole.AUTHOR and dev:
+        return ((SPEC_DONE_COMMAND, _SPEC_DONE_TEXT),)
+    return ()

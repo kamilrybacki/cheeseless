@@ -18,6 +18,7 @@ from cheeseless.app.author_gate import (
     gate_author_check,
     gate_author_crosscheck,
     gate_freeze_propose,
+    gate_spec_done,
 )
 from cheeseless.app.dispute import gate_dispute
 from cheeseless.app.gate_run import gate_run
@@ -126,9 +127,12 @@ _AUTHOR_ROUTES = {
         ("check", "author-check", "AuthorCheck"),
         ("crosscheck", "author-crosscheck", "AuthorCrosscheck"),
         ("propose", "freeze-propose", "FreezePropose"),
+        # dev author sessions only (ADR 0013): refused unless ``dev_lineage`` is set
+        ("spec_done", "spec-done", "SpecDone"),
     )
     for path in _paths(slug, rpc)
 }
+_DEV_ONLY_KINDS = frozenset({"spec_done"})
 _AUTHOR_KINDS = frozenset(_AUTHOR_ROUTES.values())
 _IMPLEMENTER_ROUTES = {
     path: kind
@@ -166,6 +170,9 @@ class SessionConfig:
     # Store generation at launch; a later rejected dispute makes this session stale.
     generation: int | None = None
     author_sandbox: AuthorSandbox | None = None
+    # Set only by a host-started ``cheeseless dev`` author session: the lineage whose dev
+    # state ``spec_done`` may move. ``None`` means the dev-only routes do not exist.
+    dev_lineage: str | None = None
 
     def namespace_fds(self) -> tuple[int, ...]:
         return tuple(
@@ -511,7 +518,9 @@ class UdsVerifierServer:
         elif known is not None and not self._role_ok(claimed_role):
             self._role_refused(wfile, known)
         elif author_kind is not None:
-            if self.session.role != "author":
+            if self.session.role != "author" or (
+                author_kind in _DEV_ONLY_KINDS and self.session.dev_lineage is None
+            ):
                 self._role_refused(wfile, author_kind)
             else:
                 self._author(wfile, body, author_kind)
@@ -571,6 +580,10 @@ class UdsVerifierServer:
         store: Any = s.store
         if kind == "propose":
             return gate_freeze_propose(s.repo, store, s.worktree)
+        if kind == "spec_done":
+            if s.dev_lineage is None:  # unreachable: _route refuses first; fail closed anyway
+                return gate_error(ErrorCode.ROLE_NOT_ALLOWED)
+            return gate_spec_done(s.repo, store, s.worktree, s.dev_lineage)
         if sandbox is None:
             return gate_error(ErrorCode.INFRA_ERROR)
         if kind == "check":

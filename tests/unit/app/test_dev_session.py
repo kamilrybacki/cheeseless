@@ -74,3 +74,60 @@ def test_the_state_is_not_shared_between_lineages(store: FileStore) -> None:
     open_session(store, "demo", resume=False)
     assert store.dev_state("other") is None
     assert isinstance(store.dev_state("demo"), DevState)
+
+
+# -- spec_done (ADR 0013 stage 2) ---------------------------------------------
+
+
+from dataclasses import replace as _replace  # noqa: E402
+
+from cheeseless.app import dev_session as dev_app  # noqa: E402
+from cheeseless.app.authoring import spec_of  # noqa: E402
+from tests.factories import contract as _contract  # noqa: E402
+
+
+class _Repo:
+    def __init__(self, c):
+        self.c = c
+
+
+def _with(monkeypatch, c) -> _Repo:
+    monkeypatch.setattr(dev_app, "read_contract", lambda repo, commit: repo.c)
+    return _Repo(c)
+
+
+def test_spec_done_records_the_spec_digest_and_moves_to_tests(store, monkeypatch) -> None:
+    c = _replace(_contract("demo"), spec="# the spec\n")
+    open_session(store, "demo", resume=False)
+    saved = dev_app.record_spec_done(_with(monkeypatch, c), store, "a" * 40, "demo")
+    assert saved.phase is DevPhase.TESTS and saved.spec_digest == spec_of(c)
+    assert store.dev_state("demo") == saved
+
+
+def test_spec_done_is_refused_for_another_lineage(store, monkeypatch) -> None:
+    open_session(store, "demo", resume=False)
+    c = _replace(_contract("other"), spec="s")
+    with pytest.raises(DevSessionError):
+        dev_app.record_spec_done(_with(monkeypatch, c), store, "a" * 40, "demo")
+    assert store.dev_state("demo").phase is DevPhase.SPEC
+
+
+def test_spec_done_needs_a_written_spec(store, monkeypatch) -> None:
+    open_session(store, "demo", resume=False)
+    with pytest.raises(DevSessionError):
+        dev_app.record_spec_done(_with(monkeypatch, _contract("demo")), store, "a" * 40, "demo")
+
+
+def test_spec_done_needs_an_open_dev_session(store, monkeypatch) -> None:
+    c = _replace(_contract("demo"), spec="s")
+    with pytest.raises(DevSessionError):
+        dev_app.record_spec_done(_with(monkeypatch, c), store, "a" * 40, "demo")
+
+
+def test_spec_done_twice_is_refused(store, monkeypatch) -> None:
+    c = _replace(_contract("demo"), spec="s")
+    open_session(store, "demo", resume=False)
+    repo = _with(monkeypatch, c)
+    dev_app.record_spec_done(repo, store, "a" * 40, "demo")
+    with pytest.raises(DevSessionError):
+        dev_app.record_spec_done(repo, store, "a" * 40, "demo")

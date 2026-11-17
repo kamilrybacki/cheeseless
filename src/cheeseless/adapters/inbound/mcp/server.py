@@ -28,10 +28,12 @@ def build_mcp_server(
     disputes: bool = False,
     author: bool = False,
     role: SessionRole = SessionRole.IMPLEMENTER,
+    dev: bool = False,
 ) -> MCPServer:
+    """``dev`` adds ``spec_done`` to an author session and is ignored for any other role."""
     server = MCPServer(name)
     if role is SessionRole.AUTHOR:
-        _register_author(server, client)
+        _register_author(server, client, dev=dev)
         return server
     if role is SessionRole.REFERENCE:
         return server  # the reference snapshot is host-recorded: no tools
@@ -106,7 +108,7 @@ def _register_dispute(server: MCPServer, client: VerifierClient) -> None:
         )
 
 
-def _register_author(server: MCPServer, client: VerifierClient) -> None:
+def _register_author(server: MCPServer, client: VerifierClient, *, dev: bool = False) -> None:
     """Author-session tools. There is deliberately no approve, reference or retry tool."""
 
     def _result(kind: str, call: Callable[[], object]) -> CallToolResult:
@@ -146,6 +148,19 @@ def _register_author(server: MCPServer, client: VerifierClient) -> None:
     )
     def freeze_propose_tool() -> CallToolResult:
         return _result("propose", client.freeze_propose)
+
+    if not dev:
+        return
+
+    @server.tool(
+        name="spec_done",
+        description=(
+            "Close the spec phase of this dev session once the user agreed to spec.md. "
+            "Write the acceptance tests only after it succeeds."
+        ),
+    )
+    def spec_done_tool() -> CallToolResult:
+        return _result("spec_done", client.spec_done)
 
 
 def run_stdio(server: MCPServer) -> None:

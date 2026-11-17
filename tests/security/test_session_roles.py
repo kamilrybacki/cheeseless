@@ -16,7 +16,15 @@ from tests.factories import frozen_task
 from tests.support import bind_session
 
 SEED = bytes(range(32))
-ROUTES = ("/run", "/status", "/dispute", "/author-check", "/author-crosscheck", "/freeze-propose")
+ROUTES = (
+    "/run",
+    "/status",
+    "/dispute",
+    "/author-check",
+    "/author-crosscheck",
+    "/freeze-propose",
+    "/spec-done",
+)
 
 
 class Boom:
@@ -79,7 +87,7 @@ def test_an_author_session_cannot_call_gate_run(store):
 
 def test_an_implementer_session_cannot_call_the_author_tools(store):
     server = _server(store, "implementer")
-    for path in ("/author-check", "/author-crosscheck", "/freeze-propose"):
+    for path in ("/author-check", "/author-crosscheck", "/freeze-propose", "/spec-done"):
         assert _refused(_wire(server, path)), path
         assert _refused(_wire(server, path, "author")), path  # a forged claim changes nothing
 
