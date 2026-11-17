@@ -40,16 +40,59 @@ def _commit(repo: Path, files: dict[str, str]) -> str:
     return head
 
 
-def _policy(repo: Path, monkeypatch, capsys, branch: str, head: str) -> tuple[int, str]:
+def _policy(
+    repo: Path, monkeypatch, capsys, branch: str, head: str, *, author_check: bool = False
+) -> tuple[int, str]:
     monkeypatch.chdir(repo)
     base = _git(repo, "rev-parse", "HEAD")
-    code = main(
-        [
-            "ci-branch", "--branch", branch, "--base", base, "--head", head,
-            "--check-payload", "--no-author-check",
-        ]
-    )  # fmt: skip
+    argv = ["ci-branch", "--branch", branch, "--base", base, "--head", head, "--check-payload"]
+    code = main(argv if author_check else [*argv, "--no-author-check"])
     return code, capsys.readouterr().out
+
+
+class _Spies:
+    """Records every construction of the sandbox and every call of the author check."""
+
+    def __init__(self) -> None:
+        self.sandboxes = 0
+        self.checks = 0
+
+    def install(self, monkeypatch) -> None:
+        spies = self
+
+        class SpySandbox:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                spies.sandboxes += 1
+
+        def spy_author_check(*args: object, **kwargs: object) -> None:
+            spies.checks += 1
+            raise RuntimeError("spy: the author check must not run here")
+
+        monkeypatch.setattr("cheeseless.bootstrap_ci.BwrapSandbox", SpySandbox)
+        monkeypatch.setattr("cheeseless.bootstrap_ci.author_check", spy_author_check)
+
+
+def test_the_policy_path_never_builds_a_sandbox_or_calls_the_author_check(
+    toy_repo, monkeypatch, capsys
+):
+    """S23: with --no-author-check nothing that can execute acceptance content is even built.
+
+    A marker-file test cannot prove this: bwrap would block the write. The spies can."""
+    spies = _Spies()
+    spies.install(monkeypatch)
+    head = _commit(toy_repo, {"acceptance/hidden/test_x.py": "def test_x(candidate):\n    pass\n"})
+    code, out = _policy(toy_repo, monkeypatch, capsys, "spec/L1", head)
+    assert code == 0 and json.loads(out)["conclusion"] == "success"
+    assert (spies.sandboxes, spies.checks) == (0, 0)
+
+
+def test_control_without_the_flag_the_spies_do_fire(toy_repo, monkeypatch, capsys):
+    """Control: the spies are wired to the real call sites, so a zero above is evidence."""
+    spies = _Spies()
+    spies.install(monkeypatch)
+    head = _commit(toy_repo, {"acceptance/hidden/test_x.py": "def test_x(candidate):\n    pass\n"})
+    _policy(toy_repo, monkeypatch, capsys, "spec/L1", head, author_check=True)
+    assert spies.sandboxes == 1 and spies.checks == 1
 
 
 def test_the_policy_path_never_executes_acceptance_content(toy_repo, monkeypatch, capsys):
