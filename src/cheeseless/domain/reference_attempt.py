@@ -65,6 +65,22 @@ class ReferenceAttempt:
 
 
 @dataclass(frozen=True, slots=True)
+class AttemptOwner:
+    """Who may move an attempt: a CAS also refuses when any of these differ from the record."""
+
+    session_id: str
+    generation: int
+    mode: ReferenceMode
+
+    def owns(self, attempt: ReferenceAttempt) -> bool:
+        return (
+            attempt.session_id == self.session_id
+            and attempt.generation == self.generation
+            and attempt.mode is self.mode
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TransitionRefused:
     """A compare-and-set lost: ``actual`` is the state found (``None``: no such attempt)."""
 

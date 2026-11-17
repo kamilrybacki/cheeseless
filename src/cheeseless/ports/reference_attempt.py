@@ -3,6 +3,7 @@
 from typing import Protocol
 
 from cheeseless.domain.reference_attempt import (
+    AttemptOwner,
     ReferenceAttempt,
     ReferenceState,
     TransitionRefused,
@@ -19,11 +20,16 @@ class ReferenceAttemptStore(Protocol):
         ...
 
     def transition_reference_attempt(
-        self, attempt_id: str, expected: ReferenceState, new: ReferenceState
+        self,
+        attempt_id: str,
+        expected: ReferenceState,
+        new: ReferenceState,
+        *,
+        owner: AttemptOwner | None = None,
     ) -> ReferenceAttempt | TransitionRefused:
         """Compare-and-set under the store lock: move ``expected`` -> ``new`` or refuse.
 
-        A current state other than ``expected`` (or no record) returns ``TransitionRefused``
-        and writes nothing. A move the state machine forbids raises
-        ``ReferenceTransitionError``."""
+        A current state other than ``expected``, no record, or (given ``owner``) a record of
+        another session, generation or mode returns ``TransitionRefused`` and writes nothing.
+        A move the state machine forbids raises ``ReferenceTransitionError``."""
         ...

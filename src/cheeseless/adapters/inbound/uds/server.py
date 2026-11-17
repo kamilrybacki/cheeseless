@@ -29,7 +29,7 @@ from cheeseless.domain.budget import Pool
 from cheeseless.domain.disclosure import AgentView, Verdict
 from cheeseless.domain.dlp import DlpScanner
 from cheeseless.domain.errors import ErrorCode, gate_error
-from cheeseless.domain.reference_attempt import ReferenceMode, ReferenceState
+from cheeseless.domain.reference_attempt import AttemptOwner, ReferenceMode, ReferenceState
 from cheeseless.domain.task import Task
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.runner import SuiteRunner
@@ -489,13 +489,15 @@ class UdsVerifierServer:
             except OSError:
                 pass
 
-    def _role_ok(self, claimed: str, kind: str = "") -> bool:
+    def _role_ok(self, claimed: str, kind: str) -> bool:
         """The claim, the server's bound role and this session's own record must all agree.
 
-        A reference session has no route at all. The record is per session (not per task), so
-        a second session on the same task cannot change this one's role; its generation must
-        still equal the task's, so a rejected dispute stales it. Missing task id, session id,
-        generation or record, and any store failure, refuse (fail closed).
+        A reference session has only ``reference_done``, and only for a running TUI attempt
+        bound to it (``_reference_ok``); every other kind is refused for it. The record is per
+        session (not per task), so a second session on the same task cannot change this one's
+        role; its generation must still equal the task's, so a rejected dispute stales it.
+        Missing task id, session id, generation or record, and any store failure, refuse
+        (fail closed).
         """
         s = self.session
         if (kind in _REFERENCE_KINDS) != (s.role == "reference") or claimed != s.role:
@@ -616,12 +618,13 @@ class UdsVerifierServer:
         try:
             s = self.session
             outcome: object
-            if s.dev_reference is None:  # unreachable: _role_ok refused first; fail closed
-                outcome = gate_error(ErrorCode.ROLE_NOT_ALLOWED)
+            if s.dev_reference is None or s.session_id is None or s.generation is None:
+                outcome = gate_error(ErrorCode.ROLE_NOT_ALLOWED)  # unreachable: _role_ok refused
             else:
                 outcome = gate_reference_done(
                     s.store,  # type: ignore[arg-type]
                     s.dev_reference,
+                    AttemptOwner(s.session_id, s.generation, ReferenceMode.TUI),
                     s.on_reference_stop,
                 )
             self._write_response(

@@ -11,6 +11,7 @@ from typing import Any
 from cheeseless.adapters.outbound.store import _fs, codec
 from cheeseless.domain import ids
 from cheeseless.domain.reference_attempt import (
+    AttemptOwner,
     ReferenceAttempt,
     ReferenceMode,
     ReferenceState,
@@ -75,24 +76,33 @@ class ReferenceStoreMixin:
 
     def save_reference_attempt(self, attempt: ReferenceAttempt) -> ReferenceAttempt:
         attempt_id = _attempt_id(attempt.attempt_id)
-        _fs.ensure_private_dir(self._root / _DIR)
         with _fs.locked(self._root / "store.lock"):
             if self._read_reference(attempt_id) is not None:
                 raise StoreError(f"reference attempt {attempt_id} already exists")
+            _fs.ensure_private_dir(self._root / _DIR)
             _fs.write_atomic(self._reference_path(attempt_id), codec.dumps(_encode(attempt)))
         return attempt
 
     def transition_reference_attempt(
-        self, attempt_id: str, expected: ReferenceState, new: ReferenceState
+        self,
+        attempt_id: str,
+        expected: ReferenceState,
+        new: ReferenceState,
+        *,
+        owner: AttemptOwner | None = None,
     ) -> ReferenceAttempt | TransitionRefused:
         attempt_id = _attempt_id(attempt_id)
-        _fs.ensure_private_dir(self._root / _DIR)
         with _fs.locked(self._root / "store.lock"):
             current = self._read_reference(attempt_id)
-            if current is None or current.state is not expected:
+            if (
+                current is None
+                or current.state is not expected
+                or (owner is not None and not owner.owns(current))
+            ):
                 return TransitionRefused(
                     attempt_id, expected, None if current is None else current.state
                 )
             moved = transition(current, new)
+            _fs.ensure_private_dir(self._root / _DIR)
             _fs.write_atomic(self._reference_path(attempt_id), codec.dumps(_encode(moved)))
         return moved

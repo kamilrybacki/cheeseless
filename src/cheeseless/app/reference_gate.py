@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from cheeseless.domain.errors import ErrorCode, GateError, gate_error
-from cheeseless.domain.reference_attempt import ReferenceState, TransitionRefused
+from cheeseless.domain.reference_attempt import AttemptOwner, ReferenceState, TransitionRefused
 from cheeseless.ports.reference_attempt import ReferenceAttemptStore
 
 
@@ -23,12 +23,17 @@ class ReferenceStopping:
 def gate_reference_done(
     store: ReferenceAttemptStore,
     attempt_id: str,
+    owner: AttemptOwner,
     on_stop: Callable[[str], None] | None = None,
 ) -> ReferenceStopping | GateError:
-    """Move the attempt running -> stopping once; a duplicate or stale call changes nothing."""
+    """Move the attempt running -> stopping once; a duplicate or stale call changes nothing.
+
+    ``owner`` is re-checked under the store lock, so a record that changed hands between
+    admission and this call is refused rather than stopped.
+    """
     try:
         outcome = store.transition_reference_attempt(
-            attempt_id, ReferenceState.RUNNING, ReferenceState.STOPPING
+            attempt_id, ReferenceState.RUNNING, ReferenceState.STOPPING, owner=owner
         )
     except Exception:  # noqa: BLE001 - raw text never leaves the gate
         return gate_error(ErrorCode.INFRA_ERROR)
@@ -37,8 +42,8 @@ def gate_reference_done(
     if on_stop is not None:
         # the state already moved; a failing host seam must not leak or undo it
         with contextlib.suppress(Exception):
-            on_stop(attempt_id)
-    return ReferenceStopping(attempt_id)
+            on_stop(outcome.attempt_id)
+    return ReferenceStopping(outcome.attempt_id)
 
 
 __all__ = ["ReferenceStopping", "gate_reference_done"]

@@ -7,6 +7,7 @@ import pytest
 
 from cheeseless.adapters.outbound.store.file_store import FileStore
 from cheeseless.domain.reference_attempt import (
+    AttemptOwner,
     ReferenceAttempt,
     ReferenceMode,
     ReferenceState,
@@ -100,3 +101,27 @@ def test_exactly_one_of_two_concurrent_cas_calls_wins(store):
     wins = [r for r in results if isinstance(r, ReferenceAttempt)]
     losses = [r for r in results if isinstance(r, TransitionRefused)]
     assert len(wins) == 1 and len(losses) == 1
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [
+        AttemptOwner("f" * 32, 0, ReferenceMode.TUI),
+        AttemptOwner(A.session_id, 1, ReferenceMode.TUI),
+        AttemptOwner(A.session_id, 0, ReferenceMode.HEADLESS),
+    ],
+)
+def test_cas_refuses_another_owner_under_the_lock_and_changes_nothing(store, owner):
+    store.save_reference_attempt(A)
+    path = store._root / "dev-reference" / "att-1.json"
+    before = path.read_bytes()
+    out = store.transition_reference_attempt("att-1", S.RUNNING, S.STOPPING, owner=owner)
+    assert out == TransitionRefused("att-1", S.RUNNING, S.RUNNING)
+    assert path.read_bytes() == before
+
+
+def test_cas_with_the_matching_owner_moves_the_state(store):
+    store.save_reference_attempt(A)
+    owner = AttemptOwner(A.session_id, A.generation, A.mode)
+    out = store.transition_reference_attempt("att-1", S.RUNNING, S.STOPPING, owner=owner)
+    assert isinstance(out, ReferenceAttempt) and out.state is S.STOPPING
