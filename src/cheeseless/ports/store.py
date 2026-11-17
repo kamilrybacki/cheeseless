@@ -81,6 +81,16 @@ class Store(Protocol):
         """Return the fingerprint set, or ``None`` when freeze did not create one."""
         ...
 
+    def session_role(self, task_id: str) -> str:
+        """Role bound by the host at launch (``implementer`` if never set). Host-written."""
+        ...
+
+    def set_session_role(self, task_id: str, role: str) -> None: ...
+
+    def session_generation(self, task_id: str) -> int:
+        """Host-owned counter, bumped when a rejected dispute reopens the task."""
+        ...
+
     def dispute_policy(self) -> DisputePolicy:
         """Trusted dispute policy; disabled when the host never set one."""
         ...

@@ -63,6 +63,12 @@ def _add_session_parser(sub: Any) -> None:
     )
     ses.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)
     ses.add_argument("--task", default=None)
+    ses.add_argument(
+        "--role",
+        choices=("author", "reference", "implementer"),
+        default="implementer",
+        help="Session role, bound by the host at launch (default: implementer).",
+    )
     ses.add_argument("--profile", choices=("local", "ci"), default="local")
     ses.add_argument("--timeout", type=float, default=300.0)
     ses.add_argument("--egress-policy", type=Path, default=None, metavar="FILE")
@@ -222,6 +228,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--author",
         action="store_true",
         help="List the author tools (check, crosscheck, propose); never approve.",
+    )
+    mcp.add_argument(
+        "--role",
+        choices=("author", "reference", "implementer"),
+        default="implementer",
+        help="Session role baked at launch; the verifier re-checks it against the store.",
     )
 
     export = sub.add_parser("ci-export", help="Write the secret CI bundle (0600, never printed).")

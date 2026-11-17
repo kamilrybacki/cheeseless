@@ -29,6 +29,7 @@ from cheeseless.domain.dlp import Fingerprints
 from cheeseless.domain.freeze import FrozenTask
 from cheeseless.domain.holdout import SEED_BYTES
 from cheeseless.domain.result import MIN_KEY_BYTES, Result
+from cheeseless.domain.session_role import parse_role
 from cheeseless.domain.status import Status
 from cheeseless.ports.store import DisputeRefused, SessionDisputedError, StoreError
 
@@ -196,6 +197,30 @@ class FileStore(AuthoringStoreMixin):
     # -- disputes (ADR 0009, stage g) --------------------------------------------
     # Files are created lazily so the layout is unchanged while disputes are unused.
 
+    def session_role(self, task_id: str) -> str:
+        """The role the host bound at launch; ``implementer`` when none was recorded."""
+        roles = self._read_json("session-roles.json")
+        value = roles.get(_task_id(task_id), "implementer")
+        try:
+            return parse_role(str(value)).value
+        except ValueError as exc:
+            raise StoreError(f"session role is invalid: {exc}") from exc
+
+    def set_session_role(self, task_id: str, role: str) -> None:
+        task_id = _task_id(task_id)
+        value = parse_role(role).value
+        with _fs.locked(self._root / "store.lock"):
+            roles = self._read_json("session-roles.json")
+            _fs.write_atomic(
+                self._root / "session-roles.json", codec.dumps({**roles, task_id: value})
+            )
+
+    def session_generation(self, task_id: str) -> int:
+        value = self._read_json("session-generations.json").get(_task_id(task_id), 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise StoreError("session generation is invalid")
+        return value
+
     def dispute_policy(self) -> DisputePolicy:
         raw = _fs.read_bytes(self._root / "dispute-policy.json")
         if raw is None:
@@ -307,7 +332,28 @@ class FileStore(AuthoringStoreMixin):
             self.log_event(
                 done.task_id, f"dispute-{outcome.value}", f"{dispute_id} by {done.resolved_by}"
             )
+            if outcome is DisputeStatus.REJECTED:
+                self._reopen(done)
             return done
+
+    def _reopen(self, done: DisputeRecord) -> None:
+        """A rejection starts a new session generation with an empty attempt window."""
+        generation = self.session_generation(done.task_id) + 1
+        gens = self._read_json("session-generations.json")
+        _fs.write_atomic(
+            self._root / "session-generations.json",
+            codec.dumps({**gens, done.task_id: generation}),
+        )
+        attempts = self._read_json("attempts.json")
+        _fs.write_atomic(
+            self._root / "attempts.json",
+            codec.dumps({k: v for k, v in attempts.items() if k != done.task_id}),
+        )
+        self.log_event(
+            done.task_id,
+            "dispute-reopen",
+            f"{done.dispute_id} by {done.resolved_by} generation={generation}",
+        )
 
     # -- DLP fingerprints --------------------------------------------------------
 

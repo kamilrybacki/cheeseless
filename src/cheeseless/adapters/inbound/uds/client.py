@@ -33,8 +33,13 @@ class UdsClientError(RuntimeError):
 
 class UdsVerifierClient:
     def __init__(
-        self, socket_path: str | Path, task_id: str | None = None, timeout: float = 10.0
+        self,
+        socket_path: str | Path,
+        task_id: str | None = None,
+        timeout: float = 10.0,
+        role: str = "implementer",
     ) -> None:
+        self.role = role
         self.socket_path = Path(socket_path)
         self.task_id = task_id
         self.timeout = timeout
@@ -99,10 +104,14 @@ class UdsVerifierClient:
         return ('{"task_id":' + _json_string(self.task_id) + "}").encode("ascii")
 
     def _post(self, path: str, body: bytes) -> bytes:
+        # The implementer's wire bytes stay unchanged; other roles claim theirs. The server
+        # still checks the claim against its bound role and the trusted store.
+        claim = "" if self.role == "implementer" else f"X-Cheeseless-Role: {self.role}\r\n"
         request = (
             f"POST {path} HTTP/1.1\r\n"
             "Host: localhost\r\n"
             "Content-Type: application/json\r\n"
+            f"{claim}"
             f"Content-Length: {len(body)}\r\n"
             "Connection: close\r\n\r\n"
         ).encode("ascii") + body

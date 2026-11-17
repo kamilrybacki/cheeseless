@@ -235,20 +235,30 @@ def agent(
     read_only: Sequence[Path],
     env: Sequence[tuple[str, str]],
     command: Sequence[str],
-    acceptance_fd: int,
+    acceptance_fd: int | None,
+    acceptance_mode: str = "ro",
     pinned_read_only: Sequence[tuple[int, str]] = (),
     seccomp_fd: int | None = None,
     info_fd: int | None = None,
 ) -> list[str]:
     """The coding agent: it sees the projection and talks only through the sockets."""
-    acceptance = projection / "acceptance"
+    acceptance_dir = projection / "acceptance"
     args = [bwrap, *_NAMESPACES, *_system(), *_try_binds((*ETC_ALLOW, *AGENT_ETC_ALLOW))]
     args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", SANDBOX_TMP]
     for path in (projection, home, *sockets):
         args += ["--bind", str(path), str(path)]
     # Applied after the writable projection bind, so it lands on top of it. Bound by the fd
     # opened with O_NOFOLLOW (see open_acceptance), so a swapped path cannot redirect it.
-    args += ["--ro-bind-fd", str(acceptance_fd), str(acceptance)]
+    # `rw` (author) leaves the writable projection bind; `hidden` (reference) masks the tree
+    # with an empty tmpfs so hidden tests are unreadable. Default `ro` is the implementer's.
+    if acceptance_mode == "ro":
+        if acceptance_fd is None:
+            raise ValueError("a read-only acceptance mount needs a pinned fd")
+        args += ["--ro-bind-fd", str(acceptance_fd), str(acceptance_dir)]
+    elif acceptance_mode == "hidden":
+        args += ["--tmpfs", str(acceptance_dir)]
+    elif acceptance_mode != "rw":
+        raise ValueError(f"unknown acceptance mode: {acceptance_mode!r}")
     for path in read_only:
         args += ["--ro-bind", str(path), str(path)]
     for fd, destination in pinned_read_only:

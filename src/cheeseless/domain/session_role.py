@@ -1,0 +1,37 @@
+"""Session roles: the host binds one at launch; mounts and tools follow from it (stage (c))."""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class SessionRole(StrEnum):
+    AUTHOR = "author"
+    REFERENCE = "reference"
+    IMPLEMENTER = "implementer"
+
+
+def parse_role(value: str) -> SessionRole:
+    try:
+        return SessionRole(value)
+    except ValueError:
+        raise ValueError(f"unknown session role: {value!r}") from None
+
+
+def acceptance_mount(role: SessionRole) -> str:
+    """How ``acceptance/`` is mounted: read-only, writable, or masked by an empty tmpfs."""
+    if role is SessionRole.AUTHOR:
+        return "rw"
+    if role is SessionRole.REFERENCE:
+        return "hidden"
+    return "ro"
+
+
+def tool_names(role: SessionRole, *, disputes: bool = False) -> tuple[str, ...]:
+    """The agent-visible MCP tool names for a role."""
+    if role is SessionRole.AUTHOR:
+        return ("author_check", "author_crosscheck", "freeze_propose")
+    if role is SessionRole.REFERENCE:
+        return ()
+    base = ("gate_run", "gate_status")
+    return (*base, "gate_dispute") if disputes else base

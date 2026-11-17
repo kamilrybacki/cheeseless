@@ -6,6 +6,7 @@ changes are host-only and are reachable from the CLI alone.
 
 from __future__ import annotations
 
+from cheeseless.app.gate_run import PRE_HIDDEN_ATTEMPT_LIMIT, PRE_HIDDEN_ATTEMPT_WINDOW
 from cheeseless.domain.dispute import (
     ACK_TEXT,
     DisputeCode,
@@ -57,7 +58,15 @@ def list_disputes(store: Store) -> tuple[DisputeRecord, ...]:
 def resolve_dispute(store: Store, dispute_id: str, *, upheld: bool, actor: str) -> DisputeRecord:
     """Record the outcome once. Raises ``StoreError`` on a repeat or an unknown id."""
     outcome = DisputeStatus.UPHELD if upheld else DisputeStatus.REJECTED
-    return store.resolve_dispute(dispute_id, outcome, actor)
+    record = store.resolve_dispute(dispute_id, outcome, actor)
+    if outcome is DisputeStatus.REJECTED:
+        store.log_event(
+            record.task_id,
+            "dispute-reopen-budget",
+            f"{dispute_id} attempts={PRE_HIDDEN_ATTEMPT_LIMIT}/{int(PRE_HIDDEN_ATTEMPT_WINDOW)}s"
+            " run-budget=unchanged",
+        )
+    return record
 
 
 def configure_disputes(store: Store, *, enabled: bool, cap: int) -> DisputePolicy:

@@ -17,6 +17,7 @@ from cheeseless.adapters.inbound.mapping import agent_view_to_dict, gate_error_t
 from cheeseless.domain.disclosure import AgentView
 from cheeseless.domain.dispute import ACK_TEXT, NOTE_LIMIT, DisputeCode
 from cheeseless.domain.errors import ErrorCode, GateError, gate_error
+from cheeseless.domain.session_role import SessionRole
 from cheeseless.ports.verifier import VerifierClient
 
 
@@ -26,8 +27,14 @@ def build_mcp_server(
     name: str = "cheeseless",
     disputes: bool = False,
     author: bool = False,
+    role: SessionRole = SessionRole.IMPLEMENTER,
 ) -> MCPServer:
     server = MCPServer(name)
+    if role is SessionRole.AUTHOR:
+        _register_author(server, client)
+        return server
+    if role is SessionRole.REFERENCE:
+        return server  # the reference snapshot is host-recorded: no tools
 
     def _view_payload(view: AgentView) -> dict[str, Any]:
         return agent_view_to_dict(view)
@@ -62,7 +69,7 @@ def build_mcp_server(
 
     if disputes:
         _register_dispute(server, client)
-    if author:
+    if author:  # legacy additive switch; role-bound author sessions use role=AUTHOR
         _register_author(server, client)
     return server
 

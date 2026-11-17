@@ -119,6 +119,7 @@ def _paths(slug: str, rpc: str) -> tuple[str, str, str]:
     return (f"/{slug}", f"/cheeseless.v1.Verifier/{rpc}", f"/{rpc}")
 
 
+ROLE_HEADER = "x-cheeseless-role"
 _AUTHOR_ROUTES = {
     path: kind
     for kind, slug, rpc in (
@@ -159,6 +160,8 @@ class SessionConfig:
     pidns_fd: int | None = None
     # ``implementer`` (run, status, dispute) or ``author`` (check, crosscheck, propose).
     role: str = "implementer"
+    # Store generation at launch; a later rejected dispute makes this session stale.
+    generation: int | None = None
     author_sandbox: AuthorSandbox | None = None
 
     def namespace_fds(self) -> tuple[int, ...]:
@@ -457,7 +460,7 @@ class UdsVerifierServer:
             if body is None:
                 self._write_error(wfile, 400, "truncated body")
                 return
-            self._route(wfile, path, body)
+            self._route(wfile, path, body, claimed_role=headers.get(ROLE_HEADER, "implementer"))
         except TimeoutError:
             self._write_error(wfile, 408, "request timeout")
         except (OSError, ValueError):
@@ -466,11 +469,34 @@ class UdsVerifierServer:
             except OSError:
                 pass
 
-    def _route(self, wfile: Any, path: str, body: bytes) -> None:
+    def _role_ok(self, claimed: str) -> bool:
+        """The claim, the server's bound role and the trusted store must all agree.
+
+        A reference session has no route at all. Any store failure refuses (fail closed).
+        """
+        bound = self.session.role
+        if bound == "reference" or claimed != bound:
+            return False
+        task_id = self.session.task_id
+        if task_id is None:
+            return False
+        try:
+            if self.session.generation is not None and (
+                self.session.store.session_generation(task_id) != self.session.generation
+            ):
+                return False
+            return bool(self.session.store.session_role(task_id) == bound)
+        except Exception:  # noqa: BLE001 - an unreadable record must refuse
+            return False
+
+    def _route(self, wfile: Any, path: str, body: bytes, claimed_role: str = "implementer") -> None:
         path = path.split("?", 1)[0]
         author_kind = _AUTHOR_ROUTES.get(path)
         implementer_kind = _IMPLEMENTER_ROUTES.get(path)
-        if author_kind is not None:
+        known = author_kind or implementer_kind
+        if known is not None and not self._role_ok(claimed_role):
+            self._role_refused(wfile, known)
+        elif author_kind is not None:
             if self.session.role != "author":
                 self._role_refused(wfile, author_kind)
             else:

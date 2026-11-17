@@ -20,14 +20,14 @@ H = "b" * 64
 
 def _server(role: str, **extra) -> UdsVerifierServer:
     cfg = SessionConfig(
-        task_id=None,
+        task_id="t1",
         worktree=Path("."),
         profile="local",
         pool=None,  # type: ignore[arg-type]
         timeout=1.0,
         tool_version="0",
         repo=SimpleNamespace(),  # type: ignore[arg-type]
-        store=SimpleNamespace(),  # type: ignore[arg-type]
+        store=SimpleNamespace(session_role=lambda _task: role),  # type: ignore[arg-type]
         runner=SimpleNamespace(),  # type: ignore[arg-type]
         sandbox=SimpleNamespace(),  # type: ignore[arg-type]
         role=role,
@@ -38,7 +38,7 @@ def _server(role: str, **extra) -> UdsVerifierServer:
 
 def _post(server, path, payload=None):
     out = io.BytesIO()
-    server._route(out, path, json.dumps(payload or {}).encode())
+    server._route(out, path, json.dumps(payload or {}).encode(), claimed_role=server.session.role)
     head, _, body = out.getvalue().partition(b"\r\n\r\n")
     return head.split(b"\r\n", 1)[0].decode(), body
 
