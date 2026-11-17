@@ -43,6 +43,8 @@ material; the ADR holds the decision.
     crosscheck lets the host run `approve_freeze` itself as actor `cheeseless-dev`;
   - without a strength reviewer, or with `--confirm-freeze`, the host asks the user, who
     approves as operator and owns the strength review, as in the regular `freeze --approve`.
+  - either way the host draws the seed (and split) only after that approval, so neither the
+    author nor the strength reviewer sees it before the suite is fixed (round-3 S53-6).
 - Freeze result: a local commit `test: freeze <task>` on the default branch.
 
 ## Phase 4: implementation (fresh context)

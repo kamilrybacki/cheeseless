@@ -887,3 +887,12 @@ CHANGES). S53-1, S53-3 and S53-4 resolved; S53-2 partial. Both new findings are 
 | S53-2 | Partial: a CI pool in the host store bypasses ADR 0005's trusted CI counter, so the 35-run lineage bound no longer holds | Accepted: the full judgment is charged to the lineage's local pool (host trusted store); the CI pool stays in the trusted CI counter. Only the disclosure is extended (holdout red criterion names). Cost: holdout feedback spends the local pool faster. |
 | S53-5 | After 3 holdout fails ADR 0005 requires a re-freeze with a new split and seed; "the user decides" and "grant runs and continue" contradict it | Accepted: after 3 holdout fails the user re-freezes (new split and seed) or aborts; an empty pool ends `BLOCKED` until the user grants runs as operator. |
 | S53-6 | Auto-freeze skips ADR 0005's cross-vendor test-strength review and other freeze preconditions | Accepted: the freeze keeps every ADR 0005 precondition; the host freezes alone only after a passing review by a `--strength-reviewer` agent of another vendor (read-only sandbox, its own credential); otherwise the user approves as operator. This changes the agreed default: without a configured strength reviewer, dev mode asks before the freeze. |
+
+### ADR 0013 review round 3 (2026-11-17)
+
+Reviewer: gpt-6.1-terra (re-check of da45ea2; verdict CHANGES NEEDED). S53-2 and S53-5
+resolved; no new conflict with ADR 0009.
+
+| # | Finding | Resolution |
+|---|---------|------------|
+| S53-6 | Still partial: ADR 0005 draws the seed after the *user* approves the freeze; an auto-freeze has no user approval | Accepted: the approval (the host's, gated by the strength review, or the user's) comes first and the host draws the seed and split only after it; ADR 0013 states this as an extension of ADR 0005. The property ADR 0005 protects, that no author or reviewer sees the seed before the suite is fixed, is unchanged. |
