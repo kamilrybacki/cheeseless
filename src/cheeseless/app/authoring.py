@@ -394,7 +394,15 @@ def _approve_owned(
     return result
 
 
-def recover_approval(repo: Repository, store: AuthorStore, proposal_id: str, *, actor: str) -> str:
+def recover_approval(
+    repo: Repository,
+    sandbox: Sandbox,
+    author_sandbox: AuthorSandbox,
+    store: AuthorStore,
+    proposal_id: str,
+    *,
+    actor: str,
+) -> str:
     """Host-only: clear an APPROVING reservation whose approver died. Returns the outcome.
 
     Refused while the approver is alive (it holds the ownership lock). Never reachable
@@ -406,7 +414,7 @@ def recover_approval(repo: Repository, store: AuthorStore, proposal_id: str, *, 
     try:
         owner = store.approval_ownership(proposal.lineage_id)
         with owner:
-            return _recover_owned(repo, store, proposal, actor)
+            return _recover_owned(repo, sandbox, author_sandbox, store, proposal, actor)
     except AuthoringError as exc:
         text = str(exc)
         if "held" in text:
@@ -416,7 +424,14 @@ def recover_approval(repo: Repository, store: AuthorStore, proposal_id: str, *, 
         raise AuthorError("recovery_conflict", f"the authoring state changed: {text}") from exc
 
 
-def _recover_owned(repo: Repository, store: AuthorStore, proposal: Proposal, actor: str) -> str:
+def _recover_owned(
+    repo: Repository,
+    sandbox: Sandbox,
+    author_sandbox: AuthorSandbox,
+    store: AuthorStore,
+    proposal: Proposal,
+    actor: str,
+) -> str:
     state = store.authoring_state(proposal.lineage_id, proposal.spec_digest)
     if state.phase is not TaskPhase.APPROVING:
         raise AuthorError("not_approving", f"nothing to recover: the task is {state.phase.value}")
@@ -425,18 +440,26 @@ def _recover_owned(repo: Repository, store: AuthorStore, proposal: Proposal, act
         store.save_authoring_state(state.released())
         store.log_event(tid, "freeze-recover", f"{actor} rolled-back")
         return "rolled_back"
-    _verify_published(repo, store, proposal)
+    _verify_published(repo, sandbox, author_sandbox, store, proposal)
     store.set_active(tid)
     store.save_authoring_state(state.frozen())
     store.log_event(tid, "freeze-recover", f"{actor} finished")
     return "finished"
 
 
-def _verify_published(repo: Repository, store: AuthorStore, proposal: Proposal) -> None:
+def _verify_published(
+    repo: Repository,
+    sandbox: Sandbox,
+    author_sandbox: AuthorSandbox,
+    store: AuthorStore,
+    proposal: Proposal,
+) -> None:
     """Refuse to finish unless the published task and its fingerprints are whole.
 
-    The trusted store is not trusted here: the task is fully reloaded (schema, digest) and
-    the fingerprints are rebuilt from the frozen acceptance tree and compared."""
+    The trusted store is not trusted here: the task is fully reloaded (schema, digest), the
+    fingerprints are rebuilt from the frozen acceptance tree and compared, and the
+    test→criterion mapping is re-collected from that tree through the same contained path
+    approval uses, so the stored split can only be the persisted seed's split of it."""
     tid = proposal.proposal_id
 
     def refuse(why: str) -> AuthorError:
@@ -452,9 +475,6 @@ def _verify_published(repo: Repository, store: AuthorStore, proposal: Proposal) 
         raise refuse(f"the published task is not valid ({exc})") from exc
     if frozen.task.task_id != tid or frozen.acceptance_tree != proposal.acceptance_tree:
         raise refuse("the published task is not the one that was proposed")
-    problem = _split_problem(frozen, seed)
-    if problem:
-        raise refuse(problem)
     if stored is None:
         raise refuse("the task is published without fingerprints")
     try:
@@ -465,16 +485,30 @@ def _verify_published(repo: Repository, store: AuthorStore, proposal: Proposal) 
         raise refuse(why)
     if stored != rebuilt:
         raise refuse("the stored fingerprints are incomplete or do not match the frozen tree")
+    try:
+        prepared = prepare(
+            repo,
+            None,
+            sandbox,
+            author_sandbox=author_sandbox,
+            baseline_commit=proposal.baseline_commit,
+            source=_trusted_head(repo),
+        )
+    except (FreezeError, RepositoryError) as exc:
+        raise refuse(f"the frozen tree cannot be re-collected ({exc})") from exc
+    if prepared.task_id != tid:
+        raise refuse("the default branch no longer reproduces the freeze")
+    problem = _split_problem(frozen, seed, prepared.tests)
+    if problem:
+        raise refuse(problem)
 
 
-def _split_problem(frozen: FrozenTask, seed: bytes) -> str:
+def _split_problem(frozen: FrozenTask, seed: bytes, tests: dict[str, str]) -> str:
     """Compare the stored visible/holdout record with the one the seed derives.
 
-    The collected test mapping is the union of the two stored maps; the split is then
-    re-derived from the seed and the whole expected record is compared field by field."""
-    tests = {**frozen.visible, **frozen.holdout}
-    if len(tests) != len(frozen.visible) + len(frozen.holdout):
-        return "the visible and holdout sets overlap"
+    ``tests`` is the mapping freshly collected from the frozen acceptance tree, never the
+    stored maps. The seed is trusted-store state (operator-only, ADR 0001) and is not
+    separately authenticated; the split of the re-collected mapping is what it determines."""
     try:
         derived = holdout_split(seed, tests)
     except ValueError as exc:

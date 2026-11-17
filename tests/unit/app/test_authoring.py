@@ -578,7 +578,9 @@ def test_recovery_rolls_an_unpublished_reservation_back_to_proposed(hooked):
     with pytest.raises(AuthorError) as caught:
         _approve(repo, store, tmp, proposal)
     assert caught.value.kind == "not_proposed"  # sealed: the reported bug
-    uc.recover_approval(repo, store, proposal.proposal_id, actor="op")
+    uc.recover_approval(
+        repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+    )
     state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
     assert state.phase is TaskPhase.PROPOSED
     assert _approve(repo, store, tmp, proposal).task_id == proposal.proposal_id
@@ -588,7 +590,9 @@ def test_recovery_finishes_a_published_task_to_frozen(hooked):
     repo, store, tmp = hooked
     proposal, contract = _strand(repo, store, tmp, publish=True)
     assert store.active_task_id() is None
-    uc.recover_approval(repo, store, proposal.proposal_id, actor="op")
+    uc.recover_approval(
+        repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+    )
     state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
     assert state.phase is TaskPhase.FROZEN
     assert store.active_task_id() == proposal.proposal_id
@@ -599,7 +603,14 @@ def test_recovery_refuses_while_the_approver_is_alive(hooked):
     proposal, contract = _strand(repo, store, tmp, publish=False)
     with store.approval_ownership(contract.lineage_id):
         with pytest.raises(AuthorError) as caught:
-            uc.recover_approval(repo, store, proposal.proposal_id, actor="op")
+            uc.recover_approval(
+                repo,
+                _FakeSandbox(tmp / "sb"),
+                _red_sandbox(),
+                store,
+                proposal.proposal_id,
+                actor="op",
+            )
     assert caught.value.kind == "approver_alive"
     state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
     assert state.phase is TaskPhase.APPROVING
@@ -611,10 +622,14 @@ def test_recovery_only_applies_to_an_approving_reservation(hooked):
     _green(repo, store)
     proposal = uc.freeze_propose(repo, store, _source(repo))
     with pytest.raises(AuthorError) as caught:
-        uc.recover_approval(repo, store, proposal.proposal_id, actor="op")
+        uc.recover_approval(
+            repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+        )
     assert caught.value.kind == "not_approving"
     with pytest.raises(AuthorError) as unknown:
-        uc.recover_approval(repo, store, "e" * 64, actor="op")
+        uc.recover_approval(
+            repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, "e" * 64, actor="op"
+        )
     assert unknown.value.kind == "unknown_proposal"
 
 
@@ -628,7 +643,9 @@ def test_recovery_loses_to_a_state_change_between_read_and_save(hooked):
 
     store.after_read = move_on
     with pytest.raises(AuthorError) as caught:
-        uc.recover_approval(repo, store, proposal.proposal_id, actor="op")
+        uc.recover_approval(
+            repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+        )
     assert caught.value.kind == "recovery_conflict"
 
 
@@ -652,9 +669,11 @@ def test_an_approval_holds_the_ownership_lock_for_its_whole_span(hooked):
     assert seen == ["held"]
 
 
-def _refused_and_sealed(repo, store, proposal, contract, fragment):
+def _refused_and_sealed(repo, store, proposal, contract, fragment, tmp):
     with pytest.raises(AuthorError) as caught:
-        uc.recover_approval(repo, store, proposal.proposal_id, actor="op")
+        uc.recover_approval(
+            repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+        )
     assert caught.value.kind == "approval_incomplete"
     assert fragment in str(caught.value)
     state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
@@ -673,7 +692,7 @@ def test_recovery_refuses_empty_fingerprints(hooked):
     proposal, contract = _strand(repo, store, tmp, publish=True)
     real = store.load_fingerprints(proposal.proposal_id)
     store.save_fingerprints(replace(real, kgrams=frozenset(), literals=()))
-    _refused_and_sealed(repo, store, proposal, contract, "fingerprints")
+    _refused_and_sealed(repo, store, proposal, contract, "fingerprints", tmp)
 
 
 def test_recovery_refuses_partial_fingerprints(hooked):
@@ -684,7 +703,7 @@ def test_recovery_refuses_partial_fingerprints(hooked):
     real = store.load_fingerprints(proposal.proposal_id)
     assert len(real.kgrams) > 1
     store.save_fingerprints(replace(real, kgrams=frozenset(sorted(real.kgrams)[:1])))
-    _refused_and_sealed(repo, store, proposal, contract, "fingerprints")
+    _refused_and_sealed(repo, store, proposal, contract, "fingerprints", tmp)
 
 
 def test_recovery_refuses_a_tampered_task_record(hooked):
@@ -696,14 +715,14 @@ def test_recovery_refuses_a_tampered_task_record(hooked):
     data = json.loads(path.read_bytes())
     data["hidden_blobs"] = []  # not covered by the digest; the fingerprints would still fit
     path.write_bytes(json.dumps(data).encode())
-    _refused_and_sealed(repo, store, proposal, contract, "task")
+    _refused_and_sealed(repo, store, proposal, contract, "task", tmp)
 
 
 def test_recovery_refuses_an_unreadable_task_record(hooked):
     repo, store, tmp = hooked
     proposal, contract = _strand(repo, store, tmp, publish=True)
     _task_path(store, proposal).write_bytes(b"{not json")
-    _refused_and_sealed(repo, store, proposal, contract, "task")
+    _refused_and_sealed(repo, store, proposal, contract, "task", tmp)
 
 
 def _git(*args: str) -> str:
@@ -729,7 +748,7 @@ def test_recovery_refuses_when_the_default_branch_no_longer_holds_the_frozen_tre
     _git("-C", str(repo.root), "fetch", "-q", str(clone), "HEAD")
     drifted = _git("-C", str(repo.root), "rev-parse", "FETCH_HEAD")
     repo.default_branch_commit = lambda: drifted  # type: ignore[method-assign]
-    _refused_and_sealed(repo, store, proposal, contract, "default branch")
+    _refused_and_sealed(repo, store, proposal, contract, "default branch", tmp)
 
 
 def _task_body(data):
@@ -748,7 +767,7 @@ def test_recovery_refuses_swapped_visible_and_holdout_maps(hooked):
     body = _task_body(data)
     body["visible"], body["holdout"] = body["holdout"], body["visible"]
     path.write_bytes(json.dumps(data).encode())
-    _refused_and_sealed(repo, store, proposal, contract, "split")
+    _refused_and_sealed(repo, store, proposal, contract, "split", tmp)
 
 
 def test_recovery_refuses_a_visible_holdout_overlap(hooked):
@@ -759,4 +778,35 @@ def test_recovery_refuses_a_visible_holdout_overlap(hooked):
     body = _task_body(data)
     body["visible"] = {**body["visible"], **body["holdout"]}
     path.write_bytes(json.dumps(data).encode())
-    _refused_and_sealed(repo, store, proposal, contract, "not valid")
+    _refused_and_sealed(repo, store, proposal, contract, "not valid", tmp)
+
+
+def _resplit(store, proposal, mapping):
+    """Replace the stored split with one the persisted seed derives from ``mapping``."""
+    from dataclasses import replace
+
+    from cheeseless.domain.holdout import split as holdout_split
+
+    frozen, seed = store.load_task(proposal.proposal_id)
+    derived = holdout_split(seed, mapping)
+    store.replace_task(
+        replace(frozen, visible=dict(derived.visible), holdout=dict(derived.holdout)), seed
+    )
+
+
+def test_recovery_refuses_fabricated_node_ids_even_when_the_seed_split_fits(hooked):
+    repo, store, tmp = hooked
+    proposal, contract = _strand(repo, store, tmp, publish=True)
+    fake = {"fake::a": "normalize", "fake::b": "normalize", "fake::c": "score", "fake::d": "score"}
+    _resplit(store, proposal, fake)
+    _refused_and_sealed(repo, store, proposal, contract, "split", tmp)
+
+
+def test_recovery_refuses_swapped_criterion_assignments_even_when_the_seed_split_fits(hooked):
+    repo, store, tmp = hooked
+    proposal, contract = _strand(repo, store, tmp, publish=True)
+    frozen, _ = store.load_task(proposal.proposal_id)
+    real = {**frozen.visible, **frozen.holdout}
+    swap = {"normalize": "score", "score": "normalize"}
+    _resplit(store, proposal, {n: swap[c] for n, c in real.items()})
+    _refused_and_sealed(repo, store, proposal, contract, "split", tmp)

@@ -318,9 +318,25 @@ def _cmd_author(args: argparse.Namespace, ctx: Context) -> int:
         print("author recover needs --as <actor>", file=sys.stderr)
         return 2
     try:
-        outcome = recover_approval(ctx.repo, _author_store(ctx), args.task, actor=args.actor)
+        if ctx.author_sandbox is None:
+            raise AuthorError("no_author_sandbox", "no contained author runner is available")
+        outcome = recover_approval(
+            ctx.repo,
+            ctx.sandbox,
+            ctx.author_sandbox,
+            _author_store(ctx),
+            args.task,
+            actor=args.actor,
+        )
     except AuthorError as exc:
         _emit(args, {"recovered": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
+        return 1
+    except FreezeError as exc:
+        _emit(
+            args,
+            {"recovered": False, "error": "freeze", "problems": list(exc.problems)},
+            f"freeze failed: {'; '.join(exc.problems)}",
+        )
         return 1
     _emit(
         args,

@@ -136,7 +136,7 @@ def test_reference_error_paths_report_refusal_not_a_traceback(
 def test_author_recover_success_and_refusal(monkeypatch, capsys) -> None:
     seen = {}
 
-    def fake(repo, store, pid, *, actor):
+    def fake(repo, sandbox, author_sandbox, store, pid, *, actor):
         seen.update(pid=pid, actor=actor)
         return "rolled_back"
 
@@ -146,7 +146,7 @@ def test_author_recover_success_and_refusal(monkeypatch, capsys) -> None:
     assert code == 0 and out == {"recovered": True, "outcome": "rolled_back", "task_id": "p1"}
     assert seen == {"pid": "p1", "actor": "op"}
 
-    def alive(repo, store, pid, *, actor):
+    def alive(repo, sandbox, author_sandbox, store, pid, *, actor):
         raise AuthorError("approver_alive", "an approver is still running")
 
     monkeypatch.setattr(cli, "recover_approval", alive)
