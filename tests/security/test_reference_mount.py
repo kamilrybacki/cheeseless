@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from cheeseless.adapters.outbound.sandbox import profiles
 from cheeseless.domain.session_role import SessionRole, acceptance_mount
 from tests.requirements import needs
@@ -121,6 +123,24 @@ def test_a_symlinked_spec_is_not_exposed(tmp_path):
         str(proj / "acceptance" / "contract" / "criteria.yaml")
     ]
     assert CANARY not in "\n".join(_run(proj, tmp_path))
+
+
+@pytest.mark.parametrize("kind", ["fifo", "directory"])
+def test_a_non_regular_spec_is_not_exposed(tmp_path, kind):
+    proj = tmp_path / "proj"
+    _layout(proj)
+    spec = proj / "acceptance" / "contract" / "spec.md"
+    spec.unlink()
+    if kind == "fifo":
+        os.mkfifo(spec)
+    else:
+        spec.mkdir()
+        (spec / "inner.md").write_text(CANARY)
+    assert [dest for _, dest in _close(profiles.open_contract_files(proj))] == [
+        str(proj / "acceptance" / "contract" / "criteria.yaml")
+    ]
+    if kind == "directory":
+        assert CANARY not in "\n".join(_run(proj, tmp_path))
 
 
 def _close(pinned: list[tuple[int, str]]) -> list[tuple[int, str]]:
