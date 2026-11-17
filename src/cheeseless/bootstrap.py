@@ -49,6 +49,7 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.audit import StoreAuditSink
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.egress_supervisor import EgressBlock, EgressSupervisor
+from cheeseless.app.reference_view import reference_tree
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.dlp import Fingerprints
 from cheeseless.domain.egress_policy import EgressPolicy, PolicyError
@@ -543,7 +544,7 @@ def serve_uds(
     finally:
         session.close_namespace_fds()
         if session_id is not None:
-            ctx.store.end_session(session_id)
+            _end_session_reported(ctx.store, session_id, task_id)
     return 0
 
 
@@ -658,6 +659,16 @@ def _end_session_reported(store: Any, session_id: str, task_id: str | None) -> N
             f"(task {task_id}): {type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
+
+
+def _projection_tree(repo: Any, frozen: Any, role: SessionRole) -> str:
+    """The tree a session's projection repo is built from.
+
+    A reference session never sees a test, so its tree is cut down to the allowlist before the
+    projection's ``.git`` is written, before or after a freeze.
+    """
+    tree = frozen.projection_tree if frozen is not None else repo.tree_of(repo.head_commit())
+    return reference_tree(repo, tree) if role is SessionRole.REFERENCE else tree
 
 
 def _close_pins(pins: list[tuple[int, str]]) -> None:
@@ -807,11 +818,7 @@ def host_session(
             socket_path, task_id, disputes=_disputes_enabled(ctx.store), role=bound
         )
 
-        tree = (
-            frozen.projection_tree
-            if frozen is not None
-            else ctx.repo.tree_of(ctx.repo.head_commit())
-        )
+        tree = _projection_tree(ctx.repo, frozen, bound)
         ctx.repo.create_projection(tree, projection_dir)
         strays = (
             ctx.repo.stray_hidden(projection_dir, frozen.hidden_blobs) if frozen is not None else []

@@ -1,4 +1,9 @@
-"""ADR 0009: the reference sees the spec and criteria only, never any test (real bwrap)."""
+"""ADR 0009: the reference sees the spec and criteria only, never any test (real bwrap).
+
+The projections here are synthetic (no ``.git``) and cover the mount mechanics: symlinks, fifos,
+directories. The canonical end-to-end canary check, through the real ``create_projection`` path
+with its ``.git``, is ``test_reference_projection.py``.
+"""
 
 import os
 import subprocess

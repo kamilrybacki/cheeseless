@@ -216,11 +216,9 @@ def test_mounts_follow_the_role(tmp_path):
     assert all(reference.index(d) > reference.index(acc) for d in dests)
 
 
-def test_a_reference_session_cannot_read_hidden_tests_canary(tmp_path):
-    """The reference mount masks acceptance/ except the spec and criteria."""
+def test_the_reference_argv_masks_acceptance_and_binds_back_only_two_files(tmp_path):
+    """An argv-shape check only; the canary checks run real bwrap (test_reference_projection)."""
     proj = tmp_path / "proj"
-    (proj / "acceptance").mkdir(parents=True, exist_ok=True)
-    (proj / "acceptance" / "test_hidden.py").write_text("CANARY-REF-91c2")
     reference = _argv(SessionRole.REFERENCE, tmp_path)
     i = reference.index(str(proj / "acceptance"))
     assert reference[i - 1] == "--tmpfs"  # an empty tmpfs lands on top of the tree
@@ -260,3 +258,31 @@ def test_serve_uds_bootstrap_without_a_frozen_task_passes_no_session_binding(
     session = seen["session"]
     assert session.task_id is None
     assert session.session_id is None and session.generation is None
+
+
+def test_serve_uds_teardown_ends_the_session_through_the_reporting_helper(
+    toy_repo, tmp_path, monkeypatch
+):
+    from cheeseless import bootstrap
+
+    state = tmp_path / "state"
+    FileStore(state).save_task(frozen_task(), SEED)
+    ended: list[tuple[str, str | None]] = []
+
+    class FakeServer:
+        def __init__(self, path, session, **_kw):
+            pass
+
+        def serve_forever(self) -> None:
+            return None
+
+    def record(_store, session_id, task_id):
+        ended.append((session_id, task_id))
+
+    monkeypatch.setattr(bootstrap, "UdsVerifierServer", FakeServer)
+    monkeypatch.setattr(bootstrap, "_end_session_reported", record)
+    rc = bootstrap.serve_uds(
+        tmp_path / "s" / "v.sock", state_dir=state, cwd=toy_repo, task_id=_tid()
+    )
+    assert rc == 0
+    assert len(ended) == 1 and ended[0][1] == _tid()

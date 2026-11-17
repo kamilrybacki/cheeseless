@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from cheeseless.domain.contract import check_env_entry
+from cheeseless.domain.session_role import REFERENCE_ALLOWLIST
 from cheeseless.ports.sandbox import SandboxError
 
 SYSTEM_DIRS = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64")
@@ -224,11 +225,6 @@ def open_acceptance(projection: Path) -> int:
         os.close(fd)
         raise
     return fd
-
-
-# The only files of acceptance/ a reference session may read (ADR 0009: the spec and the
-# criteria examples, never a test). Anything else, including contract/test_*, stays masked.
-REFERENCE_ALLOWLIST: tuple[str, ...] = ("contract/spec.md", "contract/criteria.yaml")
 
 
 def open_contract_files(projection: Path) -> list[tuple[int, str]]:

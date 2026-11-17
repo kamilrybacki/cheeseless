@@ -28,6 +28,11 @@ class SessionBinding:
     generation: int
 
 
+# The only files of acceptance/ a reference session may see (ADR 0009: the spec and the criteria
+# examples, never a test). Paths are relative to ``acceptance/``.
+REFERENCE_ALLOWLIST: tuple[str, ...] = ("contract/spec.md", "contract/criteria.yaml")
+
+
 def acceptance_mount(role: SessionRole) -> str:
     """How ``acceptance/`` is mounted: read-only, writable, or tests masked (contract kept)."""
     if role is SessionRole.AUTHOR:
