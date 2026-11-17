@@ -314,9 +314,10 @@ def ci_route(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     try:
         prs = json.loads(sys.stdin.read())
-        route = resolve_route(prs if isinstance(prs, list) else [], args.head, args.default_branch)
+        prs = prs if isinstance(prs, list) else []
     except ValueError:
-        route = resolve_route([], args.head, args.default_branch)
+        prs = []
+    route = resolve_route(prs, args.head, args.default_branch, args.repo)
     print(json.dumps(route.public(), sort_keys=True))
     return EXIT_PASS if route.ok else EXIT_FAIL
 

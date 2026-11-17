@@ -282,7 +282,13 @@ class GitRepository:
         base = oid(baseline)
         head = self._ref_head(ref)
         tree = self._write_tree(changes, base=f"{base}^{{tree}}")
-        commit = self._commit(self._git, tree, head or base)
+        if head and not self._is_ancestor(base, head):
+            # The baseline moved since the ref was last published. Chain onto the head (the ref
+            # stays a fast-forward) and add the baseline as a second parent so the merge base,
+            # and therefore the CI path diff, is the new baseline and not main's own changes.
+            commit = self._commit(self._git, tree, head, merge=base)
+        else:
+            commit = self._commit(self._git, tree, head or base)
         try:
             # --no-deref plus the expected old value: a compare-and-swap that never follows
             # a symbolic ref and refuses when another publisher moved the ref meanwhile.
@@ -290,6 +296,12 @@ class GitRepository:
         except RepositoryError as exc:
             raise RepositoryError(f"{ref} moved while promoting; retry") from exc
         return commit
+
+    def _is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        try:
+            return self.merge_base(ancestor, descendant) == ancestor
+        except RepositoryError:  # no common history at all
+            return False
 
     def _is_symbolic(self, ref: str) -> bool:
         try:
@@ -306,8 +318,9 @@ class GitRepository:
         return oid(out.decode().strip())
 
     @staticmethod
-    def _commit(git: Git, tree: str, parent: str = "") -> str:
+    def _commit(git: Git, tree: str, parent: str = "", *, merge: str = "") -> str:
         args = ["commit-tree", tree] + (["-p", parent] if parent else [])
+        args += ["-p", merge] if merge else []
         message = b"cheeseless promote\n" if parent else _PROJECTION_MESSAGE
         return oid(git.run(*args, input=message, extra_env=IDENTITY).decode().strip())
 

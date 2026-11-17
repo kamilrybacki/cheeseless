@@ -264,6 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cir.add_argument("--head", required=True, help="The head commit SHA being checked.")
     cir.add_argument("--default-branch", required=True)
+    cir.add_argument("--repo", required=True, help="owner/name of the judged repository.")
 
     init = sub.add_parser(
         "ci-budget-init",

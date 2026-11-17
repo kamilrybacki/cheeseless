@@ -48,8 +48,12 @@ def _get(obj: Any, *path: str) -> Any:
     return obj
 
 
-def resolve_route(prs: Sequence[Any], head_sha: str, default_branch: str) -> Route:
-    """Validate the single open PR for ``head_sha`` (base, head, class) and route it."""
+def resolve_route(prs: Sequence[Any], head_sha: str, default_branch: str, repo: str) -> Route:
+    """Validate the single open PR for ``head_sha`` (base, head, repo, class) and route it.
+
+    A PR whose head lives in another repository (a fork) is refused: its branch name is
+    attacker-chosen and must never buy a judge run.
+    """
     open_prs = [p for p in prs if _get(p, "state") == "open"]
     if len(open_prs) != 1:
         return _refuse("expected_exactly_one_open_pr")
@@ -60,6 +64,10 @@ def resolve_route(prs: Sequence[Any], head_sha: str, default_branch: str) -> Rou
         return _refuse("base_is_not_the_default_branch")
     if _get(pr, "head", "sha") != head_sha:
         return _refuse("head_moved")
+    if not repo or _get(pr, "head", "repo", "full_name") != repo:
+        return _refuse("head_repo_is_not_this_repository")
+    if _get(pr, "base", "repo", "full_name") != repo:
+        return _refuse("base_repo_is_not_this_repository")
     if not (isinstance(number, int) and isinstance(base_sha, str) and isinstance(branch, str)):
         return _refuse("malformed_pull_request")
     cls = classify_branch(branch)

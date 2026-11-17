@@ -329,3 +329,57 @@ def test_a_concurrent_publisher_loses_the_compare_and_swap(
     with pytest.raises(RepositoryError):
         repo.promote(baseline, tree, tree, ref)
     assert git(toy_repo, "rev-parse", ref) == baseline
+
+
+def _move_main(toy_repo: Path) -> str:
+    """Advance the default branch with an unrelated change, leaving the working tree as it was."""
+    git(toy_repo, "stash", "push", "-u", "-q", "-m", "m1-test")
+    write_files(toy_repo, {"README.md": "main moved\n"})
+    moved = commit_all(toy_repo, "main moved")
+    git(toy_repo, "stash", "pop", "-q")
+    return moved
+
+
+def test_a_repromote_after_main_moved_keeps_the_ref_a_fast_forward_with_the_new_baseline(
+    repo: GitRepository, toy_repo: Path
+) -> None:
+    from cheeseless.app.ci_branch import check_branch
+
+    ref = "refs/heads/spec/lin"
+    old = repo.head_commit()
+    write_files(toy_repo, {"acceptance/hidden/test_extra.py": "def test_x():\n    assert True\n"})
+    first = repo.promote(old, repo.tree_of(old), repo.snapshot(toy_repo), ref)
+    new = _move_main(toy_repo)
+
+    second = repo.promote(new, repo.tree_of(new), repo.snapshot(toy_repo), ref)
+
+    parents = git(toy_repo, "rev-list", "--parents", "-n1", second).split()[1:]
+    assert parents == [first, new]  # a fast-forward of the ref, and the new baseline
+    assert repo.merge_base(new, second) == new
+    assert git(toy_repo, "merge-base", "--is-ancestor", first, second) == ""
+    outcome = check_branch(repo, "spec/lin", new, second)
+    assert outcome.ok, outcome.public()
+
+
+def test_an_implementer_ref_reused_across_baselines_is_also_rebased_by_a_merge(
+    repo: GitRepository, toy_repo: Path
+) -> None:
+    ref = "refs/heads/gate/toy"
+    old = repo.head_commit()
+    write_files(toy_repo, {"src/toy/extra.py": "X = 1\n"})
+    first = repo.promote(old, repo.tree_of(old), repo.snapshot(toy_repo), ref)
+    new = _move_main(toy_repo)
+    second = repo.promote(new, repo.tree_of(new), repo.snapshot(toy_repo), ref)
+    assert git(toy_repo, "rev-list", "--parents", "-n1", second).split()[1:] == [first, new]
+    assert git(toy_repo, "rev-parse", f"{second}^{{tree}}") == repo.snapshot(toy_repo)
+
+
+def test_a_repromote_on_the_same_baseline_still_chains_with_one_parent(
+    repo: GitRepository, toy_repo: Path
+) -> None:
+    ref = "refs/heads/spec/lin"
+    base = repo.head_commit()
+    write_files(toy_repo, {"acceptance/hidden/a.py": "x = 1\n"})
+    first = repo.promote(base, repo.tree_of(base), repo.snapshot(toy_repo), ref)
+    second = repo.promote(base, repo.tree_of(base), repo.snapshot(toy_repo), ref)
+    assert git(toy_repo, "rev-list", "--parents", "-n1", second).split()[1:] == [first]

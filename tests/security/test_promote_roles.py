@@ -260,3 +260,25 @@ def test_the_leak_scan_fails_loudly_on_a_missing_ref(author):
     repo, _store, _wt = author
     with pytest.raises(subprocess.CalledProcessError):
         _leaks(repo.root, "refs/heads/gate/does-not-exist")
+
+
+def test_a_repromote_after_main_moved_stays_confined_and_leaks_no_hidden_content(author):
+    """M1: the second-parent merge must not turn main's own files into the PR's, nor leak."""
+    from cheeseless.app.ci_branch import check_branch
+
+    repo, store, wt = author
+    _edit_acceptance(wt)
+    assert _check(repo, store, wt).ok
+    first = promote_author(repo, store, worktree=wt)
+    _host(wt, "stash", "push", "-u", "-q", "-m", "m1-sec")
+    (wt / "README.md").write_text("main moved\n")
+    _host(wt, "add", "-A")
+    _host(wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "moved")
+    _host(wt, "stash", "pop", "-q")
+    _edit_acceptance(wt, text="def test_e(candidate):\n    assert 2 == 2\n")
+    assert _check(repo, store, wt).ok
+    second = promote_author(repo, store, worktree=wt)
+    base = repo.default_branch_commit()
+    outcome = check_branch(repo, f"spec/{_lineage(repo)}", base, second.commit)
+    assert outcome.ok, outcome.public()
+    assert not _leaks(wt, first.ref)

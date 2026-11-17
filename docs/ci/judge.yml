@@ -67,6 +67,7 @@ jobs:
           # Never trust PR numbers carried in the event payload; resolve from the SHA.
           gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" > prs.json
           uv run cheeseless ci-route --head "$HEAD_SHA" --default-branch "$DEFAULT_BRANCH" \
+            --repo "$REPO" \
             < prs.json > route.json
           jq -r '"number=\(.number)", "base_sha=\(.base_sha)", "run_judge=\(.run_judge)", "branch=\(.branch)"' \
             route.json >> "$GITHUB_OUTPUT"

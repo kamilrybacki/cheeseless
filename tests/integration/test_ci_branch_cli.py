@@ -115,14 +115,14 @@ def test_ci_route_validates_the_live_pr_from_stdin(monkeypatch, capsys):
     pr = {
         "number": 3,
         "state": "open",
-        "base": {"ref": "main", "sha": "b" * 40},
-        "head": {"ref": "spec/L1", "sha": head},
+        "base": {"ref": "main", "sha": "b" * 40, "repo": {"full_name": "o/r"}},
+        "head": {"ref": "spec/L1", "sha": head, "repo": {"full_name": "o/r"}},
     }
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps([pr])))
-    code = main(["ci-route", "--head", head, "--default-branch", "main"])
+    code = main(["ci-route", "--head", head, "--default-branch", "main", "--repo", "o/r"])
     out = json.loads(capsys.readouterr().out)
     assert code == 0 and out["branch_class"] == "spec" and out["run_judge"] is False
 
     monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
-    assert main(["ci-route", "--head", head, "--default-branch", "main"]) == 1
+    assert main(["ci-route", "--head", head, "--default-branch", "main", "--repo", "o/r"]) == 1
     assert json.loads(capsys.readouterr().out)["ok"] is False
