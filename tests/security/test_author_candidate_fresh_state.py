@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +27,11 @@ needs_bwrap = pytest.mark.skipif(
 SH = "/bin/sh"
 PY = "/usr/bin/python3"
 CANARY = "CHEESELESS-CANARY-4f9c1d"
+# Taken at import time (collection is the session start). Canary fixtures are written during
+# the session, so a sweep over files newer than this still finds every one an earlier test
+# left behind, while the runner's days-old toolchains are skipped.
+SESSION_START = int(time.time()) - 60
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _marker(path: str) -> str:
@@ -199,14 +205,18 @@ def test_suite_tmp_output_survives_and_the_candidate_never_sees_it(tmp_path):
 def test_the_candidate_cannot_see_acceptance_content_canary(tmp_path):
     tree = _tree(tmp_path)
     roots = "/w /tmp /home /mnt /opt /srv /etc /var /run /usr/local"
+    # One bounded walk: any canary-named file, and a grep only of files written this session.
+    # The checkout's own sources (an old file holding CANARY) are covered by the existence check.
     probe = (
-        f"grep -rsl {CANARY} {roots} 2>/dev/null; "
-        f"find {roots} -name 'canary-*' 2>/dev/null; printf done"
+        f"find {roots} \\( -name 'canary-*' -print \\) -o "
+        f"\\( -type f -newermt @{SESSION_START} -exec grep -l {CANARY} {{}} + \\) 2>/dev/null; "
+        f"test -e {REPO_ROOT}/tests/security/test_author_candidate_fresh_state.py && printf LEAK; "
+        "printf done"
     )
-    assert _normal(tree, [SH], ["-c", probe], calls=1) == ["done"]
+    assert _normal(tree, [SH], ["-c", probe], calls=1) == ["done"], "normal path leaked"
     test = _probe_test(["done", "done"], ["-c", probe])
     files = {"canary-file.txt": CANARY}
-    assert _author(tmp_path, tree, test, files=files) == "passed"
+    assert _author(tmp_path, tree, test, files=files) == "passed", "author path leaked"
 
 
 @needs_bwrap
