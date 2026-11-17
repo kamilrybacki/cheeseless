@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; point 2 superseded by ADR-0014
 date: 2026-11-17
 reviewers: [gpt-6.1-sol, gpt-6.1-terra]
 ---
