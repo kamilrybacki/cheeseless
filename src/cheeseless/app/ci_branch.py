@@ -32,6 +32,30 @@ class BranchOutcome:
         }
 
 
+BRANCH_POLICY_CHECK = "cheeseless branch policy"
+
+
+def check_payload(outcome: BranchOutcome, head_sha: str) -> dict[str, object]:
+    """The check-run body for a branch-policy outcome (never the implementation verdict)."""
+    conclusion = "success" if outcome.ok else "failure"
+    lines = [
+        f"class: {outcome.branch_class}; result: {outcome.reason}.",
+        "Path confinement only; this is not an implementation verdict.",
+        *(f"rejected: {path!r}" for path in outcome.rejected),
+        *(f"advisory: {note}" for note in outcome.advisory),
+    ]
+    return {
+        "name": BRANCH_POLICY_CHECK,
+        "head_sha": head_sha,
+        "status": "completed",
+        "conclusion": conclusion,
+        "output": {
+            "title": f"{BRANCH_POLICY_CHECK}: {conclusion}",
+            "summary": "\n".join(lines),
+        },
+    }
+
+
 def _advisory(
     author_check: Callable[[str], AuthorCheckResult] | None, head: str
 ) -> tuple[str, ...]:

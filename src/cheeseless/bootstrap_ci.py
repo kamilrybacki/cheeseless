@@ -32,8 +32,9 @@ from cheeseless.adapters.outbound.runner.pytest_runner import PytestRunner
 from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.authoring import author_check
-from cheeseless.app.ci_branch import check_branch
+from cheeseless.app.ci_branch import BranchOutcome, check_branch, check_payload
 from cheeseless.app.ci_judge import CiVerdict, FreezeDrift, JudgeReason, judge
+from cheeseless.app.ci_route import resolve_route
 from cheeseless.bootstrap import _ensure_outside, _state_home
 from cheeseless.ci_bundle import (
     BudgetLedgerRef,
@@ -285,8 +286,15 @@ def ci_branch(args: argparse.Namespace) -> int:
             author_check=lambda head: author_check(repo, sandbox, head),
         )
     except Exception as exc:  # noqa: BLE001 - fail closed, never a trace
+        if args.check_payload:
+            failed = BranchOutcome(False, "check_failed", "unknown")
+            print(json.dumps(check_payload(failed, args.head), sort_keys=True))
+            return EXIT_PASS
         _err(f"ci-branch failed: {type(exc).__name__}")
         return EXIT_USAGE
+    if args.check_payload:
+        print(json.dumps(check_payload(outcome, args.head), sort_keys=True))
+        return EXIT_PASS
     public = outcome.public()
     if args.json:
         print(json.dumps(public, indent=2, sort_keys=True))
@@ -299,12 +307,27 @@ def ci_branch(args: argparse.Namespace) -> int:
     return EXIT_PASS if outcome.ok else EXIT_FAIL
 
 
+def ci_route(args: argparse.Namespace) -> int:
+    """Validate the live PR (JSON list on stdin); print the routing. No secrets, no verdict."""
+    if not _SHA.fullmatch(args.head):
+        _err("ci-route: --head must be a full 40-character lowercase commit SHA")
+        return EXIT_USAGE
+    try:
+        prs = json.loads(sys.stdin.read())
+        route = resolve_route(prs if isinstance(prs, list) else [], args.head, args.default_branch)
+    except ValueError:
+        route = resolve_route([], args.head, args.default_branch)
+    print(json.dumps(route.public(), sort_keys=True))
+    return EXIT_PASS if route.ok else EXIT_FAIL
+
+
 def run(args: argparse.Namespace) -> int:
     commands = {
         "ci-export": ci_export,
         "ci-judge": ci_judge,
         "ci-budget-init": ci_budget_init,
         "ci-branch": ci_branch,
+        "ci-route": ci_route,
     }
     return commands[args.command](args)
 
@@ -315,6 +338,7 @@ __all__ = [
     "ci_branch",
     "ci_budget_init",
     "ci_export",
+    "ci_route",
     "ci_judge",
     "make_ledger_seeder",
     "make_ledger_transport",

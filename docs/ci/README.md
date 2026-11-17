@@ -47,13 +47,25 @@ posts a check run with the aggregate status and visible-criterion statuses only.
    branch.
 6. Copy `judge.yml` to `.github/workflows/judge.yml` on the default branch. Adjust the
    `workflows:` name to match your PR workflow.
-7. Make the `cheeseless judge` check required in branch protection (or a ruleset) and pin
-   its **expected source to the judge App**. Without the pin, a check run with the same name
-   posted by any workflow (the shared `github-actions` app) would satisfy it.
+7. Make the `cheeseless branch policy` check required for every PR, and `cheeseless judge`
+   required for `gate/*` PRs (a ruleset can scope a required check by branch name). Pin the
+   **expected source of both to the judge App**. Without the pin, a check run with the same
+   name posted by any workflow (the shared `github-actions` app) would satisfy it.
 
 ## How it behaves
 
-- Runs from the default branch (`workflow_run`), never from PR code.
+- Runs from the default branch (`workflow_run`), never from PR code. One workflow, three
+  jobs. `route` (no secrets) resolves the live PR from the head SHA and verifies its base,
+  head and branch class with `cheeseless ci-route`. Then:
+  - `gate/<task>`: `judge` (implementation verdict) and `branch-policy` (no `acceptance/`).
+  - `spec/<lineage>`: `branch-policy` only (`acceptance/` paths only, plus the advisory
+    author check, which is reported and never blocks). The implementation judge never runs,
+    so an author PR can never earn an implementation PASS.
+  - any other branch: `branch-policy` posts a failing check.
+  - a PR that cannot be verified (not exactly one open PR, non-default base, head moved)
+    publishes nothing, so the required checks stay missing and the merge stays blocked.
+  `branch-policy` publishes through the judge App token (`checks: write`), minted only after
+  the sandboxed evaluation, exactly like the judge check.
 - Resolves the PR from the head SHA, refuses a non-default base, fetches the head as objects
   only and never checks it out.
 - A PR that touches `acceptance/` or other protected paths (measured from its merge base

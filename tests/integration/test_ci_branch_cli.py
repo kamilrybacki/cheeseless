@@ -74,3 +74,55 @@ def test_non_sha_arguments_are_a_usage_error(toy_repo, monkeypatch, capsys):
     code = main(["ci-branch", "--branch", "gate/t", "--base", "main", "--head", "HEAD"])
     assert code == 2
     assert "40-character" in capsys.readouterr().err
+
+
+def _payload(repo, monkeypatch, capsys, branch, base, head):
+    monkeypatch.chdir(repo)
+    args = ["ci-branch", "--branch", branch, "--base", base, "--head", head, "--check-payload"]
+    code = main(args)
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_check_payload_for_a_clean_spec_pr_is_a_branch_policy_success(
+    toy_repo, base, monkeypatch, capsys
+):
+    head = _commit(toy_repo, {"acceptance/a.txt": "x"})
+    code, out = _payload(toy_repo, monkeypatch, capsys, "spec/L1", base, head)
+    assert code == 0 and out["name"] == "cheeseless branch policy"
+    assert out["head_sha"] == head and out["conclusion"] == "success"
+
+
+def test_check_payload_for_an_unknown_class_is_a_failure_and_still_exits_zero(
+    toy_repo, base, monkeypatch, capsys
+):
+    head = _commit(toy_repo, {"src/toy/n.txt": "x"})
+    code, out = _payload(toy_repo, monkeypatch, capsys, "feature/x", base, head)
+    assert code == 0 and out["conclusion"] == "failure"
+
+
+def test_check_payload_fails_closed_when_the_check_itself_breaks(
+    toy_repo, base, monkeypatch, capsys
+):
+    code, out = _payload(toy_repo, monkeypatch, capsys, "spec/L1", base, "f" * 40)
+    assert code == 0 and out["conclusion"] == "failure"
+    assert out["head_sha"] == "f" * 40
+
+
+def test_ci_route_validates_the_live_pr_from_stdin(monkeypatch, capsys):
+    import io
+
+    head = "a" * 40
+    pr = {
+        "number": 3,
+        "state": "open",
+        "base": {"ref": "main", "sha": "b" * 40},
+        "head": {"ref": "spec/L1", "sha": head},
+    }
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps([pr])))
+    code = main(["ci-route", "--head", head, "--default-branch", "main"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0 and out["branch_class"] == "spec" and out["run_judge"] is False
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
+    assert main(["ci-route", "--head", head, "--default-branch", "main"]) == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False

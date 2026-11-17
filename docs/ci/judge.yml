@@ -1,4 +1,6 @@
-# cheeseless CI judge: workflow template. Copy to .github/workflows/judge.yml in the
+# cheeseless CI: the single trusted workflow template (route, then judge for gate/ PRs, or
+# the branch-policy check for spec/ and unknown classes; see docs/ci/README.md).
+# Copy to .github/workflows/judge.yml in the
 # protected repository. It is a `workflow_run` workflow, so GitHub always runs the copy on
 # the DEFAULT branch, never the version from the pull request.
 #
@@ -26,9 +28,52 @@ concurrency:
   group: cheeseless-judge-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: true
 
+env:
+  HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+  REPO: ${{ github.repository }}
+
 jobs:
-  judge:
+  # Holds no secrets and no environment. Resolves the live PR from the head SHA, verifies
+  # its base, head and branch class (tested Python: `cheeseless ci-route`) and decides which
+  # checks it gets. Only a gate/ PR is routed to the implementation judge.
+  route:
     if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      number: ${{ steps.route.outputs.number }}
+      base_sha: ${{ steps.route.outputs.base_sha }}
+      run_judge: ${{ steps.route.outputs.run_judge }}
+      # Attacker-controlled: only ever consumed through an env var, never a `run:` body.
+      branch: ${{ steps.route.outputs.branch }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.13.1"
+      - run: uv sync --locked
+      - name: Resolve and validate the pull request
+        id: route
+        run: |
+          set -euo pipefail
+          # Never trust PR numbers carried in the event payload; resolve from the SHA.
+          gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" > prs.json
+          uv run cheeseless ci-route --head "$HEAD_SHA" --default-branch "$DEFAULT_BRANCH" \
+            < prs.json > route.json
+          jq -r '"number=\(.number)", "base_sha=\(.base_sha)", "run_judge=\(.run_judge)", "branch=\(.branch)"' \
+            route.json >> "$GITHUB_OUTPUT"
+
+  judge:
+    needs: route
+    if: needs.route.outputs.run_judge == 'true'
     runs-on: ubuntu-latest
     # Environment secrets reach only jobs that name the environment, and only on the
     # branches it allows (configure: default branch only, no tags).
@@ -40,28 +85,13 @@ jobs:
       pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
-      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ needs.route.outputs.number }}
     steps:
       - name: Install bubblewrap and allow unprivileged user namespaces
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-
-      - name: Resolve the pull request from the head SHA
-        id: pr
-        run: |
-          set -euo pipefail
-          # Never trust PR numbers carried in the event payload; resolve from the SHA.
-          prs=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
-            --jq '[.[] | select(.state == "open")]')
-          [ "$(jq length <<<"$prs")" = "1" ] || { echo "expected exactly one open PR"; exit 1; }
-          base_ref=$(jq -r '.[0].base.ref' <<<"$prs")
-          [ "$base_ref" = "$DEFAULT_BRANCH" ] || { echo "refusing non-default base: $base_ref"; exit 1; }
-          echo "number=$(jq -r '.[0].number' <<<"$prs")" >> "$GITHUB_OUTPUT"
-          echo "base_sha=$(jq -r '.[0].base.sha' <<<"$prs")" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -80,7 +110,7 @@ jobs:
         run: |
           set -euo pipefail
           # No checkout of PR content: only the objects, addressed by SHA.
-          git fetch --no-tags origin "+refs/pull/${{ steps.pr.outputs.number }}/head:refs/cheeseless/pr-head"
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/cheeseless/pr-head"
           [ "$(git rev-parse refs/cheeseless/pr-head)" = "$HEAD_SHA" ] || { echo "head moved"; exit 1; }
 
       # The cross-run CI budget lives on a ledger branch in the private ledger repository.
@@ -103,7 +133,6 @@ jobs:
         env:
           CHEESELESS_CI_BUNDLE: ${{ secrets.CHEESELESS_CI_BUNDLE }}
           CHEESELESS_BUDGET_TOKEN: ${{ steps.budget.outputs.token }}
-          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
         run: |
           set +e
           uv run cheeseless ci-judge --base "$(git rev-parse "origin/${DEFAULT_BRANCH}")" \
@@ -141,7 +170,7 @@ jobs:
         run: |
           set -euo pipefail
           # Re-check that the PR head is unchanged before posting (read-only token).
-          current=$(GH_TOKEN="$READ_TOKEN" gh api "repos/${REPO}/pulls/${{ steps.pr.outputs.number }}" --jq .head.sha)
+          current=$(GH_TOKEN="$READ_TOKEN" gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .head.sha)
           [ "$current" = "$HEAD_SHA" ] || { echo "PR head changed; not posting"; exit 1; }
           # Fail closed: success only on exit 0 AND a verdict whose status is "pass".
           # Anything else (FAIL, BLOCKED, usage/infra error, freeze drift) is a failure.
@@ -157,3 +186,69 @@ jobs:
             -f status=completed -f conclusion="$conclusion" \
             -f "output[title]=cheeseless judge: ${conclusion}" \
             -f "output[summary]=${summary}"
+
+  # Every validated PR gets this check: path confinement for gate/ and spec/, a failure for
+  # any other class. It is published on the validated head by the judge App, like the judge
+  # check, and is never an implementation verdict.
+  branch-policy:
+    needs: route
+    runs-on: ubuntu-latest
+    environment: cheeseless-judge
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ needs.route.outputs.number }}
+      BRANCH: ${{ needs.route.outputs.branch }}
+    steps:
+      - name: Install bubblewrap and allow unprivileged user namespaces
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.13.1"
+      - run: uv sync --locked
+      - name: Fetch the PR head as objects only
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/cheeseless/pr-head"
+          [ "$(git rev-parse refs/cheeseless/pr-head)" = "$HEAD_SHA" ] || { echo "head moved"; exit 1; }
+      # No App credential exists while the (sandboxed) advisory author check runs.
+      - name: Evaluate the branch policy
+        run: |
+          set +e
+          uv run cheeseless ci-branch --branch "$BRANCH" --head "$HEAD_SHA" \
+            --base "$(git rev-parse "origin/${DEFAULT_BRANCH}")" --check-payload > payload.json
+          # Fail closed: a missing or foreign payload becomes a failing check.
+          if ! jq -e --arg sha "$HEAD_SHA" '.head_sha == $sha and (.conclusion | IN("success", "failure"))' \
+              payload.json > /dev/null 2>&1; then
+            jq -n --arg sha "$HEAD_SHA" '{name: "cheeseless branch policy", head_sha: $sha,
+              status: "completed", conclusion: "failure",
+              output: {title: "cheeseless branch policy: failure", summary: "the policy check did not complete"}}' \
+              > payload.json
+          fi
+          exit 0
+      - name: Mint the judge App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CHEESELESS_JUDGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CHEESELESS_JUDGE_APP_KEY }}
+          permission-checks: write
+      - name: Post the check run
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          READ_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current=$(GH_TOKEN="$READ_TOKEN" gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .head.sha)
+          [ "$current" = "$HEAD_SHA" ] || { echo "PR head changed; not posting"; exit 1; }
+          gh api "repos/${REPO}/check-runs" -X POST --input payload.json

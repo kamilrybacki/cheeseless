@@ -252,6 +252,18 @@ def build_parser() -> argparse.ArgumentParser:
     cib.add_argument("--base", required=True)
     cib.add_argument("--head", required=True)
     cib.add_argument("--json", action="store_true")
+    cib.add_argument(
+        "--check-payload",
+        action="store_true",
+        help="Print the branch-policy check-run body (JSON); the outcome is in 'conclusion'.",
+    )
+
+    cir = sub.add_parser(
+        "ci-route",
+        help="Validate the live PR (JSON list on stdin) and print which checks it gets.",
+    )
+    cir.add_argument("--head", required=True, help="The head commit SHA being checked.")
+    cir.add_argument("--default-branch", required=True)
 
     init = sub.add_parser(
         "ci-budget-init",
