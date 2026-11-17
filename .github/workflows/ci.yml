@@ -1,4 +1,7 @@
 name: ci
+# The judge workflow is a workflow_run and cannot see the PR action, so the rule is encoded here:
+# a title/body edit (action edited without a base change) must not re-spend the CI budget.
+run-name: ci judge=${{ (github.event.action != 'edited' || github.event.changes.base) && 'yes' || 'no' }}
 
 on:
   push:

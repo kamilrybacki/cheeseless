@@ -1,23 +1,23 @@
-# cheeseless CI: the single trusted workflow template. route -> judge (gate/ only) and
-# evaluate (every PR, unprivileged) -> post (the only job that can publish checks).
-# See docs/ci/README.md.
-# Copy to .github/workflows/judge.yml in the
-# protected repository. It is a `workflow_run` workflow, so GitHub always runs the copy on
-# the DEFAULT branch, never the version from the pull request.
+# cheeseless CI: the single trusted workflow template.
+#   route -> policy (no PR code) + judge (gate/ only) + evaluate (advisory) -> post (the only
+#   job that can publish checks). See docs/ci/README.md.
+# Copy to .github/workflows/judge.yml in the protected repository. It is a `workflow_run`
+# workflow, so GitHub always runs the copy on the DEFAULT branch, never the PR's version.
 #
 # Setup: see docs/ci/README.md. Everything secret lives in the `cheeseless-judge` environment,
-# limited to the default branch: secrets CHEESELESS_CI_BUNDLE (output of `cheeseless ci-export`)
-# and CHEESELESS_JUDGE_APP_KEY, variables CHEESELESS_JUDGE_APP_CLIENT_ID and
-# CHEESELESS_BUDGET_REPO (name of the private ledger repository, same owner). Never store them
-# as repository secrets: any branch workflow a pusher writes can read those.
+# limited to the default branch. Never store these as repository secrets: any branch workflow a
+# pusher writes can read those.
 #
-# Two short-lived judge App tokens, in two different jobs:
-#   - budget token: contents write on the ledger repository only, minted in the judge job right
-#     before the judge, given only to the judge step and revoked right after it;
-#   - checks token: checks write on this repository, minted only in the `post` job, which never
-#     checks out or runs pull request code. Any job that fetches or executes PR content
-#     (judge, evaluate) is never given the checks credential.
-# The token action also revokes each token when the job ends.
+# TWO GitHub Apps, so that a sandbox escape in the judge cannot forge a green check:
+#   - ledger App: Contents read/write, installed on the private ledger repository ONLY. Secret
+#     CHEESELESS_LEDGER_APP_KEY, variable CHEESELESS_LEDGER_APP_ID (the App Client ID). It is the
+#     only credential the judge job (which runs candidate code, sandboxed) can see.
+#   - checks App: Checks read/write, installed on this repository ONLY, no Contents access. Secret
+#     CHEESELESS_CHECKS_APP_KEY, variable CHEESELESS_CHECKS_APP_ID (the App Client ID). Minted only
+#     in the `post` job, which never fetches, checks out or runs pull request code.
+# Also: secret CHEESELESS_CI_BUNDLE (output of `cheeseless ci-export`) and variable
+# CHEESELESS_BUDGET_REPO (name of the ledger repository, same owner).
+# The token action revokes each token when its job ends.
 name: cheeseless-judge
 
 on:
@@ -41,7 +41,10 @@ jobs:
   # its base, head and branch class (tested Python: `cheeseless ci-route`) and decides which
   # checks it gets. Only a gate/ PR is routed to the implementation judge.
   route:
-    if: github.event.workflow_run.event == 'pull_request'
+    # ci.yml's run-name says `judge=no` for a title/body-only edit, so those do not re-spend budget.
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.display_title == 'ci judge=yes'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -126,8 +129,8 @@ jobs:
         id: budget
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ vars.CHEESELESS_JUDGE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CHEESELESS_JUDGE_APP_KEY }}
+          client-id: ${{ vars.CHEESELESS_LEDGER_APP_ID }}
+          private-key: ${{ secrets.CHEESELESS_LEDGER_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ vars.CHEESELESS_BUDGET_REPO }}
           permission-contents: write
@@ -142,9 +145,13 @@ jobs:
           CHEESELESS_BUDGET_TOKEN: ${{ steps.budget.outputs.token }}
         run: |
           set +e
-          uv run cheeseless ci-judge --base "$(git rev-parse "origin/${DEFAULT_BRANCH}")" \
-            --head "$HEAD_SHA" --json > verdict.json
+          judged_base=$(git rev-parse "origin/${DEFAULT_BRANCH}")
+          uv run cheeseless ci-judge --base "$judged_base" --head "$HEAD_SHA" --json > verdict.json
           code=$?
+          # Record the default-branch tip this verdict was judged against; post compares it with
+          # the tip at publish time so a stale pass cannot survive a moved base.
+          jq --arg b "$judged_base" '. + {judged_base: $b}' verdict.json > verdict.tmp \
+            && mv verdict.tmp verdict.json
           echo "code=$code" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -168,8 +175,49 @@ jobs:
           path: verdict.json
           if-no-files-found: ignore
 
-  # Unprivileged: no environment, no secrets, no App credential. It fetches PR objects and runs
-  # the (sandboxed, advisory) author check, then hands payload.json to `post` as an artifact.
+  # Decides the branch class and path confinement. It checks out the default branch and fetches
+  # PR objects, but executes NO PR content: no bwrap, no author check, only tree comparison. No
+  # environment, no secrets. Its result reaches `post` as a job output, which a sandboxed job
+  # (evaluate, judge) cannot write.
+  policy:
+    needs: route
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      PR_NUMBER: ${{ needs.route.outputs.number }}
+      BRANCH: ${{ needs.route.outputs.branch }}
+    outputs:
+      payload: ${{ steps.policy.outputs.payload }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.13.1"
+      - run: uv sync --locked
+      - name: Fetch the PR head as objects only
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/cheeseless/pr-head"
+          [ "$(git rev-parse refs/cheeseless/pr-head)" = "$HEAD_SHA" ] || { echo "head moved"; exit 1; }
+      - name: Decide the branch policy
+        id: policy
+        run: |
+          set -euo pipefail
+          uv run cheeseless ci-branch --branch "$BRANCH" --head "$HEAD_SHA" \
+            --base "$(git rev-parse "origin/${DEFAULT_BRANCH}")" --check-payload --no-author-check \
+            > payload.json
+          # One compact line (control characters are escaped), safe for $GITHUB_OUTPUT.
+          echo "payload=$(jq -c . payload.json)" >> "$GITHUB_OUTPUT"
+
+  # Advisory only, unprivileged: no environment, no secrets, no App credential. It runs the
+  # sandboxed author check, which executes PR acceptance content, so NOTHING it produces is
+  # consumed by `post`: it cannot turn the gate green, only inform a human reading the log.
   evaluate:
     needs: route
     runs-on: ubuntu-latest
@@ -177,7 +225,6 @@ jobs:
       contents: read
       pull-requests: read
     env:
-      GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ needs.route.outputs.number }}
       BRANCH: ${{ needs.route.outputs.branch }}
     steps:
@@ -200,25 +247,18 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/cheeseless/pr-head"
           [ "$(git rev-parse refs/cheeseless/pr-head)" = "$HEAD_SHA" ] || { echo "head moved"; exit 1; }
-      - name: Evaluate the branch policy
+      - name: Advisory author check
         run: |
-          set +e
           uv run cheeseless ci-branch --branch "$BRANCH" --head "$HEAD_SHA" \
-            --base "$(git rev-parse "origin/${DEFAULT_BRANCH}")" --check-payload > payload.json
-          exit 0
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
-        with:
-          name: policy
-          path: payload.json
-          if-no-files-found: ignore
+            --base "$(git rev-parse "origin/${DEFAULT_BRANCH}")" --json || true
 
-  # The only job that can publish checks. It has the environment and the App key, and checks out
-  # only the default branch: it never fetches or executes pull request code. `ci-gate` validates
-  # the payload schema and head SHA and folds everything into the single required
-  # "cheeseless gate" check (plus the informational judge and branch policy checks).
+  # The only job that can publish checks. It has the environment and the checks App key, and
+  # checks out only the default branch: it never fetches or executes pull request code. `ci-gate`
+  # validates the policy payload (from `policy`'s output) and the verdict, requires the verdict to
+  # have been judged against the current default-branch tip, and folds everything into the single
+  # required "cheeseless gate" check (plus the informational judge and branch policy checks).
   post:
-    needs: [route, judge, evaluate]
+    needs: [route, policy, judge, evaluate]
     if: always() && needs.route.result == 'success'
     runs-on: ubuntu-latest
     environment: cheeseless-judge
@@ -229,6 +269,10 @@ jobs:
       PR_NUMBER: ${{ needs.route.outputs.number }}
       BRANCH_CLASS: ${{ needs.route.outputs.branch_class }}
       JUDGE_CODE: ${{ needs.judge.outputs.code }}
+      POLICY_PAYLOAD: ${{ needs.policy.outputs.payload }}
+      POLICY_RESULT: ${{ needs.policy.result }}
+      JUDGE_RESULT: ${{ needs.judge.result }}
+      EVALUATE_RESULT: ${{ needs.evaluate.result }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -241,25 +285,33 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         continue-on-error: true
         with:
-          name: policy
-          path: in
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        continue-on-error: true
-        with:
           name: verdict
           path: in
       - name: Build the check bodies
         run: |
           set -euo pipefail
+          mkdir -p in
+          printf '%s' "$POLICY_PAYLOAD" > in/payload.json
+          # Second guard: every upstream job must have ended as this class needs. The judge
+          # runs only for gate/; elsewhere it must have been skipped.
+          guards=true
+          [ "$POLICY_RESULT" = success ] || guards=false
+          [ "$EVALUATE_RESULT" = success ] || guards=false
+          if [ "$BRANCH_CLASS" = gate ]; then
+            [ "$JUDGE_RESULT" = success ] || guards=false
+          else
+            [ "$JUDGE_RESULT" = skipped ] || guards=false
+          fi
+          CURRENT_BASE=$(git rev-parse HEAD)
           uv run cheeseless ci-gate --head "$HEAD_SHA" --branch-class "$BRANCH_CLASS" \
             --policy in/payload.json --judge-code "$JUDGE_CODE" --verdict in/verdict.json \
-            > checks.json
-      - name: Mint the judge App token
+            --current-base "$CURRENT_BASE" --guards-ok "$guards" > checks.json
+      - name: Mint the checks App token
         id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ vars.CHEESELESS_JUDGE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CHEESELESS_JUDGE_APP_KEY }}
+          client-id: ${{ vars.CHEESELESS_CHECKS_APP_ID }}
+          private-key: ${{ secrets.CHEESELESS_CHECKS_APP_KEY }}
           permission-checks: write
       - name: Post the checks
         env:
