@@ -216,7 +216,6 @@ def test_post_asserts_the_upstream_job_results_as_a_second_guard():
     post = _jobs()["post"]
     env = post["env"]
     assert env["JUDGE_RESULT"] == "${{ needs.judge.result }}"
-    assert env["EVALUATE_RESULT"] == "${{ needs.evaluate.result }}"
     assert env["POLICY_RESULT"] == "${{ needs.policy.result }}"
     runs = _runs("post")
     assert "--guards-ok" in runs and "success" in runs and "skipped" in runs
@@ -227,3 +226,40 @@ def test_post_binds_the_verdict_to_the_current_default_branch_tip():
     assert '--current-base "$CURRENT_BASE"' in runs
     judge_runs = _runs("judge")
     assert "judged_base" in judge_runs
+
+
+def _group(event: str, title: str, sha: str = "a" * 40) -> str:
+    """The concurrency group GitHub would compute for a workflow_run with these attributes."""
+    group = _wf()["concurrency"]["group"]
+    values = {"head_sha": sha, "event": event, "display_title": title}
+    expanded = re.sub(
+        r"\$\{\{\s*github\.event\.workflow_run\.(\w+)\s*\}\}", lambda m: values[m.group(1)], group
+    )
+    assert "${{" not in expanded, expanded  # every expression must be one this test models
+    return str(expanded)
+
+
+def test_a_run_that_will_not_judge_never_shares_a_cancelling_group_with_the_real_one():
+    """S23: judge=no and push-event runs must not cancel an in-flight judge=yes pull_request run."""
+    assert _wf()["concurrency"]["cancel-in-progress"] is True
+    real = _group("pull_request", "ci judge=yes")
+    assert _group("pull_request", "ci judge=no") != real
+    assert _group("push", "ci judge=yes") != real
+    assert _group("push", "ci judge=no") != real
+
+
+def test_two_judging_runs_on_the_same_sha_still_cancel_each_other():
+    assert _group("pull_request", "ci judge=yes") == _group("pull_request", "ci judge=yes")
+    assert _group("pull_request", "ci judge=yes", "b" * 40) != _group(
+        "pull_request", "ci judge=yes"
+    )
+
+
+def test_the_guards_do_not_depend_on_the_advisory_evaluate_job():
+    """S25: an install flake in the advisory job must not fail the gate; it is only shown."""
+    post = _jobs()["post"]
+    runs = _runs("post")
+    guard_lines = [ln for ln in runs.splitlines() if "guards=false" in ln]
+    assert guard_lines and not any("EVALUATE" in ln for ln in guard_lines)
+    assert post["env"]["EVALUATE_RESULT"] == "${{ needs.evaluate.result }}"
+    assert "EVALUATE_RESULT" in runs  # still surfaced, informationally

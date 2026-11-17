@@ -284,7 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
     cig.add_argument(
         "--guards-ok",
         choices=("true", "false"),
-        default="true",
+        required=True,
         help="false when an upstream job did not end as expected; forces a failure.",
     )
 

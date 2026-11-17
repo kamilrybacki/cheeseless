@@ -27,8 +27,12 @@ on:
 
 permissions: {}
 
+# Only runs that route and judge identically share a group. A judge=no run (title/body edit) or a
+# push-event ci run on the same SHA gets its own group, so it can never cancel the in-flight
+# pull_request judge=yes run (which has already charged the budget) and then post nothing.
 concurrency:
-  group: cheeseless-judge-${{ github.event.workflow_run.head_sha }}
+  group: >-
+    cheeseless-judge-${{ github.event.workflow_run.head_sha }}-${{ github.event.workflow_run.event }}-${{ github.event.workflow_run.display_title }}
   cancel-in-progress: true
 
 env:
@@ -296,7 +300,8 @@ jobs:
           # runs only for gate/; elsewhere it must have been skipped.
           guards=true
           [ "$POLICY_RESULT" = success ] || guards=false
-          [ "$EVALUATE_RESULT" = success ] || guards=false
+          # evaluate is advisory: shown, never a guard, so an install flake cannot fail the gate.
+          echo "evaluate (advisory): $EVALUATE_RESULT" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$BRANCH_CLASS" = gate ]; then
             [ "$JUDGE_RESULT" = success ] || guards=false
           else

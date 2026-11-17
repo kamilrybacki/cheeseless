@@ -131,6 +131,8 @@ def test_ci_route_validates_the_live_pr_from_stdin(monkeypatch, capsys):
 def _gate(tmp_path, capsys, *extra, head="a" * 40, cls="spec"):
     policy = tmp_path / "policy.json"
     args = ["ci-gate", "--head", head, "--branch-class", cls, "--policy", str(policy), *extra]
+    if "--guards-ok" not in extra:
+        args += ["--guards-ok", "true"]
     code = main(args)
     return code, {c["name"]: c for c in json.loads(capsys.readouterr().out)}
 
@@ -190,7 +192,19 @@ def test_ci_gate_gate_class_needs_the_judge_pass(tmp_path, capsys):
 
 
 def test_ci_gate_rejects_a_non_sha_head(tmp_path, capsys):
-    code = main(["ci-gate", "--head", "main", "--branch-class", "spec", "--policy", "x"])
+    code = main(
+        [
+            "ci-gate",
+            "--head",
+            "main",
+            "--branch-class",
+            "spec",
+            "--policy",
+            "x",
+            "--guards-ok",
+            "true",
+        ]
+    )
     assert code == 2
 
 
@@ -216,8 +230,10 @@ def test_no_author_check_policy_fails_a_spec_pr_touching_src(toy_repo, base, mon
 def test_a_forged_success_policy_for_a_diff_touching_src_still_fails_the_gate(
     toy_repo, base, monkeypatch, capsys, tmp_path
 ):
-    """S18: even a forged payload can't help: the real policy job's output is what post uses,
-    and a forged one for another class or head is rejected by ci-gate."""
+    """A policy payload carrying another head SHA is rejected by ci-gate (head-SHA binding).
+
+    This does NOT test S18: that protection is structural (``post`` reads the policy job's output,
+    never a file a sandboxed job could write) and is covered by the workflow-text tests."""
     head = _commit(toy_repo, {"acceptance/a.txt": "x", "src/toy/n.txt": "x"})
     _, real = _policy(toy_repo, monkeypatch, capsys, "spec/L1", base, head)
     (tmp_path / "policy.json").write_text(json.dumps(real))
@@ -246,3 +262,19 @@ def test_ci_gate_gate_class_fails_on_a_moved_base_or_a_failed_guard(tmp_path, ca
         tmp_path, capsys, *common, "--current-base", "b" * 40, "--guards-ok", "false", cls="gate"
     )
     assert guard["cheeseless gate"]["conclusion"] == "failure"
+
+
+def test_ci_gate_requires_an_explicit_guards_flag(tmp_path, capsys):
+    """S24: a missing --guards-ok must not default to 'all upstream jobs were fine'."""
+    args = [
+        "ci-gate",
+        "--head",
+        "a" * 40,
+        "--branch-class",
+        "spec",
+        "--policy",
+        str(tmp_path / "p"),
+    ]
+    with pytest.raises(SystemExit) as err:
+        main(args)
+    assert err.value.code != 0

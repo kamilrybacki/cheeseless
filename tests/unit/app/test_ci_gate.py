@@ -16,6 +16,7 @@ BASE = "b" * 40
 
 def build_checks(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
     kwargs.setdefault("current_base", BASE)
+    kwargs.setdefault("guards_ok", True)
     return _build(*args, **kwargs)
 
 

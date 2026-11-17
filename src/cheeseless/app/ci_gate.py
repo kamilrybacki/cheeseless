@@ -78,7 +78,7 @@ def build_checks(
     verdict: Any,
     *,
     current_base: str = "",
-    guards_ok: bool = True,
+    guards_ok: bool,
 ) -> list[dict[str, Any]]:
     """The check bodies to publish: gate (required), policy and, for gate/, judge.
 
