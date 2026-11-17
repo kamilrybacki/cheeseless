@@ -18,6 +18,10 @@ acceptance/contract/test_smoke.py
 src/toy/__init__.py
 src/toy/__main__.py
 
+# The spec&#x27;s tie rule, which every hidden test must agree with:
+$ grep &#x27;equal length&#x27; acceptance/contract/spec.md
+- words of equal length keep their input order (a stable sort)
+
 # 1. A reference session sees only the contract (spec + criteria), never tests.
 #    It writes a reference implementation from the spec.
 $ cheeseless session --role reference --task &lt;placeholder-task&gt; --projection &lt;ref-worktree&gt; -- &lt;scripted agent: reference&gt;
@@ -28,6 +32,11 @@ $ cheeseless session --role reference --task &lt;placeholder-task&gt; --projecti
 $ cheeseless reference record --worktree &lt;ref-worktree&gt;
 reference recorded: &lt;id-1&gt;
 
+#    What the reference prints for a tie (bb and aa have equal length):
+$ printf &#x27;bb aa\n&#x27; | python3 src/toy/__main__.py score   # in &lt;ref-worktree&gt;
+bb
+aa
+
 # 2. The author writes hidden tests. One of them is deliberate bait:
 #    test_ties_alphabetical contradicts the spec&#x27;s stable tie rule.
 #    author_crosscheck runs the tests against the reference and goes red.
@@ -35,6 +44,8 @@ $ cheeseless session --role author --task &lt;placeholder-task&gt; --projection 
   agent&gt; writing hidden tests, including test_ties_alphabetical (contradicts the spec)
   agent&gt; wrote acceptance/hidden/test_normalize.py
   agent&gt; wrote acceptance/hidden/test_score.py
+  agent&gt; tie test test_ties_alphabetical:
+  agent&gt;   assert candidate.run([&quot;score&quot;], stdin=&quot;bb aa\n&quot;).stdout == &quot;aa\nbb\n&quot;
   agent&gt; author_check       -&gt; ok=True, problems=[], tests=4
   agent&gt; author_crosscheck  -&gt; green=False, red_criteria=[&#x27;score&#x27;]
   agent&gt; freeze_propose     -&gt; proposal_id=&lt;proposal-1&gt;
@@ -52,6 +63,8 @@ $ cheeseless session --role author --task &lt;placeholder-task&gt; --projection 
   agent&gt; the crosscheck was red on score; fixing only the test that contradicts the spec
   agent&gt; wrote acceptance/hidden/test_normalize.py
   agent&gt; wrote acceptance/hidden/test_score.py
+  agent&gt; tie test test_ties_keep_input_order:
+  agent&gt;   assert candidate.run([&quot;score&quot;], stdin=&quot;bb aa\n&quot;).stdout == &quot;bb\naa\n&quot;
   agent&gt; author_check       -&gt; ok=True, problems=[], tests=4
   agent&gt; author_crosscheck  -&gt; green=True, red_criteria=[]
   agent&gt; freeze_propose     -&gt; proposal_id=&lt;proposal-2&gt;

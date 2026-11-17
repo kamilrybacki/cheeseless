@@ -206,6 +206,26 @@ class Demo:
             "The repo has a spec and a smoke test; there are no hidden tests yet.",
         )
         self.show("git ls-files", "\n".join(sorted(FILES)) + "\n")
+        self.caption("The spec's tie rule, which every hidden test must agree with:")
+        rule = next(line for line in SPEC_MD.splitlines() if "equal length" in line)
+        self.show("grep 'equal length' acceptance/contract/spec.md", rule + "\n")
+
+    def show_reference(self, worktree: Path) -> None:
+        """Run the recorded reference on the tie input so the viewer sees what the spec means."""
+        done = subprocess.run(  # noqa: S603 - the demo's own scripted reference, fixed argv
+            ["/usr/bin/python3", "-I", "src/toy/__main__.py", "score"],
+            cwd=worktree,
+            env=self.env,
+            input="bb aa\n",
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        )
+        self.show(
+            f"printf 'bb aa\\n' | python3 src/toy/__main__.py score   # in <{worktree.name}>",
+            done.stdout,
+        )
 
     def merge_spec(self) -> None:
         branch = self.git("for-each-ref", "--format=%(refname:short)", "refs/heads/spec/")
@@ -230,6 +250,8 @@ class Demo:
             "--worktree",
             str(ref),
         )
+        self.caption("   What the reference prints for a tie (bb and aa have equal length):")
+        self.show_reference(ref)
 
         self.caption(
             "2. The author writes hidden tests. One of them is deliberate bait:",
