@@ -5,13 +5,14 @@ material; the ADR holds the decision.
 
 ## Start
 - `cheeseless dev -- claude [--model M] [--reference-model M] [--implementer-model M]
-  [--confirm-freeze] [--skill PATH] [--resume]`.
+  [--confirm-freeze] [--strength-reviewer -- <agent>] [--skill PATH] [--resume]`.
 - Requires a git repo with a clean working tree; a dirty tree is refused with a message.
 - No `criteria.yaml`: the host runs `cheeseless init` first.
 - Auth: `CLAUDE_CODE_OAUTH_TOKEN` from the environment only (from `claude setup-token`). Missing
   token: refuse with a message that names the command. Never a credentials file in the repo.
   The host forwards only this variable, and only into agent sandboxes (author, reference,
-  implementer); test runners and candidates never get it.
+  implementer); a `--strength-reviewer` sandbox gets only its own CLI credential. Test runners
+  and candidates never get any credential.
 - `--model` applies to every phase unless a per-role flag overrides it.
 - A T3 or Claude Code skill may only launch this command; it never decides a phase.
 
@@ -35,8 +36,13 @@ material; the ADR holds the decision.
   returns the red criteria with the reference's stdout/stderr for failing tests (ADR 0009
   disclosure).
 - If the spec is ambiguous, the agent asks the user.
-- When `author_check` and the crosscheck are green, the host runs `approve_freeze` itself,
-  as actor `cheeseless-dev`. With `--confirm-freeze`, the host asks the user first.
+- The freeze keeps every ADR 0005 precondition (baseline RED, stratified split, sentinels,
+  static checks, cross-vendor test-strength review). Round-2 finding S53-6:
+  - with `--strength-reviewer -- <agent>` (another vendor's CLI, its own credential, read-only
+    sandbox over spec and hidden tests), a passing review plus green `author_check` and
+    crosscheck lets the host run `approve_freeze` itself as actor `cheeseless-dev`;
+  - without a strength reviewer, or with `--confirm-freeze`, the host asks the user, who
+    approves as operator and owns the strength review, as in the regular `freeze --approve`.
 - Freeze result: a local commit `test: freeze <task>` on the default branch.
 
 ## Phase 4: implementation (fresh context)
@@ -48,10 +54,13 @@ material; the ADR holds the decision.
 - A green visible `gate_run` triggers the full judgment, including holdout:
   - PASS: commit to `impl/<task>`, print a summary, end.
   - Holdout FAIL: the implementer gets only the red criterion names and continues.
-- Budget (ADR 0013 extends ADR 0005): each full judgment plays the CI role and reserves one
-  run from the lineage's CI pool (default 5) in the host store, before any hidden input.
-  `gate_run` keeps using the local pool. After 3 holdout fails or an empty pool the user picks:
-  grant more runs, return to the author phase (re-freeze), or abort.
+- Budget (round-2 findings S53-2, S53-5): each full judgment reserves one run from the
+  lineage's local pool (default 30, host trusted store) before any hidden input, like
+  `gate_run`. The CI pool stays in the trusted CI counter, so the ADR 0005 bound of 35 hidden
+  executions per lineage holds. Only the disclosure is extended: holdout red criterion names.
+- After 3 failed holdout judgments the user re-freezes with a new split and seed (back to the
+  author phase) or aborts; there is no "grant and continue" here. An empty pool ends `BLOCKED`
+  until the user, as operator, grants more runs.
 - Disputes follow ADR 0009 (review finding S53-3 corrected the earlier "queue and continue"):
   a dispute ends the implementer session `DISPUTED` at once and the host asks the user:
   - rejected: a fresh implementer session starts (never a resume);
@@ -67,6 +76,11 @@ material; the ADR holds the decision.
   author transcript.
 - `spec_done` and auto-freeze are absent outside dev mode.
 - Auto-freeze refuses without a green, bound crosscheck (it reuses `_ready`).
+- Auto-freeze refuses without a passing strength review; the strength reviewer sandbox is
+  read-only (its writes never reach the store or the acceptance tree).
+- Each agent sandbox env holds only its own credential; runner and candidate envs hold none.
+- Full judgments reserve from the local pool; 3 holdout fails refuse further judgments
+  until a re-freeze.
 
 ## Related open ledger items
 - S49: `--task` placeholder for pre-freeze roles; dev mode needs a task id before the freeze.

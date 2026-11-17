@@ -876,3 +876,14 @@ cross-vendor model. Every finding is accepted and addressed in the ADR and in
 | S53-2 | The full judgment after a green `gate_run` runs the holdout locally, which ADR 0005 reserves for CI and budgets separately | Accepted: the judgment plays the CI role (the ADR says it extends ADR 0005), reserves a run from the lineage's CI pool in the host store before any hidden input, and reports only red criterion names. After 3 holdout fails or an empty pool the user decides. |
 | S53-3 | "Queue disputes and let the implementer continue" contradicts ADR 0009 (a dispute ends the session `DISPUTED`, never resumed) | Accepted: a dispute ends the session at once; rejected starts a fresh implementer, upheld returns to the author for a re-freeze in the same lineage. |
 | S53-4 | The OAuth token could leak into runners or candidates | Accepted: only `CLAUDE_CODE_OAUTH_TOKEN` is forwarded, and only into agent sandboxes (author, reference, implementer); a security test must prove runners and candidates never get it. |
+
+### ADR 0013 review round 2 (2026-11-17)
+
+Reviewer: gpt-6.1-terra (Codex, other vendor; re-check of f6f75fb; verdict ACCEPT WITH
+CHANGES). S53-1, S53-3 and S53-4 resolved; S53-2 partial. Both new findings are accepted.
+
+| # | Finding | Resolution |
+|---|---------|------------|
+| S53-2 | Partial: a CI pool in the host store bypasses ADR 0005's trusted CI counter, so the 35-run lineage bound no longer holds | Accepted: the full judgment is charged to the lineage's local pool (host trusted store); the CI pool stays in the trusted CI counter. Only the disclosure is extended (holdout red criterion names). Cost: holdout feedback spends the local pool faster. |
+| S53-5 | After 3 holdout fails ADR 0005 requires a re-freeze with a new split and seed; "the user decides" and "grant runs and continue" contradict it | Accepted: after 3 holdout fails the user re-freezes (new split and seed) or aborts; an empty pool ends `BLOCKED` until the user grants runs as operator. |
+| S53-6 | Auto-freeze skips ADR 0005's cross-vendor test-strength review and other freeze preconditions | Accepted: the freeze keeps every ADR 0005 precondition; the host freezes alone only after a passing review by a `--strength-reviewer` agent of another vendor (read-only sandbox, its own credential); otherwise the user approves as operator. This changes the agreed default: without a configured strength reviewer, dev mode asks before the freeze. |
