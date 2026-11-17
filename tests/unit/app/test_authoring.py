@@ -685,6 +685,38 @@ def _task_path(store, proposal):
     return store.root / "tasks" / f"{proposal.proposal_id}.json"
 
 
+def test_recovery_repeats_the_reference_crosscheck_policy(hooked, monkeypatch):
+    repo, store, tmp = hooked
+    proposal, contract = _strand(repo, store, tmp, publish=True)
+    monkeypatch.setattr(store, "load_crosscheck", lambda _pid: None)  # as if it were never run
+    _refused_and_sealed(repo, store, proposal, contract, "no crosscheck", tmp)
+
+
+def test_recovery_refuses_a_red_reference_crosscheck(hooked, monkeypatch):
+    from dataclasses import replace
+
+    repo, store, tmp = hooked
+    proposal, contract = _strand(repo, store, tmp, publish=True)
+    record = store.load_crosscheck(proposal.proposal_id)
+    red = replace(record, green=False)
+    monkeypatch.setattr(store, "load_crosscheck", lambda _pid: red)
+    _refused_and_sealed(repo, store, proposal, contract, "the reference failed", tmp)
+
+
+def test_recovery_of_a_waived_approval_does_not_need_a_crosscheck(hooked, monkeypatch):
+    repo, store, tmp = hooked
+    _record(repo, store)
+    proposal = uc.freeze_propose(repo, store, _source(repo))
+    store.fail_set_active = True
+    with pytest.raises(AuthorError):
+        _approve(repo, store, tmp, proposal, no_reference=True, reason="no reference yet")
+    monkeypatch.setattr(store, "load_crosscheck", lambda _pid: None)
+    out = uc.recover_approval(
+        repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+    )
+    assert out == "finished"
+
+
 def test_recovery_refuses_empty_fingerprints(hooked):
     from dataclasses import replace
 

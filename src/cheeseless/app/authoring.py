@@ -501,6 +501,12 @@ def _verify_published(
     problem = _split_problem(frozen, seed, prepared.tests)
     if problem:
         raise refuse(problem)
+    if not frozen.waiver:
+        # Approval required a green reference crosscheck bound to this proposal unless it was
+        # waived (the waiver is MAC-authenticated with the task); repeat that policy here.
+        gap = _crosscheck_problem(repo, store, proposal)
+        if gap is not None:
+            raise refuse(f"the reference crosscheck policy is not met ({gap})")
 
 
 def _split_problem(frozen: FrozenTask, seed: bytes, tests: dict[str, str]) -> str:
