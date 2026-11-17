@@ -729,3 +729,33 @@ def test_recovery_refuses_when_the_default_branch_no_longer_holds_the_frozen_tre
     drifted = _git("-C", str(repo.root), "rev-parse", "FETCH_HEAD")
     repo.default_branch_commit = lambda: drifted  # type: ignore[method-assign]
     _refused_and_sealed(repo, store, proposal, contract, "default branch")
+
+
+def _task_body(data):
+    return (
+        data
+        if "visible" in data
+        else next(v for v in data.values() if isinstance(v, dict) and "visible" in v)
+    )
+
+
+def test_recovery_refuses_swapped_visible_and_holdout_maps(hooked):
+    repo, store, tmp = hooked
+    proposal, contract = _strand(repo, store, tmp, publish=True)
+    path = _task_path(store, proposal)
+    data = json.loads(path.read_bytes())
+    body = _task_body(data)
+    body["visible"], body["holdout"] = body["holdout"], body["visible"]
+    path.write_bytes(json.dumps(data).encode())
+    _refused_and_sealed(repo, store, proposal, contract, "split")
+
+
+def test_recovery_refuses_a_visible_holdout_overlap(hooked):
+    repo, store, tmp = hooked
+    proposal, contract = _strand(repo, store, tmp, publish=True)
+    path = _task_path(store, proposal)
+    data = json.loads(path.read_bytes())
+    body = _task_body(data)
+    body["visible"] = {**body["visible"], **body["holdout"]}
+    path.write_bytes(json.dumps(data).encode())
+    _refused_and_sealed(repo, store, proposal, contract, "not valid")

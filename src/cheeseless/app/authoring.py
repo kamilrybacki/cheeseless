@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -39,7 +39,8 @@ from cheeseless.domain.authoring import (
 from cheeseless.domain.contract import Contract, canonical_contract_bytes
 from cheeseless.domain.dlp import redact_sentinels, sentinel_problems
 from cheeseless.domain.evaluation import SuiteRun, TestOutcome, freeze_problems
-from cheeseless.domain.freeze import freeze_digest
+from cheeseless.domain.freeze import FrozenTask, freeze_digest
+from cheeseless.domain.holdout import split as holdout_split
 from cheeseless.ports.authoring import AuthoringStore
 from cheeseless.ports.repository import Repository, RepositoryError
 from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
@@ -445,12 +446,15 @@ def _verify_published(repo: Repository, store: AuthorStore, proposal: Proposal) 
         )
 
     try:
-        frozen, _ = store.load_task(tid)
+        frozen, seed = store.load_task(tid)
         stored = store.load_fingerprints(tid)
     except StoreError as exc:
         raise refuse(f"the published task is not valid ({exc})") from exc
     if frozen.task.task_id != tid or frozen.acceptance_tree != proposal.acceptance_tree:
         raise refuse("the published task is not the one that was proposed")
+    problem = _split_problem(frozen, seed)
+    if problem:
+        raise refuse(problem)
     if stored is None:
         raise refuse("the task is published without fingerprints")
     try:
@@ -461,6 +465,24 @@ def _verify_published(repo: Repository, store: AuthorStore, proposal: Proposal) 
         raise refuse(why)
     if stored != rebuilt:
         raise refuse("the stored fingerprints are incomplete or do not match the frozen tree")
+
+
+def _split_problem(frozen: FrozenTask, seed: bytes) -> str:
+    """Compare the stored visible/holdout record with the one the seed derives.
+
+    The collected test mapping is the union of the two stored maps; the split is then
+    re-derived from the seed and the whole expected record is compared field by field."""
+    tests = {**frozen.visible, **frozen.holdout}
+    if len(tests) != len(frozen.visible) + len(frozen.holdout):
+        return "the visible and holdout sets overlap"
+    try:
+        derived = holdout_split(seed, tests)
+    except ValueError as exc:
+        return f"the holdout split cannot be re-derived ({exc})"
+    expected = replace(frozen, visible=dict(derived.visible), holdout=dict(derived.holdout))
+    if expected != frozen:
+        return "the stored visible/holdout split is not the one the seed derives"
+    return ""
 
 
 def _trusted_head(repo: Repository) -> str:
