@@ -34,10 +34,13 @@ Codes: `contradicts_spec`, `untestable`, `ambiguous_spec`, `other`. Disputes per
 
 ## CI routing
 
-One trusted workflow (`docs/ci/judge.yml`) resolves the live PR, verifies base, head and branch class, then routes:
-`gate/<task>` runs the implementation judge; `spec/<lineage>` and every other class get only the `cheeseless branch policy`
-check (path confinement; unknown classes fail), published by the judge App on the validated head. An author check is never
-an implementation PASS.
+One trusted workflow (`docs/ci/judge.yml`) resolves the live PR, verifies base, head and branch class, then runs
+`route` -> `judge` (gate/ only) and `evaluate` (every PR, unprivileged) -> `post` (the only publisher, no PR code).
+Branch protection requires ONE check, `cheeseless gate` (required checks are scoped by base branch): for `gate/<task>`
+it is success only if the judge PASSED and the branch policy passed; for `spec/<lineage>` it is success if the branch
+policy passed and says it is NOT an implementation verdict; any other class or failure is a failure. It is never
+neutral or skipped. `cheeseless judge` and `cheeseless branch policy` stay as informational checks. An author check is
+never an implementation PASS. `spec/<lineage>` is ADR 0009's `spec/<task>` (ledger, stage (b) row Q3).
 
 `promote --role` is the operator's publication mode on the host, not session authentication. Binding a session to a role at
 launch stays deferred (see the ledger's "Remaining" line).
