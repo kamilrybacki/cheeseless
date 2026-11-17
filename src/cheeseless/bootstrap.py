@@ -625,6 +625,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run_session_command(args, agent)
     if args.command in (
         "ci-export",
+        "ci-bundle-check",
         "ci-judge",
         "ci-budget-init",
         "ci-branch",

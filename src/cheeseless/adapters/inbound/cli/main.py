@@ -249,6 +249,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Commit SHA of the seed commit on cheeseless/budget/<lineage>.",
     )
 
+    chk = sub.add_parser(
+        "ci-bundle-check",
+        help="Host-only: exit 1 if the bundle predates a later dispute (re-export it).",
+    )
+    chk.add_argument("--bundle-file", type=Path, default=None)
+
     cij = sub.add_parser("ci-judge", help="Judge a PR head in CI; prints only the public verdict.")
     cij.add_argument("--base", required=True)
     cij.add_argument("--head", required=True)

@@ -54,6 +54,7 @@ from cheeseless.domain.budget_ledger import (
     run_key,
 )
 from cheeseless.domain.status import Status
+from cheeseless.ports.store import StoreError
 
 BUNDLE_ENV = "CHEESELESS_CI_BUNDLE"
 BUDGET_TOKEN_ENV = "CHEESELESS_BUDGET_TOKEN"  # noqa: S105 - an env var name
@@ -68,6 +69,30 @@ _SHA = re.compile(r"[0-9a-f]{40}")
 
 def _err(message: str) -> None:
     print(message, file=sys.stderr)
+
+
+def _lineage_disputes(store: FileStore, lineage_id: str) -> int:
+    return sum(1 for rec in store.disputes() if rec.lineage_id == lineage_id)
+
+
+def ci_bundle_check(args: argparse.Namespace) -> int:
+    """Host-only: fail closed when the bundle predates a dispute filed for its lineage."""
+    repo = GitRepository.discover(Path.cwd())
+    try:
+        bundle = _load_bundle(args.bundle_file)
+        store = FileStore(store_root(repo.common_dir(), _state_home(args.state_dir)))
+        current = _lineage_disputes(store, bundle.frozen.task.lineage_id)
+    except (BundleError, StoreError) as exc:
+        _err(f"ci-bundle-check refused: {exc}")
+        return EXIT_FAIL
+    if current != bundle.disputes:
+        _err(
+            f"ci-bundle-check: the bundle is stale ({bundle.disputes} disputes at export, "
+            f"{current} now); re-export with ci-export and replace the CI secret"
+        )
+        return EXIT_FAIL
+    print("bundle is current")
+    return EXIT_PASS
 
 
 def ci_export(args: argparse.Namespace) -> int:
@@ -92,7 +117,14 @@ def ci_export(args: argparse.Namespace) -> int:
         repo=args.budget_repo, branch=branch_for(frozen.task.lineage_id), root=args.budget_root
     )
     try:
-        raw = encode_bundle(frozen, seed, store.hmac_key(), ci_limit=limit, budget=ledger)
+        raw = encode_bundle(
+            frozen,
+            seed,
+            store.hmac_key(),
+            ci_limit=limit,
+            budget=ledger,
+            disputes=_lineage_disputes(store, frozen.task.lineage_id),
+        )
     except BundleError as exc:
         _err(f"ci-export refused: {exc}")
         return EXIT_USAGE
@@ -351,6 +383,7 @@ def ci_gate(args: argparse.Namespace) -> int:
 def run(args: argparse.Namespace) -> int:
     commands = {
         "ci-export": ci_export,
+        "ci-bundle-check": ci_bundle_check,
         "ci-judge": ci_judge,
         "ci-budget-init": ci_budget_init,
         "ci-branch": ci_branch,
@@ -364,6 +397,7 @@ __all__ = [
     "BUDGET_TOKEN_ENV",
     "BUNDLE_ENV",
     "ci_branch",
+    "ci_bundle_check",
     "ci_budget_init",
     "ci_export",
     "ci_gate",
