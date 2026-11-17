@@ -10,6 +10,7 @@ import socketserver
 import stat
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,11 +23,13 @@ from cheeseless.app.author_gate import (
 )
 from cheeseless.app.dispute import gate_dispute
 from cheeseless.app.gate_run import gate_run
+from cheeseless.app.reference_gate import gate_reference_done
 from cheeseless.app.status import status as app_status
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.disclosure import AgentView, Verdict
 from cheeseless.domain.dlp import DlpScanner
 from cheeseless.domain.errors import ErrorCode, gate_error
+from cheeseless.domain.reference_attempt import AttemptOwner, ReferenceMode, ReferenceState
 from cheeseless.domain.task import Task
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.runner import SuiteRunner
@@ -134,6 +137,9 @@ _AUTHOR_ROUTES = {
 }
 _DEV_ONLY_KINDS = frozenset({"spec_done"})
 _AUTHOR_KINDS = frozenset(_AUTHOR_ROUTES.values())
+# dev TUI reference sessions only (ADR 0014): admitted per attempt, see ``_reference_ok``
+_REFERENCE_ROUTES = {path: "reference_done" for path in _paths("reference-done", "ReferenceDone")}
+_REFERENCE_KINDS = frozenset(_REFERENCE_ROUTES.values())
 _IMPLEMENTER_ROUTES = {
     path: kind
     for kind, slug, rpc in (
@@ -173,6 +179,10 @@ class SessionConfig:
     # Set only by a host-started ``cheeseless dev`` author session: the lineage whose dev
     # state ``spec_done`` may move. ``None`` means the dev-only routes do not exist.
     dev_lineage: str | None = None
+    # Set only for a dev TUI reference session: the attempt ``reference_done`` may stop.
+    dev_reference: str | None = None
+    # Host seam (a later slice): called once, with the attempt id, after running -> stopping.
+    on_reference_stop: Callable[[str], None] | None = None
 
     def namespace_fds(self) -> tuple[int, ...]:
         return tuple(
@@ -479,16 +489,18 @@ class UdsVerifierServer:
             except OSError:
                 pass
 
-    def _role_ok(self, claimed: str) -> bool:
+    def _role_ok(self, claimed: str, kind: str) -> bool:
         """The claim, the server's bound role and this session's own record must all agree.
 
-        A reference session has no route at all. The record is per session (not per task), so
-        a second session on the same task cannot change this one's role; its generation must
-        still equal the task's, so a rejected dispute stales it. Missing task id, session id,
-        generation or record, and any store failure, refuse (fail closed).
+        A reference session has only ``reference_done``, and only for a running TUI attempt
+        bound to it (``_reference_ok``); every other kind is refused for it. The record is per
+        session (not per task), so a second session on the same task cannot change this one's
+        role; its generation must still equal the task's, so a rejected dispute stales it.
+        Missing task id, session id, generation or record, and any store failure, refuse
+        (fail closed).
         """
         s = self.session
-        if s.role == "reference" or claimed != s.role:
+        if (kind in _REFERENCE_KINDS) != (s.role == "reference") or claimed != s.role:
             return False
         if s.task_id is None or s.session_id is None or s.generation is None:
             return False
@@ -500,23 +512,41 @@ class UdsVerifierServer:
                 and record.role.value == s.role
                 and record.generation == s.generation
                 and s.store.session_generation(s.task_id) == s.generation
+                and (kind not in _REFERENCE_KINDS or self._reference_ok())
             )
         except Exception:  # noqa: BLE001 - an unreadable record must refuse
             return False
+
+    def _reference_ok(self) -> bool:
+        """The bound attempt exists, is this session's, is a running TUI one (read-only)."""
+        s = self.session
+        if s.dev_reference is None:
+            return False
+        attempt = s.store.reference_attempt(s.dev_reference)  # type: ignore[attr-defined]
+        return (
+            attempt is not None
+            and attempt.session_id == s.session_id
+            and attempt.generation == s.generation
+            and attempt.mode is ReferenceMode.TUI
+            and attempt.state is ReferenceState.RUNNING
+        )
 
     def _route(self, wfile: Any, path: str, body: bytes, claimed_role: str = "implementer") -> None:
         path = path.split("?", 1)[0]
         author_kind = _AUTHOR_ROUTES.get(path)
         implementer_kind = _IMPLEMENTER_ROUTES.get(path)
-        known = author_kind or implementer_kind
+        reference_kind = _REFERENCE_ROUTES.get(path)
+        known = author_kind or implementer_kind or reference_kind
         if (
             implementer_kind == "status"
             and self.session.task_id is None
             and self.session.role == "implementer"
         ):
             self._no_task_status(wfile)
-        elif known is not None and not self._role_ok(claimed_role):
+        elif known is not None and not self._role_ok(claimed_role, known):
             self._role_refused(wfile, known)
+        elif reference_kind is not None:
+            self._reference(wfile, body, reference_kind)
         elif author_kind is not None:
             if self.session.role != "author" or (
                 author_kind in _DEV_ONLY_KINDS and self.session.dev_lineage is None
@@ -545,7 +575,7 @@ class UdsVerifierServer:
 
     def _role_refused(self, wfile: Any, kind: str) -> None:
         err = gate_error(ErrorCode.ROLE_NOT_ALLOWED)
-        if kind in _AUTHOR_KINDS:
+        if kind in _AUTHOR_KINDS | _REFERENCE_KINDS:
             data = serialize_author_response(author_outcome_to_response(kind, err))
         elif kind == "run":
             data = serialize_run_response(agent_view_to_run_response(AgentView(err, ())))
@@ -568,6 +598,35 @@ class UdsVerifierServer:
             return
         try:
             outcome = self._author_outcome(kind)
+            self._write_response(
+                wfile, 200, serialize_author_response(author_outcome_to_response(kind, outcome))
+            )
+        finally:
+            self._run_lock.release()
+
+    def _reference(self, wfile: Any, body: bytes, kind: str) -> None:
+        try:
+            task_id = parse_author_request(kind, body)
+        except (MappingError, UnicodeDecodeError, ValueError):
+            self._write_error(wfile, 400, "bad request")
+            return
+        if not self._task_matches(task_id, wfile):
+            return
+        if not self._run_lock.acquire(blocking=False):
+            self._write_error(wfile, 429, "run in progress")
+            return
+        try:
+            s = self.session
+            outcome: object
+            if s.dev_reference is None or s.session_id is None or s.generation is None:
+                outcome = gate_error(ErrorCode.ROLE_NOT_ALLOWED)  # unreachable: _role_ok refused
+            else:
+                outcome = gate_reference_done(
+                    s.store,  # type: ignore[arg-type]
+                    s.dev_reference,
+                    AttemptOwner(s.session_id, s.generation, ReferenceMode.TUI),
+                    s.on_reference_stop,
+                )
             self._write_response(
                 wfile, 200, serialize_author_response(author_outcome_to_response(kind, outcome))
             )

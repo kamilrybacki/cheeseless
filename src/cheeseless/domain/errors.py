@@ -38,6 +38,7 @@ class ErrorCode(enum.Enum):
     ROLE_NOT_ALLOWED = "role_not_allowed"
     REFERENCE_BLOCKED = "reference_blocked"
     AUTHOR_REFUSED = "author_refused"
+    REFERENCE_REFUSED = "reference_refused"
 
 
 # Stages before the first hidden input that may carry a stderr tail (Q51).
@@ -171,6 +172,11 @@ CATALOGUE: dict[ErrorCode, CatalogueEntry] = {
     ErrorCode.AUTHOR_REFUSED: CatalogueEntry(
         "The author operation was refused in the task's current state.",
         "Check the task phase: a frozen task is closed, and a proposal needs a spec.",
+        False,
+    ),
+    ErrorCode.REFERENCE_REFUSED: CatalogueEntry(
+        "The reference attempt is no longer running, so reference_done changed nothing.",
+        "Nothing to do: the attempt was already asked to stop, or it has ended.",
         False,
     ),
 }

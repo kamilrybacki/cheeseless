@@ -30,13 +30,15 @@ def build_mcp_server(
     role: SessionRole = SessionRole.IMPLEMENTER,
     dev: bool = False,
 ) -> MCPServer:
-    """``dev`` adds ``spec_done`` to an author session and is ignored for any other role."""
+    """``dev`` adds ``spec_done`` to an author and ``reference_done`` to a reference session."""
     server = MCPServer(name)
     if role is SessionRole.AUTHOR:
         _register_author(server, client, dev=dev)
         return server
     if role is SessionRole.REFERENCE:
-        return server  # the reference snapshot is host-recorded: no tools
+        if dev:  # ADR 0014: a dev TUI reference may only say it is done
+            _register_reference(server, client)
+        return server  # otherwise the reference snapshot is host-recorded: no tools
 
     def _view_payload(view: AgentView) -> dict[str, Any]:
         return agent_view_to_dict(view)
@@ -161,6 +163,29 @@ def _register_author(server: MCPServer, client: VerifierClient, *, dev: bool = F
     )
     def spec_done_tool() -> CallToolResult:
         return _result("spec_done", client.spec_done)
+
+
+def _register_reference(server: MCPServer, client: VerifierClient) -> None:
+    @server.tool(
+        name="reference_done",
+        description="Tell the host this reference attempt is finished so it can stop the session.",
+    )
+    def reference_done_tool() -> CallToolResult:
+        try:
+            outcome = client.reference_done()
+        except Exception:  # noqa: BLE001
+            outcome = gate_error(ErrorCode.INFRA_ERROR)
+        if isinstance(outcome, GateError):
+            body: dict[str, Any] = {
+                "outcome": {"kind": "error", "error": gate_error_to_dict(outcome)}
+            }
+        else:
+            body = {"outcome": {"kind": "reference_done", **dict(outcome)}}
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(body, sort_keys=True))],
+            structured_content=body,
+            is_error=False,
+        )
 
 
 def run_stdio(server: MCPServer) -> None:

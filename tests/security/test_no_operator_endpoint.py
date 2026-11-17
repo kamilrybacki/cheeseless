@@ -15,6 +15,7 @@ from cheeseless.adapters.inbound.mcp.server import build_mcp_server
 from cheeseless.adapters.inbound.uds import server as uds
 from cheeseless.adapters.inbound.uds.server import SessionConfig, UdsVerifierServer
 from cheeseless.app import author_gate
+from cheeseless.domain.session_role import SessionRole
 from tests.factories import frozen_task
 
 CANARY = "CANARY-HIDDEN-9c1e44"
@@ -34,14 +35,24 @@ OPERATOR_WORDS = (
 )
 # spec-done is dev-only (ADR 0013); tests/security/test_spec_done_dev_only.py gates it
 ALLOWED_AUTHOR = {"author-check", "author-crosscheck", "freeze-propose", "spec-done"}
+# reference-done is the one dev-only reference signal (ADR 0014); it records nothing and
+# tests/security/test_reference_done_dev_only.py gates it. Nothing else may match a word.
+ALLOWED_REFERENCE_PATHS = {
+    "/reference-done",
+    "/ReferenceDone",
+    "/cheeseless.v1.Verifier/ReferenceDone",
+}
+ALLOWED_REFERENCE_TOOLS = {"reference_done"}
 
 
 def _route_paths() -> set[str]:
-    return set(uds._AUTHOR_ROUTES) | set(uds._IMPLEMENTER_ROUTES)
+    return set(uds._AUTHOR_ROUTES) | set(uds._IMPLEMENTER_ROUTES) | set(uds._REFERENCE_ROUTES)
 
 
 def test_route_table_has_no_operator_path() -> None:
-    for path in _route_paths():
+    assert set(uds._REFERENCE_ROUTES) == ALLOWED_REFERENCE_PATHS
+    assert set(uds._REFERENCE_ROUTES.values()) == ALLOWED_REFERENCE_TOOLS
+    for path in _route_paths() - ALLOWED_REFERENCE_PATHS:
         assert not any(w in path.lower() for w in OPERATOR_WORDS), path
     slugs = {p.rsplit("/", 1)[-1] for p in uds._AUTHOR_ROUTES}
     assert {s for s in slugs if "-" in s} <= ALLOWED_AUTHOR
@@ -111,6 +122,20 @@ def test_mcp_tools_never_include_operator_actions(author: bool, disputes: bool) 
     server = build_mcp_server(SimpleNamespace(), disputes=disputes, author=author)
     names = {t.name for t in server._tool_manager.list_tools()}
     for name in names:
+        assert not any(w in name for w in OPERATOR_WORDS), name
+
+
+@pytest.mark.parametrize("role", list(SessionRole))
+@pytest.mark.parametrize("dev", [False, True])
+@pytest.mark.parametrize("disputes", [False, True])
+def test_mcp_tools_never_include_operator_actions_for_any_role(
+    role: SessionRole, dev: bool, disputes: bool
+) -> None:
+    server = build_mcp_server(SimpleNamespace(), disputes=disputes, role=role, dev=dev)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    exempt = ALLOWED_REFERENCE_TOOLS if (role is SessionRole.REFERENCE and dev) else set()
+    assert names & ALLOWED_REFERENCE_TOOLS <= exempt, (role, dev)
+    for name in names - exempt:
         assert not any(w in name for w in OPERATOR_WORDS), name
 
 

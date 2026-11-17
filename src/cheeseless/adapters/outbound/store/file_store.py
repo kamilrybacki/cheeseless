@@ -17,6 +17,7 @@ from typing import Any
 from cheeseless.adapters.outbound.store import _fs, codec
 from cheeseless.adapters.outbound.store.authoring_store import AuthoringStoreMixin
 from cheeseless.adapters.outbound.store.dev_store import DevStoreMixin
+from cheeseless.adapters.outbound.store.reference_store import ReferenceStoreMixin
 from cheeseless.domain import ids
 from cheeseless.domain.budget import DEFAULT_LIMITS, Budget, Pool
 from cheeseless.domain.dispute import (
@@ -50,7 +51,7 @@ def _task_id(value: str) -> str:
         raise StoreError(f"invalid task id: {exc}") from exc
 
 
-class FileStore(AuthoringStoreMixin, DevStoreMixin):
+class FileStore(AuthoringStoreMixin, DevStoreMixin, ReferenceStoreMixin):
     def __init__(self, root: Path, clock: Callable[[], float] = time.time) -> None:
         self._root = root
         self._clock = clock

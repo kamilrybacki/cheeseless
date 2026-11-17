@@ -165,3 +165,23 @@ class SpecDoneResponse(_message.Message):
     ack: SpecDoneAck
     error: _error_pb2.Error
     def __init__(self, ack: _Optional[_Union[SpecDoneAck, _Mapping]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ...) -> None: ...
+
+class ReferenceDoneRequest(_message.Message):
+    __slots__ = ("task_id",)
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    def __init__(self, task_id: _Optional[str] = ...) -> None: ...
+
+class ReferenceDoneAck(_message.Message):
+    __slots__ = ("attempt_id",)
+    ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    attempt_id: str
+    def __init__(self, attempt_id: _Optional[str] = ...) -> None: ...
+
+class ReferenceDoneResponse(_message.Message):
+    __slots__ = ("ack", "error")
+    ACK_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    ack: ReferenceDoneAck
+    error: _error_pb2.Error
+    def __init__(self, ack: _Optional[_Union[ReferenceDoneAck, _Mapping]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ...) -> None: ...

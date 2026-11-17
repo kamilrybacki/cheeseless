@@ -202,3 +202,12 @@ The author operation was refused in the task's current state.
 - **Retryable:** no
 - **Stderr tail (pre-hidden stage):** no
 - **Wire:** `ERROR_CODE_AUTHOR_REFUSED` = 22
+
+### `REFERENCE_REFUSED`
+
+The reference attempt is no longer running, so reference_done changed nothing.
+
+- **What to do:** Nothing to do: the attempt was already asked to stop, or it has ended.
+- **Retryable:** no
+- **Stderr tail (pre-hidden stage):** no
+- **Wire:** `ERROR_CODE_REFERENCE_REFUSED` = 23
