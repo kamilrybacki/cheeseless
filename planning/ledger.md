@@ -896,3 +896,6 @@ resolved; no new conflict with ADR 0009.
 | # | Finding | Resolution |
 |---|---------|------------|
 | S53-6 | Still partial: ADR 0005 draws the seed after the *user* approves the freeze; an auto-freeze has no user approval | Accepted: the approval (the host's, gated by the strength review, or the user's) comes first and the host draws the seed and split only after it; ADR 0013 states this as an extension of ADR 0005. The property ADR 0005 protects, that no author or reviewer sees the seed before the suite is fixed, is unchanged. |
+
+Final confirmation: gpt-6.1-sol on 4c6dd5c, verdict ACCEPT (S53-6 resolved, no regressions in
+S53-1..S53-5, no new conflicts with ADR 0005 or 0009). ADR 0013 accepted.

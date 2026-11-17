@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-11-17
 reviewers: [gpt-6.1-sol, gpt-6.1-terra]
 ---
