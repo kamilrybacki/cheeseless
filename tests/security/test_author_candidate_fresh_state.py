@@ -1,4 +1,4 @@
-"""Author-side and normal-side candidate calls must be observationally identical (ADR 0010).
+"""Author-side and normal-side candidate calls agree on the probed observations (ADR 0010).
 
 The same probe runs through the normal launcher and through the author runner's host broker.
 Both reach the candidate through one launcher code path, so every observation must agree:
@@ -190,5 +190,36 @@ def test_the_per_call_deadline_covers_bwrap_startup(tmp_path):
         "    with pytest.raises(AssertionError, match='timed out'):\n"
         "        candidate.run(['-c', 'printf ok'], timeout=0.001)\n"
         "    assert candidate.run(['-c', 'printf ok'], timeout=60).stdout == 'ok'\n"
+    )
+    assert _author(tmp_path, tree, test) == "passed"
+
+
+STDIN_PROBE = (
+    "if [ -c /proc/self/fd/0 ]; then printf 'null|'; else printf 'data|'; fi; "
+    "od -An -tx1 | tr -d ' \\n'"
+)
+
+
+@needs_bwrap
+@pytest.mark.parametrize("data", [b"\xff", b"\x00\xfe\x80", b"", None])
+def test_stdin_bytes_reach_the_candidate_unchanged_on_either_path(tmp_path, data):
+    tree = _tree(tmp_path)
+    sandbox = BwrapSandbox()
+    with sandbox.scratch() as scratch:
+        launcher = sandbox.launcher(tree, (), scratch)
+        run = subprocess.run(  # noqa: S603
+            [*launcher, SH, "-c", STDIN_PROBE],
+            input=data,
+            stdin=subprocess.DEVNULL if data is None else None,
+            capture_output=True,
+            timeout=60,
+        )
+    expected = run.stdout.decode()
+    test = (
+        "import pytest\n"
+        "@pytest.mark.criterion('C1')\n"
+        "def test_stdin(candidate):\n"
+        f"    got = candidate.run(['-c', {STDIN_PROBE!r}], stdin={data!r}).stdout\n"
+        f"    assert got == {expected!r}, got\n"
     )
     assert _author(tmp_path, tree, test) == "passed"
