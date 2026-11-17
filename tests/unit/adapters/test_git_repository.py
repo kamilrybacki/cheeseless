@@ -280,3 +280,52 @@ def test_promote_accepts_a_spec_ref(repo: GitRepository, toy_repo: Path) -> None
     tree = repo.tree_of(baseline)
     commit = repo.promote(baseline, tree, tree, "refs/heads/spec/abc")
     assert git(toy_repo, "rev-parse", "refs/heads/spec/abc") == commit
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/gate/toy", "refs/heads/spec/abc"])
+def test_promote_refuses_a_symbolic_destination_and_leaves_its_target(
+    repo: GitRepository, toy_repo: Path, ref: str
+) -> None:
+    baseline = repo.head_commit()
+    tree = repo.tree_of(baseline)
+    git(toy_repo, "symbolic-ref", ref, "refs/heads/main")
+    write_files(toy_repo, {"src/toy/__main__.py": FIXED_MAIN})
+    with pytest.raises(RepositoryError, match="symbolic"):
+        repo.promote(baseline, tree, repo.snapshot(toy_repo), ref)
+    assert git(toy_repo, "rev-parse", "main") == baseline
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/gate/toy", "refs/heads/spec/abc"])
+def test_a_repeated_promote_fast_forwards_the_ref(
+    repo: GitRepository, toy_repo: Path, ref: str
+) -> None:
+    baseline = repo.head_commit()
+    base_tree = repo.tree_of(baseline)
+    write_files(toy_repo, {"src/toy/__main__.py": FIXED_MAIN})
+    first = repo.promote(baseline, base_tree, repo.snapshot(toy_repo), ref)
+    write_files(toy_repo, {"src/toy/__main__.py": FIXED_MAIN + "\n# again\n"})
+    second = repo.promote(baseline, base_tree, repo.snapshot(toy_repo), ref)
+    assert git(toy_repo, "rev-parse", f"{second}^") == first
+    assert git(toy_repo, "rev-parse", ref) == second
+    # Still baseline + (candidate - base): the tree is the checked snapshot.
+    assert git(toy_repo, "rev-parse", f"{second}^{{tree}}") == repo.snapshot(toy_repo)
+
+
+def test_a_concurrent_publisher_loses_the_compare_and_swap(
+    repo: GitRepository, toy_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    baseline = repo.head_commit()
+    tree = repo.tree_of(baseline)
+    ref = "refs/heads/spec/abc"
+    original = GitRepository._commit
+
+    def racing(git_, tree_, parent=""):
+        made = original(git_, tree_, parent)
+        # Another publisher lands between our read of the head and our update.
+        git(toy_repo, "update-ref", ref, baseline)
+        return made
+
+    monkeypatch.setattr(GitRepository, "_commit", staticmethod(racing))
+    with pytest.raises(RepositoryError):
+        repo.promote(baseline, tree, tree, ref)
+    assert git(toy_repo, "rev-parse", ref) == baseline

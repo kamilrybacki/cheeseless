@@ -6,6 +6,7 @@ side ever publishes hidden-test or holdout content.
 """
 
 import subprocess
+from dataclasses import replace
 
 import pytest
 
@@ -18,6 +19,7 @@ from cheeseless.app.authoring import AuthorError
 from cheeseless.app.freeze import commit, prepare
 from cheeseless.app.gate_run import gate_run
 from cheeseless.app.promote import PromoteRejected, promote, promote_author
+from cheeseless.domain.authoring import TaskPhase
 from tests.toy import CANARY, FIXED_MAIN, SENTINEL
 from tests.unit.app.test_author_promote import _check, _edit_acceptance, _lineage, _ref_files
 
@@ -137,3 +139,35 @@ def test_author_state_alone_cannot_authorise_an_implementer_promote(author):
     assert uc.read_contract(repo, repo.snapshot(wt)).lineage_id
     with pytest.raises(ValueError):
         promote(repo, store, worktree=wt)
+
+
+class _ApprovalLands:
+    """Store wrapper: approval takes the lineage between promote's checks and its publication."""
+
+    def __init__(self, inner, lineage):
+        self._inner, self._lineage = inner, lineage
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def load_author_check(self, lineage_id):
+        saved = self._inner.load_author_check(lineage_id)
+        state = self._inner.authoring_state(lineage_id, saved[0])
+        self._inner.save_authoring_state(replace(state, phase=TaskPhase.APPROVING))
+        return saved
+
+
+def test_author_promote_loses_a_race_with_approval_and_publishes_nothing(author):
+    repo, store, wt = author
+    _edit_acceptance(wt)
+    assert _check(repo, store, wt).ok
+    racing = _ApprovalLands(store, _lineage(repo))
+    with pytest.raises(AuthorError) as err:
+        promote_author(repo, racing, worktree=wt)
+    assert err.value.kind == "approval_conflict"
+    ref = f"refs/heads/spec/{_lineage(repo)}"
+    probe = subprocess.run(  # noqa: S603
+        ["git", "-C", str(wt), "rev-parse", "--verify", "-q", ref],  # noqa: S607
+        capture_output=True,
+    )
+    assert probe.returncode != 0

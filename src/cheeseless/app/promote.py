@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from cheeseless.app.authoring import AuthorError, _require_open, read_contract, spec_of
+from cheeseless.domain.authoring import AuthoringError
 from cheeseless.domain.promote_policy import decide_author_promote, decide_promote
 from cheeseless.domain.result import verify
 from cheeseless.ports.authoring import AuthoringStore
@@ -88,7 +91,7 @@ def promote_author(
     """
     tree = repo.snapshot(Path(worktree))
     contract = read_contract(repo, tree)
-    _require_open(store, contract)
+    state = _require_open(store, contract)
     saved = store.load_author_check(contract.lineage_id)
     if saved is None:
         raise AuthorError("no_author_check", "no author_check PASS is recorded for this task")
@@ -102,8 +105,22 @@ def promote_author(
     if not decision.ok:
         raise PromoteRejected(decision.rejected, decision.needs_approval)
     ref = f"refs/heads/spec/{contract.lineage_id}"
-    commit = repo.promote(baseline, base_tree, tree, ref)
+    # Publication happens under the lock every lifecycle transition takes, at the version we
+    # checked: approval cannot begin between the state check and the ref update (R17).
+    with _guard(store, contract.lineage_id, state.version):
+        commit = repo.promote(baseline, base_tree, tree, ref)
     return PromoteOutcome(ref=ref, commit=commit)
+
+
+@contextmanager
+def _guard(store: AuthoringStore, lineage_id: str, version: int) -> Iterator[None]:
+    try:
+        with store.hold_open(lineage_id, version):
+            yield
+    except AuthoringError as exc:
+        raise AuthorError(
+            "approval_conflict", "the task changed while promoting; nothing was published"
+        ) from exc
 
 
 __all__ = ["PromoteOutcome", "PromoteRejected", "promote", "promote_author"]

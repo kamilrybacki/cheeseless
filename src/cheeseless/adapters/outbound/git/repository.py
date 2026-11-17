@@ -20,6 +20,7 @@ from cheeseless.adapters.outbound.git._cmd import (
 from cheeseless.domain.freeze import HiddenBlob
 from cheeseless.ports.repository import RepositoryError, SnapshotRejected
 
+_ZERO_OID = "0" * 40
 GATE_REF_PREFIX = "refs/heads/gate/"
 SPEC_REF_PREFIX = "refs/heads/spec/"
 _PROJECTION_MESSAGE = b"cheeseless projection\n"
@@ -276,11 +277,33 @@ class GitRepository:
         for mode, _oid, path in changes:
             if mode not in obj.FILE_MODES and mode != obj.DELETED:
                 raise SnapshotRejected(f"cannot promote a file of mode {mode}", path)
-        parent = oid(baseline)
-        tree = self._write_tree(changes, base=f"{parent}^{{tree}}")
-        commit = self._commit(self._git, tree, parent)
-        self._git.run("update-ref", ref, commit)
+        if self._is_symbolic(ref):
+            raise RepositoryError(f"refusing to promote onto a symbolic ref: {ref}")
+        base = oid(baseline)
+        head = self._ref_head(ref)
+        tree = self._write_tree(changes, base=f"{base}^{{tree}}")
+        commit = self._commit(self._git, tree, head or base)
+        try:
+            # --no-deref plus the expected old value: a compare-and-swap that never follows
+            # a symbolic ref and refuses when another publisher moved the ref meanwhile.
+            self._git.run("update-ref", "--no-deref", ref, commit, head or _ZERO_OID)
+        except RepositoryError as exc:
+            raise RepositoryError(f"{ref} moved while promoting; retry") from exc
         return commit
+
+    def _is_symbolic(self, ref: str) -> bool:
+        try:
+            self._git.run("symbolic-ref", "-q", ref)
+        except RepositoryError:
+            return False
+        return True
+
+    def _ref_head(self, ref: str) -> str:
+        try:
+            out = self._git.run("rev-parse", "--verify", "-q", f"{ref}^{{commit}}")
+        except RepositoryError:
+            return ""
+        return oid(out.decode().strip())
 
     @staticmethod
     def _commit(git: Git, tree: str, parent: str = "") -> str:

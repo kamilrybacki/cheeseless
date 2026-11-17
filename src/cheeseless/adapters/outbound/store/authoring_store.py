@@ -121,6 +121,15 @@ class AuthoringStoreMixin:
         return saved
 
     @contextmanager
+    def hold_open(self, lineage_id: str, expected_version: int) -> Iterator[None]:
+        lineage = _lineage(lineage_id)
+        _fs.ensure_private_dir(self._root / _DIR)
+        with _fs.locked(self._root / "store.lock"):
+            if self._stored_version(lineage) != expected_version:
+                raise AuthoringError("the authoring state changed since it was read")
+            yield
+
+    @contextmanager
     def approval_ownership(self, lineage_id: str) -> Iterator[None]:
         lineage = _lineage(lineage_id)
         _fs.ensure_private_dir(self._root / _DIR)

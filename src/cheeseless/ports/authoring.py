@@ -17,6 +17,13 @@ class AuthoringStore(Protocol):
         Returns the stored state with its new version."""
         ...
 
+    def hold_open(self, lineage_id: str, expected_version: int) -> AbstractContextManager[None]:
+        """Hold the store lock while the lifecycle is still at ``expected_version``.
+
+        Every state transition (approval included) takes the same lock, so nothing can seal
+        the lineage while the caller publishes. Raises ``AuthoringError`` if the version moved."""
+        ...
+
     def approval_ownership(self, lineage_id: str) -> AbstractContextManager[None]:
         """Exclusive, non-blocking ownership of a lineage's approval.
 
