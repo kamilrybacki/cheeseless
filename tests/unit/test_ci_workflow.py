@@ -228,6 +228,14 @@ def test_post_binds_the_verdict_to_the_current_default_branch_tip():
     assert "judged_base" in judge_runs
 
 
+def test_post_rechecks_head_and_base_just_before_publishing():
+    """A run started before a retarget must not publish once the PR targets another base."""
+    runs = _runs("post")
+    assert ".head.sha" in runs and ".base.ref" in runs
+    assert '"$DEFAULT_BRANCH"' in runs
+    assert _wf()["env"]["DEFAULT_BRANCH"] == "${{ github.event.repository.default_branch }}"
+
+
 def _group(event: str, title: str, sha: str = "a" * 40) -> str:
     """The concurrency group GitHub would compute for a workflow_run with these attributes."""
     group = _wf()["concurrency"]["group"]
