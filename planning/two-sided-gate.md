@@ -35,7 +35,10 @@ Codes: `contradicts_spec`, `untestable`, `ambiguous_spec`, `other`. Disputes per
 ## CI routing
 
 One trusted workflow (`docs/ci/judge.yml`) resolves the live PR, verifies base, head and branch class, then runs
-`route` -> `judge` (gate/ only) and `evaluate` (every PR, unprivileged) -> `post` (the only publisher, no PR code).
+`route` -> `policy` (no PR code: class and path confinement, job output), `judge` (gate/ only) and `evaluate` (advisory,
+unprivileged, never consumed) -> `post` (the only publisher, no PR code). Two Apps: the ledger App (Contents, ledger repo
+only) is the judge's only secret; the checks App (Checks only) is minted in `post` only. The verdict carries the judged
+base; `post` fails a gate whose base is no longer the default-branch tip.
 Branch protection requires ONE check, `cheeseless gate` (required checks are scoped by base branch): for `gate/<task>`
 it is success only if the judge PASSED and the branch policy passed; for `spec/<lineage>` it is success if the branch
 policy passed and says it is NOT an implementation verdict; any other class or failure is a failure. It is never
