@@ -201,18 +201,34 @@ def test_suite_tmp_output_survives_and_the_candidate_never_sees_it(tmp_path):
     assert _author(tmp_path, tree, test) == "passed"
 
 
-@needs_bwrap
-def test_the_candidate_cannot_see_acceptance_content_canary(tmp_path):
-    tree = _tree(tmp_path)
-    roots = "/w /tmp /home /mnt /opt /srv /etc /var /run /usr/local"
-    # One bounded walk: any canary-named file, and a grep only of files written this session.
-    # The checkout's own sources (an old file holding CANARY) are covered by the existence check.
-    probe = (
+def _canary_probe(tmp_path: Path) -> str:
+    """One bounded sweep plus a walk-free structural guard, printing ``done`` when clean.
+
+    The roots are only what a session writes or maps: /w (the reference overlay), /tmp (a
+    tmpfs), /etc (three small host binds) and paths that do not exist in the sandbox. /usr is
+    the host's system tree (ro-bound, on a CI runner tens of GB under /usr/local) and /opt is
+    not mounted, so neither is walked. A hidden tree bound onto an unwalked path is caught by
+    the mountinfo guard instead: no mount's root or mount point may name the test's tmp dir.
+    """
+    roots = "/w /tmp /home /mnt /srv /etc /var /run"
+    guard = (
+        "while read -r _ _ _ root point _; do "
+        f'case "$root $point" in *{tmp_path.name}*) printf LEAK;; esac; '
+        "done < /proc/self/mountinfo; "
+    )
+    return (
         f"find {roots} \\( -name 'canary-*' -print \\) -o "
         f"\\( -type f -newermt @{SESSION_START} -exec grep -l {CANARY} {{}} + \\) 2>/dev/null; "
+        f"{guard}"
         f"test -e {REPO_ROOT}/tests/security/test_author_candidate_fresh_state.py && printf LEAK; "
         "printf done"
     )
+
+
+@needs_bwrap
+def test_the_candidate_cannot_see_acceptance_content_canary(tmp_path):
+    tree = _tree(tmp_path)
+    probe = _canary_probe(tmp_path)
     assert _normal(tree, [SH], ["-c", probe], calls=1) == ["done"], "normal path leaked"
     test = _probe_test(["done", "done"], ["-c", probe])
     files = {"canary-file.txt": CANARY}
