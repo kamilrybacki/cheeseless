@@ -37,5 +37,4 @@ The reference is now absent from the author sandbox and reached only via the bro
 - ⚠️ No peer-credential check. 0700 does not exclude other host processes with the same UID;
   residual risk under ADR 0001/0003.
 - ⚠️ Every call pays a bwrap start, as in the normal path.
-
 Author model: Sonnet 5.5 (`claude-sonnet-5-5`); reviewers must differ, one from another vendor.
