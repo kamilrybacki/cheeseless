@@ -6,9 +6,12 @@ nothing a candidate leaves behind (files, abstract sockets, permission or conten
 visible to the next call, and the suite's own /tmp output is untouched.
 """
 
+import os
 import shutil
+import stat
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -45,24 +48,36 @@ NEW_DIR = (
     "else printf warm; fi"
 )
 
-ABSTRACT = (
+ABSTRACT_HEAD = (
     "import os, socket, time\n"
     "s = socket.socket(socket.AF_UNIX)\n"
     "try:\n"
     "    s.connect('\\0cheeseless-abstract')\n"
     "    print('warm', end='')\n"
+    "    raise SystemExit\n"
     "except OSError:\n"
-    "    print('cold', end='')\n"
-    "    if os.fork() == 0:\n"
-    "        os.setsid()\n"
-    "        listener = socket.socket(socket.AF_UNIX)\n"
-    "        listener.bind('\\0cheeseless-abstract')\n"
-    "        listener.listen(1)\n"
-    "        time.sleep(30)\n"
+    "    print('cold', end='', flush=True)\n"
+    "r, w = os.pipe()\n"
+    "def hold():\n"
+    "    os.setsid()\n"
+    "    listener = socket.socket(socket.AF_UNIX)\n"
+    "    listener.bind('\\0cheeseless-abstract')\n"
+    "    listener.listen(1)\n"
+    "    os.write(w, b'1')\n"
+    "    time.sleep(30)\n"
 )
+# The holder signals once it is bound, and the call returns only after that signal, so a
+# surviving socket would be visible to the next call (no race with the holder starting).
+ABSTRACTS = {
+    "fork": ABSTRACT_HEAD + "if os.fork() == 0:\n    hold()\nos.read(r, 1)\n",
+    "double-fork": ABSTRACT_HEAD
+    + "if os.fork() == 0:\n    if os.fork() == 0:\n        hold()\n    os._exit(0)\n"
+    + "os.read(r, 1)\n",
+}
 
 # Same size, same mtime: a snapshot of metadata alone would miss this.
-MUTATE = "stat -c %a d; cat f; chmod 777 d; printf B > f; touch -d '2001-01-01 00:00:00' f"
+STAMP = "2001-01-01 00:00:00"
+MUTATE = f"stat -c '%a %Y' d f; cat f; chmod 777 d; printf B > f; touch -d '{STAMP}' f"
 
 
 def _normal(tree: Path, prefix: list[str], args: list[str], calls: int = 2) -> list[str]:
@@ -133,9 +148,10 @@ def test_a_new_top_level_directory_does_not_persist(tmp_path):
 
 
 @needs_bwrap
-def test_a_background_abstract_socket_does_not_survive_the_call(tmp_path):
+@pytest.mark.parametrize("variant", sorted(ABSTRACTS))
+def test_a_background_abstract_socket_does_not_survive_the_call(tmp_path, variant):
     tree = _tree(tmp_path)
-    args = ["-c", ABSTRACT]
+    args = ["-c", ABSTRACTS[variant]]
     assert _normal(tree, [PY], args) == ["cold", "cold"]
     test = _probe_test(["cold", "cold"], args)
     assert _author(tmp_path, tree, test, candidate=(PY,)) == "passed"
@@ -144,23 +160,36 @@ def test_a_background_abstract_socket_does_not_survive_the_call(tmp_path):
 @needs_bwrap
 def test_permission_and_same_mtime_content_changes_do_not_leak(tmp_path):
     tree = _tree(tmp_path)
+    stamp = datetime.fromisoformat(STAMP).timestamp()
+    os.utime(tree / "f", (stamp, stamp))  # pre-existing shared entry, known mtime
     args = ["-c", MUTATE]
     normal = _normal(tree, [SH], args)
     assert normal[0] == normal[1] != ""
+    assert normal[0].splitlines()[-1] == "A"  # second call still sees the original content
     assert _author(tmp_path, tree, _probe_test(normal, args)) == "passed"
+    assert (tree / "f").read_text() == "A"
+    assert int((tree / "f").stat().st_mtime) == int(stamp)
+    assert stat.S_IMODE((tree / "d").stat().st_mode) == 0o755
 
 
 @needs_bwrap
 def test_suite_tmp_output_survives_and_the_candidate_never_sees_it(tmp_path):
     tree = _tree(tmp_path)
-    probe = "test -e /tmp/suite-output && printf seen || printf absent"
+    probe = "sleep 2; test -e /tmp/suite-output && printf seen || printf absent"
     test = (
-        "import pytest, pathlib\n"
+        "import pytest, pathlib, threading, time\n"
         "@pytest.mark.criterion('C1')\n"
         "def test_suite_tmp(candidate):\n"
         "    out = pathlib.Path('/tmp/suite-output')\n"  # noqa: S108
+        "    got = []\n"
+        f"    t = threading.Thread(target=lambda: got.append(candidate.run(['-c', {probe!r}])))\n"
+        "    t.start()\n"
+        "    time.sleep(0.7)\n"  # the call is in flight: create the suite file now
         "    out.write_text('kept')\n"
-        f"    assert candidate.run(['-c', {probe!r}]).stdout == 'absent'\n"
+        "    t.join()\n"
+        "    assert got[0].stdout == 'absent', got[0].stdout\n"
+        "    assert out.read_text() == 'kept'\n"
+        "    assert candidate.run(['-c', 'true']).returncode == 0\n"
         "    assert out.read_text() == 'kept'\n"
     )
     assert _author(tmp_path, tree, test) == "passed"
