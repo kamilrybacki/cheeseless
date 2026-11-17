@@ -16,9 +16,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from cheeseless.adapters.outbound.sandbox import profiles, seccomp
+from cheeseless.adapters.outbound.sandbox.broker import SOCKET_NAME, BrokerLimits, CandidateBroker
 from cheeseless.adapters.outbound.sandbox.launch import force_remove
 from cheeseless.ports.sandbox import (
-    AUTHOR_REFERENCE_ENV,
+    AUTHOR_BROKER_ENV,
     AuthorOutcome,
     SandboxError,
     StepOutcome,
@@ -199,23 +200,41 @@ class BwrapSandbox:
         *,
         env: Sequence[tuple[str, str]],
         timeout: float = 300.0,
+        candidate: Sequence[str] = (),
+    ) -> AuthorOutcome:
+        self._check()
+        profiles.check_env(env)
+        if reference is None:
+            # --no-reference: no broker, no socket, no env var; every candidate call fails.
+            return self._author_sandbox(acceptance, None, command, env, timeout)
+        with self.scratch() as scratch:
+            prefix = (*self.launcher(reference, env, scratch), *candidate)
+            limits = BrokerLimits(total_seconds=timeout)
+            with CandidateBroker(prefix, limits) as broker:
+                return self._author_sandbox(acceptance, broker, command, env, timeout)
+
+    def _author_sandbox(
+        self,
+        acceptance: Path,
+        broker: CandidateBroker | None,
+        command: Sequence[str],
+        env: Sequence[tuple[str, str]],
+        timeout: float,
     ) -> AuthorOutcome:
         bwrap = self._check()
-        profiles.check_env(env)
         # The interpreter and its libraries live outside /usr in a venv; mount them
         # read-only so the unapproved suite can be collected at all.
         interpreter = _interpreter_roots(self._protected)
-        reference_inside = profiles.inside_path()
-        # The tests locate the read-only reference through this variable.
-        trusted = [(AUTHOR_REFERENCE_ENV, reference_inside)] if reference is not None else []
+        broker_inside = profiles.inside_path()
+        trusted = [] if broker is None else [(AUTHOR_BROKER_ENV, f"{broker_inside}/{SOCKET_NAME}")]
         fd = seccomp.program_fd()
         try:
             argv = profiles.author(
                 bwrap=bwrap,
                 acceptance=acceptance.resolve(),
                 inside=profiles.inside_path(),
-                reference=reference.resolve() if reference is not None else None,
-                reference_inside=reference_inside,
+                broker_dir=None if broker is None else broker.directory,
+                broker_inside=broker_inside,
                 extra_read_only=sorted(interpreter),
                 env=env,
                 seccomp_fd=fd,

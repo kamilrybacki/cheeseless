@@ -94,8 +94,8 @@ def test_a_symlinked_interpreter_does_not_expose_the_store(tmp_path, monkeypatch
 
 
 @needs_bwrap
-def test_the_baseline_tree_is_immutable_and_acceptance_stays_read_only(tmp_path):
-    """The baseline cannot be modified in place; calls work on fresh copies (see the driver)."""
+def test_the_candidate_tree_is_not_mounted_and_acceptance_stays_read_only(tmp_path):
+    """The suite sees no candidate tree at all (it reaches it only through the broker)."""
     store = _store(tmp_path)
     acc = tmp_path / "acc"
     acc.mkdir()
@@ -106,10 +106,8 @@ def test_the_baseline_tree_is_immutable_and_acceptance_stays_read_only(tmp_path)
     code = (
         "import os, sys\n"
         "from pathlib import Path\n"
-        "ref = Path(os.environ['CHEESELESS_AUTHOR_REFERENCE'])\n"
-        "for target in (ref / 'generated.txt', ref / 'keep.txt'):\n"
-        "    try:\n        target.write_text('x'); print('ref=LEAK')\n"
-        "    except OSError:\n        print('ref=blocked')\n"
+        f"print('ref=' + ('LEAK' if os.path.exists({str(ref)!r}) else 'absent'))\n"
+        "print('mounted=' + str(any(Path('/w').glob('*/keep.txt'))))\n"
         "for target in (Path(os.getcwd()) / 't.py', Path(os.getcwd()) / 'new.py'):\n"
         "    try:\n        target.write_text('x'); print('acc=LEAK')\n"
         "    except OSError:\n        print('acc=blocked')\n"
@@ -119,9 +117,8 @@ def test_the_baseline_tree_is_immutable_and_acceptance_stays_read_only(tmp_path)
     out = BwrapSandbox(protected=[store]).author_run(
         acc, ref, [sys.executable, "-I", "-c", code], env=()
     )
-    assert "ref=LEAK" not in out.stdout and out.stdout.count("ref=blocked") == 2, out.stderr_tail
+    assert "ref=absent" in out.stdout and "mounted=False" in out.stdout, out.stderr_tail
     assert "acc=LEAK" not in out.stdout and out.stdout.count("acc=blocked") == 2
     assert "canary=denied" in out.stdout and CANARY not in out.stdout
-    assert not (ref / "generated.txt").exists()
-    assert (ref / "keep.txt").read_text() == "keep"
+    assert (ref / "keep.txt").read_text() == "keep" and list(ref.iterdir()) == [ref / "keep.txt"]
     assert (acc / "t.py").read_text() == "original" and not (acc / "new.py").exists()

@@ -37,8 +37,9 @@ class FakeAuthorSandbox:
         self.kw = kw
         self.calls = []
 
-    def author_run(self, acceptance, reference, command, *, env, timeout=300.0):
+    def author_run(self, acceptance, reference, command, *, env, timeout=300.0, candidate=()):
         self.calls.append((acceptance, reference, tuple(command), tuple(env)))
+        self.candidates = getattr(self, "candidates", []) + [tuple(candidate)]
         return AuthorOutcome(
             self.kw.get("exit_code", 0), self.stdout, "", self.kw.get("timed_out", False)
         )

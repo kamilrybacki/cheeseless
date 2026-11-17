@@ -17,16 +17,15 @@ from cheeseless.ports.sandbox import AuthorOutcome, AuthorSandbox
 RESULT_MARK = "CHEESELESS-AUTHOR "
 CHECK_TIMEOUT = 300.0
 
-# Runs inside the author-runner sandbox as ``python -I -B -c DRIVER collect|run <argv-json>``.
-# It collects and (in run mode) executes the hidden suite against the mounted reference and
+# Runs inside the author-runner sandbox as ``python -I -B -c DRIVER collect|run``.
+# It collects and (in run mode) executes the hidden suite against the host candidate broker and
 # prints one result line. It never imports the host package.
 DRIVER = r"""
-import json, os, shutil, subprocess, sys, tempfile, time, types
+import json, os, socket, struct, sys, types
 import pytest
 
 MARK = "CHEESELESS-AUTHOR "
 mode = sys.argv[1]
-argv = json.loads(sys.argv[2]) if len(sys.argv) > 2 else []
 
 
 class Rec:
@@ -66,81 +65,45 @@ class Rec:
             self.outcomes[nid] = "xpassed" if x else "passed"
 
 
-SHARED = ("/tmp", "/dev/shm")
-
-
-def snapshot():
-    # Every file, symlink and directory under the shared writable roots, with its state.
-    seen = {}
-    for root in SHARED:
-        for here, dirs, files in os.walk(root):
-            for name in [*dirs, *files]:
-                path = os.path.join(here, name)
-                try:
-                    st = os.lstat(path)
-                except OSError:
-                    continue
-                isdir = os.path.isdir(path) and not os.path.islink(path)
-                seen[path] = None if isdir else (st.st_size, st.st_mtime_ns, st.st_mode)
-    return seen
-
-
-def restore(before):
-    # Remove what a call created under the shared roots; report what it changed.
-    touched = []
-    after = snapshot()
-    for path in sorted(after, key=len, reverse=True):
-        if path in before:
-            if before[path] != after[path]:
-                touched.append(path)
-            continue
-        try:
-            if os.path.isdir(path) and not os.path.islink(path):
-                shutil.rmtree(path, ignore_errors=True)
-            else:
-                os.unlink(path)
-        except OSError:
-            pass
-    touched += [p for p in before if p not in after]
-    return touched
-
-
 class Runner:
     @pytest.fixture
     def candidate(self):
-        ref = os.environ["CHEESELESS_AUTHOR_REFERENCE"]
+        sock = os.environ.get("CHEESELESS_AUTHOR_BROKER")
 
         class C:
             def run(self, args=(), stdin=None, timeout=None):
-                data = stdin.encode() if isinstance(stdin, str) else stdin
-                # Every call gets a fresh filesystem namespace derived from the immutable
-                # baseline, like a normal candidate call: its own cwd tree, HOME and TMPDIR,
-                # and nothing it leaves under /tmp or /dev/shm survives. The deadline covers
-                # the baseline copy too.
-                deadline = time.monotonic() + (timeout or 30.0)
-                before = snapshot()
-                work = tempfile.mkdtemp(prefix="cand-")
-                tree, home, tmp = (os.path.join(work, n) for n in ("tree", "home", "tmp"))
-                env = {**os.environ, "HOME": home, "TMPDIR": tmp}
+                if not sock:
+                    raise AssertionError("no candidate broker: no reference is bound")
+                req = {"argv": [str(a) for a in args]}
+                if stdin is not None:
+                    req["stdin"] = stdin.decode("utf-8", "replace") if isinstance(stdin, bytes) else stdin
+                if timeout is not None:
+                    req["timeout"] = timeout
+                body = json.dumps(req).encode()
+                conn = socket.socket(socket.AF_UNIX)
                 try:
-                    os.mkdir(home)
-                    os.mkdir(tmp)
-                    shutil.copytree(ref, tree, symlinks=True)
-                    left = deadline - time.monotonic()
-                    if left <= 0:
-                        raise AssertionError("candidate call timed out")
-                    p = subprocess.run([*argv, *args], input=data, capture_output=True,
-                                       cwd=tree, env=env, timeout=left)
-                except subprocess.TimeoutExpired:
-                    raise AssertionError("candidate call timed out")
+                    conn.connect(sock)
+                    conn.sendall(struct.pack(">I", len(body)) + body)
+                    (size,) = struct.unpack(">I", self._read(conn, 4))
+                    reply = json.loads(self._read(conn, size))
+                except OSError as exc:
+                    raise AssertionError("candidate broker unreachable: %s" % exc)
                 finally:
-                    shutil.rmtree(work, ignore_errors=True)
-                    touched = [t for t in restore(before) if not t.startswith(work)]
-                if touched:
-                    raise AssertionError("candidate modified shared state: " + touched[0])
-                dec = lambda b: b.decode("utf-8", "replace")
-                return types.SimpleNamespace(returncode=p.returncode,
-                                             stdout=dec(p.stdout), stderr=dec(p.stderr))
+                    conn.close()
+                if "error" in reply:
+                    raise AssertionError("candidate call failed: " + str(reply["error"]))
+                return types.SimpleNamespace(returncode=reply["returncode"],
+                                             stdout=reply["stdout"], stderr=reply["stderr"])
+
+            @staticmethod
+            def _read(conn, size):
+                data = b""
+                while len(data) < size:
+                    chunk = conn.recv(size - len(data))
+                    if not chunk:
+                        raise AssertionError("candidate broker closed the connection")
+                    data += chunk
+                return data
         return C()
 
 
@@ -191,8 +154,10 @@ def run_driver_on(
     env: Sequence[tuple[str, str]] = (),
 ) -> SuiteRun | None:
     """Run the driver over an exported acceptance tree inside the author sandbox."""
-    command = (sys.executable, "-I", "-B", "-c", DRIVER, mode, json.dumps(list(run_argv)))
-    outcome = sandbox.author_run(acceptance, reference, command, env=env, timeout=CHECK_TIMEOUT)
+    command = (sys.executable, "-I", "-B", "-c", DRIVER, mode)
+    outcome = sandbox.author_run(
+        acceptance, reference, command, env=env, timeout=CHECK_TIMEOUT, candidate=tuple(run_argv)
+    )
     data = parse_outcome(outcome)
     return None if data is None else suite_from(data)
 

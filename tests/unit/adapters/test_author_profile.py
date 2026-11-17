@@ -19,8 +19,8 @@ def _argv(tmp_path: Path, **over: object) -> list[str]:
         "bwrap": "/usr/bin/bwrap",
         "acceptance": tmp_path / "acc",
         "inside": INSIDE_A,
-        "reference": tmp_path / "ref",
-        "reference_inside": INSIDE_R,
+        "broker_dir": tmp_path / "brk",
+        "broker_inside": INSIDE_R,
         "extra_read_only": (),
         "env": (),
         "seccomp_fd": 9,
@@ -34,25 +34,26 @@ def test_author_profile_is_fully_unshared_with_a_read_only_acceptance_tree(tmp_p
     argv = _argv(tmp_path)
     for flag in ("--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-net"):
         assert flag in argv
-    assert "--bind" not in argv and "--overlay" not in argv
+    assert "--overlay" not in argv
     ro = [argv[i + 1 : i + 3] for i, a in enumerate(argv) if a == "--ro-bind"]
     assert [str(tmp_path / "acc"), INSIDE_A] in ro
-    # The baseline is read-only; the driver copies it afresh for every candidate call.
-    assert [str(tmp_path / "ref"), INSIDE_R] in ro
+    # The only writable bind is the broker socket directory; the candidate tree is not mounted.
+    rw = [argv[i + 1 : i + 3] for i, a in enumerate(argv) if a == "--bind"]
+    assert rw == [[str(tmp_path / "brk"), INSIDE_R]]
     assert "--overlay-src" not in argv and "--tmp-overlay" not in argv
     assert argv[argv.index("--chdir") + 1] == INSIDE_A
 
 
-def test_author_profile_without_reference_mounts_nothing_for_it(tmp_path: Path) -> None:
-    argv = _argv(tmp_path, reference=None)
-    assert str(tmp_path / "ref") not in argv
+def test_author_profile_without_a_broker_binds_nothing_writable(tmp_path: Path) -> None:
+    argv = _argv(tmp_path, broker_dir=None)
+    assert str(tmp_path / "brk") not in argv and "--bind" not in argv
 
 
 def test_author_profile_rejects_bad_mount_points(tmp_path: Path) -> None:
     with pytest.raises(SandboxError):
         _argv(tmp_path, inside="/etc")
     with pytest.raises(SandboxError):
-        _argv(tmp_path, reference_inside="/srv/x")
+        _argv(tmp_path, broker_inside="/srv/x")
 
 
 def test_author_profile_rejects_reserved_extra_mounts(tmp_path: Path) -> None:
@@ -87,23 +88,19 @@ def test_author_run_is_contained_and_cannot_write(tmp_path: Path) -> None:
 @pytest.mark.skipif(
     not shutil.which(DEFAULT_BWRAP) and not Path(DEFAULT_BWRAP).exists(), reason="no bwrap"
 )
-def test_author_run_exposes_the_reference_path_in_the_environment(tmp_path: Path) -> None:
-    from cheeseless.ports.sandbox import AUTHOR_REFERENCE_ENV
+def test_author_run_exposes_a_broker_socket_only_with_a_reference(tmp_path: Path) -> None:
+    from cheeseless.ports.sandbox import AUTHOR_BROKER_ENV
 
     acc, ref = tmp_path / "acc", tmp_path / "ref"
     for d in (acc, ref):
         d.mkdir()
-    (ref / "marker.txt").write_text("hi")
     code = (
-        f"import os,sys\np=os.environ[{AUTHOR_REFERENCE_ENV!r}]\n"
-        "sys.stdout.write(open(p+'/marker.txt').read())\n"
+        f"import os,stat\np=os.environ.get({AUTHOR_BROKER_ENV!r})\n"
+        "print(bool(p) and stat.S_ISSOCK(os.stat(p).st_mode))\n"
+        "print(os.path.exists('/w') and any('ref' in n for n in os.listdir('/w')))\n"
     )
-    outcome = BwrapSandbox().author_run(acc, ref, [sys.executable, "-I", "-c", code], env=())
-    assert outcome.stdout == "hi"
-    none = BwrapSandbox().author_run(
-        acc,
-        None,
-        [sys.executable, "-I", "-c", f"import os;print({AUTHOR_REFERENCE_ENV!r} in os.environ)"],
-        env=(),
-    )
-    assert none.stdout.strip() == "False"
+    cmd = [sys.executable, "-I", "-c", code]
+    with_ref = BwrapSandbox().author_run(acc, ref, cmd, env=())
+    assert with_ref.stdout.split() == ["True", "False"]
+    none = BwrapSandbox().author_run(acc, None, cmd, env=())
+    assert none.stdout.split() == ["False", "False"]

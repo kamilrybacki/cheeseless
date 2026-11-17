@@ -178,8 +178,8 @@ def author(
     bwrap: str,
     acceptance: Path,
     inside: str,
-    reference: Path | None,
-    reference_inside: str,
+    broker_dir: Path | None,
+    broker_inside: str,
     extra_read_only: Sequence[Path],
     env: Sequence[tuple[str, str]],
     seccomp_fd: int,
@@ -188,14 +188,14 @@ def author(
 ) -> list[str]:
     """The author runner: unapproved tests, no store, no network.
 
-    Acceptance and the reference (baseline) are both read-only, so the baseline stays
-    immutable. The in-sandbox driver gives each candidate call its own fresh writable copy.
+    Acceptance is read-only. The candidate tree is not mounted at all: the suite reaches it
+    only through the broker socket in ``broker_dir``, bound at ``broker_inside`` (ADR 0010).
     """
     mount = _inside(inside)
     args = _common(bwrap, seccomp_fd)
     args += ["--ro-bind", str(acceptance), mount]
-    if reference is not None:
-        args += ["--ro-bind", str(reference), _inside(reference_inside)]
+    if broker_dir is not None:
+        args += ["--bind", str(broker_dir), _inside(broker_inside)]
     for path in extra_read_only:
         if str(path) in RESERVED_MOUNTS or not path.is_absolute():
             raise SandboxError(f"cannot mount {path} into the author runner")

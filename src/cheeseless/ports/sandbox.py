@@ -48,8 +48,9 @@ class AuthorOutcome:
     timed_out: bool = False
 
 
-# Set by the author runner to the read-only inside path of the reference, when mounted.
-AUTHOR_REFERENCE_ENV = "CHEESELESS_AUTHOR_REFERENCE"
+# Set by the author runner to the inside path of the candidate broker socket (ADR 0010).
+# Absent when no reference is bound (``--no-reference``): there is then no broker at all.
+AUTHOR_BROKER_ENV = "CHEESELESS_AUTHOR_BROKER"
 
 
 class AuthorSandbox(Protocol):
@@ -61,10 +62,13 @@ class AuthorSandbox(Protocol):
         *,
         env: Sequence[tuple[str, str]],
         timeout: float = 300.0,
+        candidate: Sequence[str] = (),
     ) -> AuthorOutcome:
         """Run ``command`` with the unapproved ``acceptance`` tree read-only.
 
-        New user, PID, IPC and network namespaces; no trusted store and no repo write;
-        ``reference`` (when given) is mounted read-only. Output is advisory.
+        New user, PID, IPC and network namespaces; no trusted store and no repo write.
+        ``reference`` (when given) is never mounted: it is the tree a host broker runs
+        ``candidate`` (the contract run argv) against, one fresh normal candidate launch
+        per call. Output is advisory.
         """
         ...

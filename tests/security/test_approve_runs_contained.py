@@ -152,7 +152,6 @@ def test_approval_never_runs_proposed_code_in_the_host_context(host):
 @needs_bwrap
 def test_the_hostile_probes_really_execute_inside_the_sandbox(host):
     """Canary: the same suite, driven directly, runs its probes and every one is blocked."""
-    import json
     import sys
     import tempfile
 
@@ -161,7 +160,7 @@ def test_the_hostile_probes_really_execute_inside_the_sandbox(host):
     with tempfile.TemporaryDirectory(prefix="cheeseless-probe-") as tmp:
         acceptance = Path(tmp) / "acceptance"
         repo.export(repo.tree_of(_source(repo), "acceptance"), acceptance)
-        command = (sys.executable, "-I", "-B", "-c", DRIVER, "collect", json.dumps([]))
+        command = (sys.executable, "-I", "-B", "-c", DRIVER, "collect")
         outcome = sandbox.author_run(acceptance, None, command, env=(), timeout=120.0)
     text = outcome.stdout + outcome.stderr_tail
     assert "PROBE-EXECUTED import" in text
@@ -173,7 +172,6 @@ def test_the_hostile_probes_really_execute_inside_the_sandbox(host):
 @needs_bwrap
 def test_the_test_body_probe_executes_contained_in_a_real_run(host):
     """A run with a reference executes test bodies; their probes are blocked too."""
-    import json
     import sys
     import tempfile
 
@@ -184,8 +182,10 @@ def test_the_test_body_probe_executes_contained_in_a_real_run(host):
         reference = Path(tmp) / "reference"
         reference.mkdir()
         repo.export(repo.tree_of(_source(repo), "acceptance"), acceptance)
-        command = (sys.executable, "-I", "-B", "-c", DRIVER, "run", json.dumps([sys.executable]))
-        outcome = sandbox.author_run(acceptance, reference, command, env=(), timeout=120.0)
+        command = (sys.executable, "-I", "-B", "-c", DRIVER, "run")
+        outcome = sandbox.author_run(
+            acceptance, reference, command, env=(), timeout=120.0, candidate=(sys.executable,)
+        )
     text = outcome.stdout + outcome.stderr_tail
     assert "PROBE-EXECUTED import" in text and "PROBE-EXECUTED body" in text
     body = [line for line in text.splitlines() if line.startswith("PROBE-EXECUTED body")]
