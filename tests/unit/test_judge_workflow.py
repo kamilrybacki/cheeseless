@@ -100,6 +100,8 @@ def test_checks_token_is_minted_only_in_the_post_job_after_the_gate_is_built() -
     assert app["with"]["permission-checks"] == "write"
     assert {k for k in app["with"] if k.startswith("permission-")} == {"permission-checks"}
     assert gate < mint < post
+    assert app["with"]["client-id"] == "${{ vars.CHEESELESS_CHECKS_APP_ID }}"
+    assert app["with"]["private-key"] == "${{ secrets.CHEESELESS_CHECKS_APP_KEY }}"
     assert steps[post]["env"]["GH_TOKEN"] == "${{ steps." + app["id"] + ".outputs.token }}"
 
 
@@ -112,6 +114,8 @@ def test_budget_token_is_contents_write_on_the_ledger_repository_only() -> None:
     mint = _mint_index("permission-contents")
     budget = steps[mint]["with"]
     assert budget["permission-contents"] == "write"
+    assert budget["client-id"] == "${{ vars.CHEESELESS_LEDGER_APP_ID }}"
+    assert budget["private-key"] == "${{ secrets.CHEESELESS_LEDGER_APP_KEY }}"
     assert {k for k in budget if k.startswith("permission-")} == {"permission-contents"}
     # Scoped to the dedicated ledger repository, never the judged one.
     assert budget["repositories"] == "${{ vars.CHEESELESS_BUDGET_REPO }}"
@@ -126,6 +130,7 @@ def test_judge_step_sees_only_the_budget_token() -> None:
     assert judge["env"]["CHEESELESS_BUDGET_TOKEN"] == _token_ref(budget_id)
     dumped = yaml.safe_dump(judge)
     assert "APP_KEY" not in dumped
+    assert "CHECKS_APP" not in dumped
     assert "private-key" not in dumped
     assert "permission-checks" not in yaml.safe_dump(steps)
     assert dumped.count("outputs.token") == 1

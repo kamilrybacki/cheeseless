@@ -257,6 +257,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the branch-policy check-run body (JSON); the outcome is in 'conclusion'.",
     )
+    cib.add_argument(
+        "--no-author-check",
+        action="store_true",
+        help="Skip the advisory author check: no sandbox, no PR content is executed.",
+    )
 
     cir = sub.add_parser(
         "ci-route",
@@ -275,6 +280,13 @@ def build_parser() -> argparse.ArgumentParser:
     cig.add_argument("--policy", required=True, help="Path to the ci-branch --check-payload JSON.")
     cig.add_argument("--judge-code", default="", help="Exit code of ci-judge (gate/ only).")
     cig.add_argument("--verdict", default="", help="Path to the ci-judge --json output.")
+    cig.add_argument("--current-base", default="", help="Default-branch tip now (gate/ freshness).")
+    cig.add_argument(
+        "--guards-ok",
+        choices=("true", "false"),
+        default="true",
+        help="false when an upstream job did not end as expected; forces a failure.",
+    )
 
     init = sub.add_parser(
         "ci-budget-init",

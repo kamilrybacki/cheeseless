@@ -278,14 +278,11 @@ def ci_branch(args: argparse.Namespace) -> int:
             return EXIT_USAGE
     try:
         repo = GitRepository.discover(Path.cwd())
-        sandbox = BwrapSandbox()
-        outcome = check_branch(
-            repo,
-            args.branch,
-            args.base,
-            args.head,
-            author_check=lambda head: author_check(repo, sandbox, head),
-        )
+        author = None
+        if not args.no_author_check:
+            sandbox = BwrapSandbox()
+            author = lambda head: author_check(repo, sandbox, head)  # noqa: E731
+        outcome = check_branch(repo, args.branch, args.base, args.head, author_check=author)
     except Exception as exc:  # noqa: BLE001 - fail closed, never a trace
         if args.check_payload:
             failed = BranchOutcome(False, "check_failed", "unknown")
@@ -344,6 +341,8 @@ def ci_gate(args: argparse.Namespace) -> int:
         _read_json(args.policy),
         args.judge_code,
         _read_json(args.verdict),
+        current_base=args.current_base,
+        guards_ok=args.guards_ok == "true",
     )
     print(json.dumps(checks, sort_keys=True))
     return EXIT_PASS

@@ -56,6 +56,14 @@ def _judge_ok(code: str, verdict: Any) -> bool:
     return code == "0" and isinstance(verdict, dict) and verdict.get("status") == "pass"
 
 
+def _base_fresh(verdict: Any, current_base: str) -> bool:
+    """The pass was judged against the default-branch tip that is current now (S19)."""
+    if not isinstance(verdict, dict) or not current_base:
+        return False
+    judged = verdict.get("judged_base")
+    return isinstance(judged, str) and judged == current_base
+
+
 def _judge_summary(verdict: Any) -> str:
     if not isinstance(verdict, dict):
         return "{}"
@@ -68,8 +76,14 @@ def build_checks(
     policy: Any,
     judge_code: str,
     verdict: Any,
+    *,
+    current_base: str = "",
+    guards_ok: bool = True,
 ) -> list[dict[str, Any]]:
-    """The check bodies to publish: gate (required), policy and, for gate/, judge."""
+    """The check bodies to publish: gate (required), policy and, for gate/, judge.
+
+    ``current_base`` is the default-branch tip now; a gate/ pass counts only if the verdict was
+    judged against it. ``guards_ok`` is False when an upstream job did not end as expected."""
     policy_ok = _policy_ok(policy, head_sha, branch_class)
     policy_check = _body(
         BRANCH_POLICY_CHECK,
@@ -84,9 +98,11 @@ def build_checks(
     if branch_class == "gate":
         judge_ok = _judge_ok(judge_code, verdict)
         checks.append(_body(JUDGE_CHECK, head_sha, judge_ok, JUDGE_CHECK, _judge_summary(verdict)))
-        ok = policy_ok and judge_ok
+        fresh = _base_fresh(verdict, current_base)
+        ok = policy_ok and judge_ok and fresh
         summary = f"branch policy: {'pass' if policy_ok else 'fail'}; judge: "
         summary += "pass" if judge_ok else "not a pass"
+        summary += f"; base: {'current' if fresh else 'stale or unknown, re-run the judge'}"
     elif branch_class == "spec":
         ok = policy_ok
         summary = (
@@ -96,6 +112,9 @@ def build_checks(
     else:
         ok = False
         summary = "unsupported branch class; only gate/ and spec/ pull requests can pass"
+    if not guards_ok:
+        ok = False
+        summary += " An upstream job did not end as expected."
     title = GATE_CHECK + (
         " (spec: NOT an implementation verdict)" if branch_class == "spec" else ""
     )

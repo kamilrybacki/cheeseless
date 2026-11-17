@@ -160,13 +160,31 @@ def test_ci_gate_gate_class_needs_the_judge_pass(tmp_path, capsys):
     (tmp_path / "policy.json").write_text(
         json.dumps(check_payload(BranchOutcome(True, "ok", "gate"), head))
     )
-    (tmp_path / "v.json").write_text(json.dumps({"status": "pass", "criteria": []}))
+    (tmp_path / "v.json").write_text(
+        json.dumps({"status": "pass", "criteria": [], "judged_base": "b" * 40})
+    )
     _, ok = _gate(
-        tmp_path, capsys, "--judge-code", "0", "--verdict", str(tmp_path / "v.json"), cls="gate"
+        tmp_path,
+        capsys,
+        "--judge-code",
+        "0",
+        "--verdict",
+        str(tmp_path / "v.json"),
+        "--current-base",
+        "b" * 40,
+        cls="gate",
     )
     assert ok["cheeseless gate"]["conclusion"] == "success"
     _, bad = _gate(
-        tmp_path, capsys, "--judge-code", "1", "--verdict", str(tmp_path / "v.json"), cls="gate"
+        tmp_path,
+        capsys,
+        "--judge-code",
+        "1",
+        "--verdict",
+        str(tmp_path / "v.json"),
+        "--current-base",
+        "b" * 40,
+        cls="gate",
     )
     assert bad["cheeseless gate"]["conclusion"] == "failure"
 
@@ -174,3 +192,57 @@ def test_ci_gate_gate_class_needs_the_judge_pass(tmp_path, capsys):
 def test_ci_gate_rejects_a_non_sha_head(tmp_path, capsys):
     code = main(["ci-gate", "--head", "main", "--branch-class", "spec", "--policy", "x"])
     assert code == 2
+
+
+def _policy(repo, monkeypatch, capsys, branch, base, head):
+    monkeypatch.chdir(repo)
+    args = ["ci-branch", "--branch", branch, "--base", base, "--head", head]
+    code = main([*args, "--check-payload", "--no-author-check"])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_no_author_check_policy_passes_a_clean_spec_pr(toy_repo, base, monkeypatch, capsys):
+    head = _commit(toy_repo, {"acceptance/a.txt": "x"})
+    code, out = _policy(toy_repo, monkeypatch, capsys, "spec/L1", base, head)
+    assert code == 0 and out["conclusion"] == "success"
+
+
+def test_no_author_check_policy_fails_a_spec_pr_touching_src(toy_repo, base, monkeypatch, capsys):
+    head = _commit(toy_repo, {"acceptance/a.txt": "x", "src/toy/n.txt": "x"})
+    code, out = _policy(toy_repo, monkeypatch, capsys, "spec/L1", base, head)
+    assert code == 0 and out["conclusion"] == "failure"
+
+
+def test_a_forged_success_policy_for_a_diff_touching_src_still_fails_the_gate(
+    toy_repo, base, monkeypatch, capsys, tmp_path
+):
+    """S18: even a forged payload can't help: the real policy job's output is what post uses,
+    and a forged one for another class or head is rejected by ci-gate."""
+    head = _commit(toy_repo, {"acceptance/a.txt": "x", "src/toy/n.txt": "x"})
+    _, real = _policy(toy_repo, monkeypatch, capsys, "spec/L1", base, head)
+    (tmp_path / "policy.json").write_text(json.dumps(real))
+    _, checks = _gate(tmp_path, capsys, head=head, cls="spec")
+    assert checks["cheeseless gate"]["conclusion"] == "failure"
+    forged = {**real, "conclusion": "success", "head_sha": "c" * 40}
+    (tmp_path / "policy.json").write_text(json.dumps(forged))
+    _, checks = _gate(tmp_path, capsys, head=head, cls="spec")
+    assert checks["cheeseless gate"]["conclusion"] == "failure"
+
+
+def test_ci_gate_gate_class_fails_on_a_moved_base_or_a_failed_guard(tmp_path, capsys):
+    from cheeseless.app.ci_branch import BranchOutcome, check_payload
+
+    head = "a" * 40
+    (tmp_path / "policy.json").write_text(
+        json.dumps(check_payload(BranchOutcome(True, "ok", "gate"), head))
+    )
+    (tmp_path / "v.json").write_text(
+        json.dumps({"status": "pass", "criteria": [], "judged_base": "b" * 40})
+    )
+    common = ["--judge-code", "0", "--verdict", str(tmp_path / "v.json")]
+    _, moved = _gate(tmp_path, capsys, *common, "--current-base", "c" * 40, cls="gate")
+    assert moved["cheeseless gate"]["conclusion"] == "failure"
+    _, guard = _gate(
+        tmp_path, capsys, *common, "--current-base", "b" * 40, "--guards-ok", "false", cls="gate"
+    )
+    assert guard["cheeseless gate"]["conclusion"] == "failure"
