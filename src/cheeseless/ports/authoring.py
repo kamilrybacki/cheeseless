@@ -41,6 +41,18 @@ class AuthoringStore(Protocol):
         """``(spec_digest, tree)`` of the latest snapshot, or ``None``."""
         ...
 
+    def save_author_check(
+        self, lineage_id: str, spec_digest: str, tree: str, *, expected_version: int
+    ) -> None:
+        """Record an ``author_check`` PASS for an acceptance tree (ledger R15).
+
+        Conditional on the lifecycle version, like ``save_reference``."""
+        ...
+
+    def load_author_check(self, lineage_id: str) -> tuple[str, str] | None:
+        """``(spec_digest, acceptance_tree)`` of the latest PASS, or ``None``."""
+        ...
+
     def save_crosscheck(
         self, proposal_id: str, lineage_id: str, record: CrosscheckRecord, *, expected_version: int
     ) -> None:

@@ -188,6 +188,35 @@ class AuthoringStoreMixin:
         except KeyError as exc:
             raise StoreError(f"corrupt reference record for {lineage}") from exc
 
+    # -- author check --------------------------------------------------------
+
+    def save_author_check(
+        self, lineage_id: str, spec_digest: str, tree: str, *, expected_version: int
+    ) -> None:
+        lineage = _lineage(lineage_id)
+        self._write_if_current(
+            lineage,
+            expected_version,
+            f"author-check-{lineage}.json",
+            {
+                "spec_digest": _digest(spec_digest, "spec digest"),
+                "tree": _checked(ids.git_oid, tree, "acceptance tree"),
+            },
+        )
+
+    def load_author_check(self, lineage_id: str) -> tuple[str, str] | None:
+        lineage = _lineage(lineage_id)
+        data = self._read_authoring(f"author-check-{lineage}.json")
+        if data is None:
+            return None
+        try:
+            return (
+                _digest(str(data["spec_digest"]), "spec digest"),
+                _checked(ids.git_oid, str(data["tree"]), "acceptance tree"),
+            )
+        except KeyError as exc:
+            raise StoreError(f"corrupt author check record for {lineage}") from exc
+
     # -- crosscheck ----------------------------------------------------------
 
     def save_crosscheck(

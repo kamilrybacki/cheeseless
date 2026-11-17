@@ -259,3 +259,21 @@ def test_the_approval_ownership_lock_is_exclusive_and_released(store: FileStore)
             raise RuntimeError("boom")
     with store.approval_ownership("demo"):
         pass
+
+
+def test_author_check_record_round_trip_and_conditional_publication(store: FileStore) -> None:
+    assert store.load_author_check("demo") is None
+    read = store.authoring_state("demo", SPEC)
+    store.save_author_check("demo", SPEC, OID, expected_version=read.version)
+    assert store.load_author_check("demo") == (SPEC, OID)
+    store.save_authoring_state(read.proposed())
+    with pytest.raises(AuthoringError, match="changed"):
+        store.save_author_check("demo", SPEC, "b" * 40, expected_version=read.version)
+    assert store.load_author_check("demo") == (SPEC, OID)
+
+
+def test_a_corrupt_author_check_record_is_a_store_error(store: FileStore, tmp_path: Path) -> None:
+    store.save_author_check("demo", SPEC, OID, expected_version=0)
+    (tmp_path / "state" / "authoring" / "author-check-demo.json").write_text('{"tree": "x"}')
+    with pytest.raises(StoreError):
+        store.load_author_check("demo")
