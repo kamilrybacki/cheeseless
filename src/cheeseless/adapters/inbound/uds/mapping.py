@@ -380,17 +380,19 @@ def serialize_dispute_response(msg: verifier_pb2.DisputeResponse) -> bytes:
     return json_format.MessageToJson(msg).encode("utf-8")  # type: ignore[no-any-return]
 
 
-# -- author role (ADR 0009): check, crosscheck, propose ------------------------------------
+# -- author role (ADR 0009, 0013): check, crosscheck, propose, spec_done --------------
 
 _AUTHOR_REQUESTS = {
     "check": verifier_pb2.AuthorCheckRequest,
     "crosscheck": verifier_pb2.AuthorCrosscheckRequest,
     "propose": verifier_pb2.FreezeProposeRequest,
+    "spec_done": verifier_pb2.SpecDoneRequest,
 }
 _AUTHOR_RESPONSES = {
     "check": verifier_pb2.AuthorCheckResponse,
     "crosscheck": verifier_pb2.AuthorCrosscheckResponse,
     "propose": verifier_pb2.FreezeProposeResponse,
+    "spec_done": verifier_pb2.SpecDoneResponse,
 }
 
 
@@ -421,6 +423,8 @@ def author_outcome_to_response(kind: str, outcome: object) -> Any:
     elif kind == "crosscheck":
         resp.crosscheck.green = outcome.green  # type: ignore[attr-defined]
         resp.crosscheck.red_criteria.extend(outcome.red_criteria)  # type: ignore[attr-defined]
+    elif kind == "spec_done":
+        resp.ack.spec_digest = outcome.spec_digest  # type: ignore[attr-defined]
     else:
         resp.proposal.proposal_id = outcome.proposal_id  # type: ignore[attr-defined]
     return resp
@@ -436,6 +440,8 @@ def author_response_to_outcome(kind: str, msg: Any) -> object:
         return {"green": msg.crosscheck.green, "red_criteria": list(msg.crosscheck.red_criteria)}
     if which == "proposal" and kind == "propose":
         return {"proposal_id": msg.proposal.proposal_id}
+    if which == "ack" and kind == "spec_done":
+        return {"spec_digest": msg.ack.spec_digest}
     raise MappingError("missing or unexpected outcome oneof")
 
 

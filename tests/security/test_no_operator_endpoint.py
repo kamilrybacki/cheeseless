@@ -32,7 +32,8 @@ OPERATOR_WORDS = (
     "recover",
     "author-recover",
 )
-ALLOWED_AUTHOR = {"author-check", "author-crosscheck", "freeze-propose"}
+# spec-done is dev-only (ADR 0013); tests/security/test_spec_done_dev_only.py gates it
+ALLOWED_AUTHOR = {"author-check", "author-crosscheck", "freeze-propose", "spec-done"}
 
 
 def _route_paths() -> set[str]:

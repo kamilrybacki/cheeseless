@@ -18,9 +18,12 @@ from cheeseless.app.authoring import (
     freeze_propose,
     spec_of,
 )
+from cheeseless.app.dev_session import record_spec_done
 from cheeseless.app.freeze import read_contract
 from cheeseless.domain.authoring import CrosscheckRecord, Proposal, TaskPhase
+from cheeseless.domain.dev_session import DevSessionError, DevState
 from cheeseless.domain.errors import ErrorCode, GateError, gate_error
+from cheeseless.ports.dev_session import DevSessionStore
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.sandbox import AuthorSandbox
 
@@ -71,4 +74,15 @@ def gate_freeze_propose(
         return gate_error(ErrorCode.INFRA_ERROR)
 
 
-__all__ = ["gate_author_check", "gate_author_crosscheck", "gate_freeze_propose"]
+def gate_spec_done(
+    repo: Repository, store: DevSessionStore, worktree: Path, lineage_id: str
+) -> DevState | GateError:
+    try:
+        return record_spec_done(repo, store, repo.snapshot(worktree), lineage_id)
+    except (DevSessionError, AuthorError):
+        return gate_error(ErrorCode.AUTHOR_REFUSED)
+    except Exception:  # noqa: BLE001
+        return gate_error(ErrorCode.INFRA_ERROR)
+
+
+__all__ = ["gate_author_check", "gate_author_crosscheck", "gate_freeze_propose", "gate_spec_done"]
