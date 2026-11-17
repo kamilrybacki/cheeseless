@@ -21,7 +21,7 @@ CHECK_TIMEOUT = 300.0
 # It collects and (in run mode) executes the hidden suite against the host candidate broker and
 # prints one result line. It never imports the host package.
 DRIVER = r"""
-import json, os, socket, struct, sys, types
+import base64, json, os, socket, struct, sys, types
 import pytest
 
 MARK = "CHEESELESS-AUTHOR "
@@ -76,8 +76,8 @@ class Runner:
                     raise AssertionError("no candidate broker: no reference is bound")
                 req = {"argv": [str(a) for a in args]}
                 if stdin is not None:
-                    text = stdin.decode("utf-8", "replace") if isinstance(stdin, bytes) else stdin
-                    req["stdin"] = text
+                    data = stdin.encode() if isinstance(stdin, str) else bytes(stdin)
+                    req["stdin"] = base64.b64encode(data).decode("ascii")
                 if timeout is not None:
                     req["timeout"] = timeout
                 body = json.dumps(req).encode()

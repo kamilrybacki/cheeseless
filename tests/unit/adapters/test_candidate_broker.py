@@ -59,7 +59,7 @@ def test_the_socket_lives_in_a_private_directory(broker) -> None:
 
 
 def test_a_call_returns_exit_code_and_output(broker) -> None:
-    out = _call(broker.socket, {"argv": ["sh", "-c", "cat; echo err >&2; exit 3"], "stdin": "hi"})
+    out = _call(broker.socket, {"argv": ["sh", "-c", "cat; echo err >&2; exit 3"], "stdin": "aGk="})
     assert out == {"returncode": 3, "stdout": "hi", "stderr": "err\n"}
 
 
