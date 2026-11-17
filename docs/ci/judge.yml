@@ -324,9 +324,14 @@ jobs:
           READ_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Re-check that the PR head is unchanged before posting (read-only token).
-          current=$(GH_TOKEN="$READ_TOKEN" gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .head.sha)
+          # Re-check the PR just before posting (read-only token): the head must be unchanged
+          # and it must still target the default branch, so a run started before a retarget
+          # cannot publish over the run that the retarget's `edited` event started.
+          pr=$(GH_TOKEN="$READ_TOKEN" gh api "repos/${REPO}/pulls/${PR_NUMBER}")
+          current=$(printf '%s' "$pr" | jq -r .head.sha)
+          base_ref=$(printf '%s' "$pr" | jq -r .base.ref)
           [ "$current" = "$HEAD_SHA" ] || { echo "PR head changed; not posting"; exit 1; }
+          [ "$base_ref" = "$DEFAULT_BRANCH" ] || { echo "PR base changed; not posting"; exit 1; }
           # Informational checks first; the required gate check last, so it appears only
           # once the others are in. Every body is success or failure, never neutral/skipped.
           jq -c '.[1:][], .[0]' checks.json | while read -r body; do
