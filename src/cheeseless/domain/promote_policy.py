@@ -108,3 +108,19 @@ def decide_promote(changes: Mapping[str, str], approved: Iterable[str] = ()) -> 
         elif cls is PathClass.SENSITIVE and path not in approvals:
             needs.append(path)
     return PromoteDecision(tuple(rejected), tuple(needs))
+
+
+def decide_author_promote(changes: Mapping[str, str]) -> PromoteDecision:
+    """The author's change set: regular files and deletions strictly under ``acceptance/``.
+
+    Everything else is rejected outright; the author has no sensitive-file approval path."""
+    rejected = [
+        path
+        for path, mode in sorted(changes.items())
+        if not (
+            _valid(path)
+            and path.startswith("acceptance/")
+            and (mode in REGULAR_MODES or mode == DELETED_MODE)
+        )
+    ]
+    return PromoteDecision(tuple(rejected), ())
