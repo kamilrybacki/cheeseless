@@ -31,7 +31,7 @@ from cheeseless.domain.authoring import AuthoringError
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.dispute import DEFAULT_CAP, DisputeRecord
 from cheeseless.domain.result import Result
-from cheeseless.ports.repository import Repository
+from cheeseless.ports.repository import Repository, SnapshotRejected
 from cheeseless.ports.runner import SuiteRunner
 from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
 from cheeseless.ports.store import Store, StoreError
@@ -512,6 +512,12 @@ def _cmd_promote(args: argparse.Namespace, ctx: Context) -> int:
             print(f"rejected: {exc.rejected}", file=sys.stderr)
             if exc.needs_approval:
                 print(f"needs approval: {exc.needs_approval}", file=sys.stderr)
+        return 1
+    except SnapshotRejected as exc:
+        if args.json:
+            _print_json({"refused": "snapshot_rejected", "reason": exc.reason, "path": exc.path})
+        else:
+            print(f"refused (snapshot_rejected): {exc.reason}: {exc.path!r}", file=sys.stderr)
         return 1
     except Exception:  # noqa: BLE001
         print("promote failed: internal error", file=sys.stderr)

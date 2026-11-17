@@ -230,3 +230,36 @@ def test_author_promote_refuses_task_and_approve_flags(capsys) -> None:
     )
     assert cli.main(["promote", "--role", "author", "--approve", "src/x"], context=ctx) == 2
     assert cli.main(["promote", "--role", "author", "--task", "t"], context=ctx) == 2
+
+
+@pytest.mark.parametrize("role", ["author", "implementer"])
+def test_promote_refuses_an_unsnapshottable_tree_with_a_stable_json_refusal(
+    monkeypatch, capsys, role
+) -> None:
+    def refuse(*a, **k):
+        raise cli.SnapshotRejected("symlink", "acceptance/hidden/li\nnk\x1b[31m")
+
+    monkeypatch.setattr(cli, "promote_author", refuse)
+    monkeypatch.setattr(cli, "promote", refuse)
+    ctx = cli.Context(
+        repo=SimpleNamespace(root="."), runner=object(), sandbox=object(), store=object()
+    )
+    assert cli.main(["promote", "--role", role, "--json"], context=ctx) == 1
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert out["refused"] == "snapshot_rejected" and out["reason"] == "symlink"
+    assert out["path"] == "acceptance/hidden/li\nnk\x1b[31m"
+    assert "\x1b" not in captured.out and "\x1b" not in captured.err
+
+
+def test_promote_snapshot_refusal_text_escapes_the_path(monkeypatch, capsys) -> None:
+    def refuse(*a, **k):
+        raise cli.SnapshotRejected("symlink", "a\x1b[31mb")
+
+    monkeypatch.setattr(cli, "promote_author", refuse)
+    ctx = cli.Context(
+        repo=SimpleNamespace(root="."), runner=object(), sandbox=object(), store=object()
+    )
+    assert cli.main(["promote", "--role", "author"], context=ctx) == 1
+    err = capsys.readouterr().err
+    assert "internal error" not in err and "\x1b" not in err and "symlink" in err
