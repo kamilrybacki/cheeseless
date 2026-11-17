@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
+_Sock = socket.socket
 SOCKET_NAME = "broker.sock"
 MAX_FRAME = 1 << 20
 MAX_OUTPUT = 1 << 20
@@ -53,7 +54,7 @@ def _frame(payload: dict[str, Any]) -> bytes:
     return struct.pack(">I", len(body)) + body
 
 
-def _read_exact(conn: socket.socket, size: int) -> bytes:
+def _read_exact(conn: _Sock, size: int) -> bytes:
     data = b""
     while len(data) < size:
         chunk = conn.recv(size - len(data))
@@ -87,7 +88,7 @@ def _parse(raw: bytes) -> tuple[list[str], str | None, float | None]:
     return argv, stdin, None if timeout is None else float(timeout)
 
 
-def _client_gone(conn: socket.socket) -> bool:
+def _client_gone(conn: _Sock) -> bool:
     ready, _, _ = select.select([conn], [], [], 0)
     if not ready:
         return False
@@ -193,7 +194,7 @@ class CandidateBroker:
                 self._threads.append(worker)
             worker.start()
 
-    def _serve(self, conn: socket.socket) -> None:
+    def _serve(self, conn: _Sock) -> None:
         with conn:
             try:
                 conn.settimeout(READ_TIMEOUT)
@@ -218,7 +219,7 @@ class CandidateBroker:
             return remaining
 
     def _call(
-        self, conn: socket.socket, argv: list[str], stdin: str | None, timeout: float | None
+        self, conn: _Sock, argv: list[str], stdin: str | None, timeout: float | None
     ) -> dict[str, Any]:
         if not self._slots.acquire(blocking=False):
             raise _Refused("broker busy: too many concurrent candidate calls")
@@ -235,7 +236,7 @@ class CandidateBroker:
             self._slots.release()
 
     def _run(
-        self, conn: socket.socket, argv: list[str], stdin: str | None, limit: float, started: float
+        self, conn: _Sock, argv: list[str], stdin: str | None, limit: float, started: float
     ) -> dict[str, Any]:
         with (
             tempfile.TemporaryFile() as fin,
