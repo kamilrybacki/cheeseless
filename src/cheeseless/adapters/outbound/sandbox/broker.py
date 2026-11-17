@@ -34,7 +34,14 @@ _Sock = socket.socket
 SOCKET_NAME = "broker.sock"
 MAX_FRAME = 1 << 20
 MAX_OUTPUT = 1 << 20
-KILL_GRACE = 2.0
+KILL_GRACE = 2.0  # how long close() waits for threads to join
+# Every call is charged its wall-clock time, so it also reserves an allowance beyond its
+# execution limit: ``TERM_GRACE`` between SIGTERM and the enforced SIGKILL of the process
+# group, plus ``OVERHEAD`` for startup, polling and output handling. A call is admitted only
+# while ``remaining >= limit + ALLOWANCE``, so charged time cannot pass the aggregate budget.
+TERM_GRACE = 0.5
+OVERHEAD = 0.5
+ALLOWANCE = TERM_GRACE + OVERHEAD
 MAX_DEPTH = 8
 MAX_ARGS = 1024
 MAX_ARG_BYTES = 1 << 16
@@ -155,10 +162,16 @@ def _parse(raw: bytes) -> tuple[list[str], bytes | None, float | None]:
     stdin = _valid_stdin(request.get("stdin"))
     timeout = request.get("timeout")
     if timeout is not None:
-        bad = isinstance(timeout, bool) or not isinstance(timeout, int | float)
-        if bad or not math.isfinite(timeout) or timeout <= 0:
+        if isinstance(timeout, bool) or not isinstance(timeout, int | float):
             raise _Refused("timeout must be a positive finite number")
-    return argv, stdin, None if timeout is None else float(timeout)
+        try:
+            seconds = float(timeout)  # an int beyond float range overflows here
+        except OverflowError as exc:
+            raise _Refused("timeout must be a positive finite number") from exc
+        if not math.isfinite(seconds) or seconds <= 0:
+            raise _Refused("timeout must be a positive finite number")
+        return argv, stdin, seconds
+    return argv, stdin, None
 
 
 def _client_gone(conn: _Sock) -> bool:
@@ -179,7 +192,7 @@ def _signal_group(proc: subprocess.Popen[bytes], sig: int) -> None:
 def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
     _signal_group(proc, signal.SIGTERM)
     try:
-        proc.wait(timeout=KILL_GRACE)
+        proc.wait(timeout=TERM_GRACE)
     except subprocess.TimeoutExpired:
         pass
     _signal_group(proc, signal.SIGKILL)
@@ -206,6 +219,7 @@ class CandidateBroker:
         self._procs: set[subprocess.Popen[bytes]] = set()
         self._acceptor: threading.Thread | None = None
         self._workers: set[threading.Thread] = set()
+        self._conns: set[_Sock] = set()
         self._calls = 0
         self._spent = 0.0
         self._reserved = 0.0
@@ -251,12 +265,17 @@ class CandidateBroker:
 
     def close(self) -> None:
         self._stop.set()
+        if self._acceptor is not None:
+            self._acceptor.join(timeout=KILL_GRACE * 3)
         with self._lock:
-            procs = list(self._procs)
+            conns, procs = list(self._conns), list(self._procs)
+        for conn in conns:  # wake workers blocked reading a request
+            with contextlib.suppress(OSError):
+                conn.shutdown(socket.SHUT_RDWR)
         for proc in procs:
             _signal_group(proc, signal.SIGKILL)
         with self._lock:
-            threads = [*self._workers, *([self._acceptor] if self._acceptor else [])]
+            threads = list(self._workers)
         for thread in threads:
             thread.join(timeout=KILL_GRACE * 3)
         if self._listener is not None:
@@ -288,11 +307,13 @@ class CandidateBroker:
         )
         with self._lock:
             self._workers.add(worker)
+            self._conns.add(conn)
         try:
             worker.start()
         except RuntimeError:
             with self._lock:
                 self._workers.discard(worker)
+                self._conns.discard(conn)
             self._connections.release()
             conn.close()
 
@@ -302,6 +323,7 @@ class CandidateBroker:
         finally:
             with self._lock:
                 self._workers.discard(threading.current_thread())
+                self._conns.discard(conn)
             self._connections.release()
 
     def _serve(self, conn: _Sock) -> None:
@@ -321,14 +343,17 @@ class CandidateBroker:
                 conn.sendall(_frame(reply))
 
     def _admit(self, timeout: float | None) -> float:
-        """Reserve a call and its time atomically; return the seconds it may run."""
+        """Reserve a call and its time atomically; return the seconds it may run.
+
+        The reservation is the execution limit plus ``ALLOWANCE``; the call is charged its
+        wall-clock time, which is capped at that sum by the enforced SIGKILL."""
         with self._lock:
-            remaining = self._limits.total_seconds - self._spent - self._reserved
+            remaining = self._limits.total_seconds - self._spent - self._reserved - ALLOWANCE
             if self._calls >= self._limits.max_calls or remaining <= 0:
                 raise _Refused("candidate call budget exhausted")
             limit = min(timeout or self._limits.call_seconds, self._limits.call_seconds, remaining)
             self._calls += 1
-            self._reserved += limit
+            self._reserved += limit + ALLOWANCE
             return limit
 
     def _call(
@@ -344,7 +369,7 @@ class CandidateBroker:
             finally:
                 elapsed = time.monotonic() - started
                 with self._lock:
-                    self._reserved -= limit
+                    self._reserved -= limit + ALLOWANCE
                     self._spent += elapsed
         finally:
             self._slots.release()

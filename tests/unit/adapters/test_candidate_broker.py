@@ -124,7 +124,7 @@ def test_the_total_call_count_is_capped() -> None:
 
 
 def test_the_total_time_is_capped() -> None:
-    limits = BrokerLimits(call_seconds=10, total_seconds=1.0)
+    limits = BrokerLimits(call_seconds=10, total_seconds=3.0)
     with CandidateBroker(EXEC, limits) as b:
         assert _call(b.socket, {"argv": ["sleep", "30"], "timeout": 30}) == {"error": "timed out"}
         assert "budget" in _call(b.socket, {"argv": ["true"]})["error"]
