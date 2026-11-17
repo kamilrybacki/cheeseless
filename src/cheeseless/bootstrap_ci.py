@@ -31,6 +31,8 @@ from cheeseless.adapters.outbound.git.repository import GitRepository
 from cheeseless.adapters.outbound.runner.pytest_runner import PytestRunner
 from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
+from cheeseless.app.authoring import author_check
+from cheeseless.app.ci_branch import check_branch
 from cheeseless.app.ci_judge import CiVerdict, FreezeDrift, JudgeReason, judge
 from cheeseless.bootstrap import _ensure_outside, _state_home
 from cheeseless.ci_bundle import (
@@ -266,14 +268,51 @@ def ci_budget_init(args: argparse.Namespace) -> int:
         del token
 
 
+def ci_branch(args: argparse.Namespace) -> int:
+    """Branch-class and changed-path check; no secrets, no budget, no implementation verdict."""
+    for name, value in (("--base", args.base), ("--head", args.head)):
+        if not _SHA.fullmatch(value):
+            _err(f"ci-branch: {name} must be a full 40-character lowercase commit SHA")
+            return EXIT_USAGE
+    try:
+        repo = GitRepository.discover(Path.cwd())
+        sandbox = BwrapSandbox()
+        outcome = check_branch(
+            repo,
+            args.branch,
+            args.base,
+            args.head,
+            author_check=lambda head: author_check(repo, sandbox, head),
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed, never a trace
+        _err(f"ci-branch failed: {type(exc).__name__}")
+        return EXIT_USAGE
+    public = outcome.public()
+    if args.json:
+        print(json.dumps(public, indent=2, sort_keys=True))
+    else:
+        print("ok" if outcome.ok else f"refused: {outcome.reason}")
+        for path in outcome.rejected:
+            print(f"  {path}")
+        for note in outcome.advisory:
+            print(f"  advisory: {note}")
+    return EXIT_PASS if outcome.ok else EXIT_FAIL
+
+
 def run(args: argparse.Namespace) -> int:
-    commands = {"ci-export": ci_export, "ci-judge": ci_judge, "ci-budget-init": ci_budget_init}
+    commands = {
+        "ci-export": ci_export,
+        "ci-judge": ci_judge,
+        "ci-budget-init": ci_budget_init,
+        "ci-branch": ci_branch,
+    }
     return commands[args.command](args)
 
 
 __all__ = [
     "BUDGET_TOKEN_ENV",
     "BUNDLE_ENV",
+    "ci_branch",
     "ci_budget_init",
     "ci_export",
     "ci_judge",

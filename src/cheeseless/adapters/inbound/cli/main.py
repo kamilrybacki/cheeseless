@@ -244,6 +244,15 @@ def build_parser() -> argparse.ArgumentParser:
     cij.add_argument("--timeout", type=float, default=300.0)
     cij.add_argument("--json", action="store_true")
 
+    cib = sub.add_parser(
+        "ci-branch",
+        help="Check a PR's branch class and changed paths (gate/ vs spec/); no verdict.",
+    )
+    cib.add_argument("--branch", required=True, help="The PR head branch name.")
+    cib.add_argument("--base", required=True)
+    cib.add_argument("--head", required=True)
+    cib.add_argument("--json", action="store_true")
+
     init = sub.add_parser(
         "ci-budget-init",
         help="Seed the CI budget ledger branch once; prints the root for ci-export.",

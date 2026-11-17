@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from cheeseless.domain.promote_policy import decide_author_promote
 
 _HEADS = "refs/heads/"
 
 
-class BranchClass(str, Enum):
+class BranchClass(StrEnum):
     GATE = "gate"
     SPEC = "spec"
 
