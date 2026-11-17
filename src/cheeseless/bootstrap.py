@@ -644,6 +644,22 @@ def main(argv: list[str] | None = None) -> int:
     return dispatch(args, ctx)
 
 
+def _end_session_reported(store: Any, session_id: str, task_id: str | None) -> None:
+    """Teardown must not raise, but a failed ``end_session`` is reported, never swallowed.
+
+    A stale record stays unreachable (the id is random), so this is non-fatal; the operator
+    still learns that the state directory could not be cleaned.
+    """
+    try:
+        store.end_session(session_id)
+    except Exception as exc:  # noqa: BLE001 - teardown is best effort, but loud
+        print(
+            f"session teardown: end_session failed for session {session_id} "
+            f"(task {task_id}): {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def _close_pins(pins: list[tuple[int, str]]) -> None:
     """Close and forget every pinned fd (idempotent: the list is emptied)."""
     while pins:
@@ -973,8 +989,7 @@ def host_session(
         if session is not None:
             session.close_namespace_fds()
             if session.session_id is not None:
-                with contextlib.suppress(Exception):  # a stale record is unreachable: random id
-                    ctx.store.end_session(session.session_id)
+                _end_session_reported(ctx.store, session.session_id, task_id)
         ns_fd = None
         _close_pins(contract_pins)
         for leftover in (seccomp_fd, acceptance_fd):

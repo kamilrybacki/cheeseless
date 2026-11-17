@@ -226,3 +226,37 @@ def test_a_reference_session_cannot_read_hidden_tests_canary(tmp_path):
     assert reference[i - 1] == "--tmpfs"  # an empty tmpfs lands on top of the tree
     assert acceptance_mount(SessionRole.REFERENCE) == "contract"
     assert reference.count("--ro-bind-fd") == 2  # nothing but the spec and criteria
+
+
+def test_a_failing_end_session_is_reported_with_context_and_stays_non_fatal(capsys):
+    from cheeseless import bootstrap
+
+    class Broken:
+        def end_session(self, session_id: str) -> None:
+            raise OSError("disk gone")
+
+    bootstrap._end_session_reported(Broken(), "abc123", "task-9")  # must not raise
+    err = capsys.readouterr().err
+    assert "abc123" in err and "task-9" in err and "OSError" in err and "disk gone" in err
+
+
+def test_serve_uds_bootstrap_without_a_frozen_task_passes_no_session_binding(
+    toy_repo, tmp_path, monkeypatch
+):
+    from cheeseless import bootstrap
+
+    seen: dict = {}
+
+    class FakeServer:
+        def __init__(self, path, session, **_kw):
+            seen["session"] = session
+
+        def serve_forever(self) -> None:
+            return None
+
+    monkeypatch.setattr(bootstrap, "UdsVerifierServer", FakeServer)
+    rc = bootstrap.serve_uds(tmp_path / "s" / "v.sock", state_dir=tmp_path / "state", cwd=toy_repo)
+    assert rc == 0
+    session = seen["session"]
+    assert session.task_id is None
+    assert session.session_id is None and session.generation is None
