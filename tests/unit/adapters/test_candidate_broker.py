@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 
 from cheeseless.adapters.outbound.sandbox.broker import (
+    SOCKET_NAME,
     BrokerLimits,
     CandidateBroker,
-    SOCKET_NAME,
 )
 
 # prefix + argv: the broker's argv is appended, so this prefix just executes it.

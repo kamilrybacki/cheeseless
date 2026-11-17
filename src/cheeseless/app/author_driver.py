@@ -76,7 +76,8 @@ class Runner:
                     raise AssertionError("no candidate broker: no reference is bound")
                 req = {"argv": [str(a) for a in args]}
                 if stdin is not None:
-                    req["stdin"] = stdin.decode("utf-8", "replace") if isinstance(stdin, bytes) else stdin
+                    text = stdin.decode("utf-8", "replace") if isinstance(stdin, bytes) else stdin
+                    req["stdin"] = text
                 if timeout is not None:
                     req["timeout"] = timeout
                 body = json.dumps(req).encode()

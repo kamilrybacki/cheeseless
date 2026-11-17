@@ -178,10 +178,12 @@ class CandidateBroker:
             self._directory = None
 
     def _accept(self) -> None:
-        assert self._listener is not None
+        listener = self._listener
+        if listener is None:
+            return
         while not self._stop.is_set():
             try:
-                conn, _ = self._listener.accept()
+                conn, _ = listener.accept()
             except TimeoutError:
                 continue
             except OSError:
@@ -242,7 +244,7 @@ class CandidateBroker:
         ):
             fin.write((stdin or "").encode())
             fin.seek(0)
-            proc = subprocess.Popen(
+            proc = subprocess.Popen(  # noqa: S603
                 [*self._prefix, *argv],
                 stdin=fin,
                 stdout=fout,
