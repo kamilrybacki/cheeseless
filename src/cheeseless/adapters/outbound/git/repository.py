@@ -182,6 +182,12 @@ class GitRepository:
         paths = {obj.decode_path(rec[3:]) for rec in raw.split(b"\0") if len(rec) > 3}
         return sorted(p for p in paths if under(p, prefix))
 
+    def is_clean(self) -> bool:
+        raw = self._git.run(
+            "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"
+        )
+        return not raw.strip(b"\0")
+
     def merge_base(self, a: str, b: str) -> str:
         found = self._git.text("merge-base", oid(a), oid(b))
         return oid(found)

@@ -383,3 +383,18 @@ def test_a_repromote_on_the_same_baseline_still_chains_with_one_parent(
     first = repo.promote(base, repo.tree_of(base), repo.snapshot(toy_repo), ref)
     second = repo.promote(base, repo.tree_of(base), repo.snapshot(toy_repo), ref)
     assert git(toy_repo, "rev-list", "--parents", "-n1", second).split()[1:] == [first]
+
+
+def test_a_fresh_repository_is_clean(repo: GitRepository) -> None:
+    assert repo.is_clean() is True
+
+
+def test_an_untracked_file_makes_it_dirty(repo: GitRepository, toy_repo: Path) -> None:
+    (toy_repo / "stray.txt").write_text("x")
+    assert repo.is_clean() is False
+
+
+def test_a_modified_tracked_file_makes_it_dirty(repo: GitRepository, toy_repo: Path) -> None:
+    target = next(p for p in toy_repo.rglob("*.py") if ".git" not in p.parts)
+    target.write_text(target.read_text() + "\n# edit\n")
+    assert repo.is_clean() is False

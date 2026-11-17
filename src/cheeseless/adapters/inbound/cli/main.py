@@ -220,6 +220,22 @@ def build_parser() -> argparse.ArgumentParser:
     devref.add_argument("--attempt", default=None, help="Attempt id (default: generated).")
     devref.add_argument("--json", action="store_true")
 
+    dev = sub.add_parser(
+        "dev",
+        help="Host only: drive spec, tests and code in one session "
+        "(dev [options] -- AGENT [ARGS...]).",
+    )
+    dev.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)
+    dev.add_argument("--lineage", required=True, help="The dev lineage to drive.")
+    dev.add_argument("--resume", action="store_true", help="Continue the open session.")
+    dev.add_argument(
+        "--headless-reference",
+        action="store_true",
+        help="Run the reference without a tmux pane (the no-tmux fallback).",
+    )
+    dev.add_argument("--reference-timeout", type=float, default=1800.0)
+    dev.add_argument("--json", action="store_true")
+
     uds = sub.add_parser("serve-uds", help="Run the verifier UDS server for one session.")
     uds.add_argument("--socket", type=Path, default=None)
     uds.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)

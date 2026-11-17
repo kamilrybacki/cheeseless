@@ -959,3 +959,18 @@ Reviewers: gpt-6.1-sol (OpenAI, high) and claude-sonnet-5-5 (Anthropic, medium).
 | D14-3c-5 | A headless attempt needs a log nobody else can read | `reference_log_path` is a host-only path; the fd comes from `_fs.open_append` (private, append-only) and the caller creates it 0600. The store listing helper `_fs.list_regular` fails closed on a symlink, so a crafted entry cannot point the reader outside the store. |
 | R3a-5 | (deferred from slice 3a) the attempt mode is not passed to the tool listing and the shim | **Resolved.** The host now passes the mode: `host_session(..., new_reference=...)` sets `SessionConfig.dev_reference` and the shim bakes `dev=True` for a reference session. A TUI attempt lists `reference_done`; a headless one does not (`test_a_headless_reference_session_gets_no_tool_and_keeps_a_log`), and the UDS gate still refuses a headless call. |
 | D14-3c-6 | `dev=True` now means two different tools depending on role | ADR 0013 gates `spec_done` for an author, ADR 0014 gates `reference_done` for a reference. `_mcp_shim_source` bakes `dev=True` for exactly those two roles and every other shim stays byte-identical. `tests/security/test_spec_done_dev_only.py` asserted the old "dev is ignored for any role but author" invariant and was narrowed to the role-scoped one. |
+
+## ADR 0013 stage 5: the `cheeseless dev` host loop (first slice)
+
+The ADR already decides the orchestrator (host owns phase and freeze; a skill only
+launches it), so this slice implements an accepted decision and adds no new ADR.
+
+| id | decision | why |
+|---|---|---|
+| D13-5a | `app/dev_flow.py` holds preconditions and phase handover; `bootstrap_dev.py` only sequences | The app layer stays free of git and env I/O (`require_clean_tree` takes a callable), so `start_phase` is testable without a sandbox or a repo. |
+| D13-5b | `start_phase` derives the role from the stored phase via `resume_target`, and never asks an agent | ADR 0013 makes the phase a host fact. Reusing `resume_target` means the implementer is always a fresh session and the author is the only resumed one, with no second rule to keep in sync. |
+| D13-5c | The loop stops at the tests phase and prints the `dev-reference` command instead of nesting it | ADR 0014 runs the reference as its own host process on a pty it owns. Starting it inside `dev` would nest a second sandbox under one command and lose the host's `Popen`/teardown ownership (R14-2). |
+| D13-5d | The credential is required only for the author role | ADR 0013 gives each sandbox only its own credential. Requiring the author's token for an implementer or reference run would demand a secret those roles must not hold. |
+| D13-5e | `require_token` refuses an embedded control character | Found by a security test: `.strip()` alone let `" <token>\x00"` through, and that value would be forwarded into a sandbox env where a NUL truncates it or fails the exec. A token never contains one, so this is a strict refusal, not a sanitisation. |
+| D13-5f | New `Repository.is_clean()` | `dirty_paths(prefix)` is repo-relative and rejects `""`, so the whole-tree check ADR 0013 needs ("clean tree only") had no honest expression. The method runs `status --porcelain` with no pathspec. |
+| D13-5g | All refusals precede staging and go to stderr | `--json` therefore never prints a half object on stdout; a refusal leaves no session, projection or store entry behind. `tests/unit/adapters/test_dev_cli.py` asserts the stdout-is-empty case. |

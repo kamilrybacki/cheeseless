@@ -659,6 +659,10 @@ def main(argv: list[str] | None = None) -> int:
         from cheeseless.bootstrap_reference import run_reference_command  # noqa: PLC0415
 
         return run_reference_command(args, agent)
+    if args.command == "dev":
+        from cheeseless.bootstrap_dev import run_dev_command  # noqa: PLC0415
+
+        return run_dev_command(args, agent)
     if args.command == "serve-uds":
         return serve_uds(
             socket_path=getattr(args, "socket", None),
