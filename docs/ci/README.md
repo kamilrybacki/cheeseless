@@ -56,8 +56,11 @@ posts a check run with the aggregate status and visible-criterion statuses only.
 6. Copy `judge.yml` to `.github/workflows/judge.yml` on the default branch. Adjust the
    `workflows:` name to match your PR workflow. Keep `ci.yml`'s `run-name`
    (`ci judge=yes|no`): a pull request that is only **edited** (title or body, base
-   unchanged) gets `judge=no`, is not routed, and so neither spends the CI budget nor
-   republishes a check; the earlier result stands.
+   unchanged) gets `judge=no`, is not routed, so it neither spends the CI budget nor
+   publishes a check; the earlier result stands. It runs in its own concurrency group
+   (`judge.yml` keys the group on head SHA, triggering event and `run-name`), so it never
+   cancels an in-flight `judge=yes` run. `run-name` comes from the PR's own `ci.yml`: this rule
+   is a budget optimisation, not a security control.
 7. Require ONE check on the default branch: `cheeseless gate`. Add a single ruleset (or
    branch protection rule) that targets the default branch (required status checks are
    scoped by the PR's **base** branch, never by its head branch, so a per-`gate/*` rule can
@@ -94,12 +97,12 @@ posts a check run with the aggregate status and visible-criterion statuses only.
     job output, which a sandboxed job cannot write.
   - `evaluate` runs for every validated PR, unprivileged and **advisory**: it runs the
     sandboxed author check, which executes PR acceptance content. Nothing it produces is
-    consumed by `post`.
+    consumed by `post`, and its result is only shown in the `post` log, never a guard.
   - `post` is the only job that can publish checks. It has the environment and the checks App key
     but checks out only the default branch and never fetches or runs PR code. It runs
     `cheeseless ci-gate`, which validates the policy payload (exact schema, head SHA, class),
     requires `judged_base` to equal the current default-branch tip (a stale verdict fails),
-    requires every upstream result to be as the class needs (`policy` and `evaluate` success;
+    requires every upstream result to be as the class needs (`policy` success;
     `judge` success for `gate/`, skipped otherwise) and builds the check bodies, re-checks that `pulls/N` still has the same head SHA, mints the
     checks token and posts `cheeseless gate` (required) plus the informational
     `cheeseless judge` (`gate/` only) and `cheeseless branch policy` checks.
