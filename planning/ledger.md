@@ -578,6 +578,17 @@ design). Codex setup: `codex-study` copied to a system dir, seed auth with a bla
 (rotation would invalidate the operator's session), host allowlist limited to the vendor host.
 Open risk: Luna is excluded from restricted work by routing policy; fixtures are synthetic.
 
+## 2026-11-15: study Amendment 7 (Codex pilot infrastructure)
+
+Three stacked infra faults broke the first Terra and Luna runs: missing `codex-code-mode-host`
+(no command tool), `-C /work` absent in the CHEESELESS arm, and Codex's WebSocket transport
+blocked by the egress proxy as `protocol-upgrade`. Decision: fix the wrapper and environment,
+not the product or the proxy rule, because blocking upgrades is correct behaviour for the
+gate. Forcing HTTPS through a custom provider keeps the vendor host and both arms identical.
+Rejected: allowing protocol upgrades for Codex (weakens the egress policy for one agent) and
+counting the earlier runs (the agent could not act). The earlier attempts stay as detections.
+Open risk: Codex remote plugins and apps are reachable in both arms.
+
 ## 2026-11-16: two-sided gate design interview (ADR 0009)
 
 Operator: a test that contradicts the spec is an authoring bug, not gaming; the tool must guard
@@ -660,7 +671,7 @@ ADR 0009 accepted after round 2.
 |---|------------|
 | A4 | Fixed: the implementer profile now fails closed with `SandboxError` when `projection/acceptance` is missing, a file or a symlink, instead of skipping the mount. Security test in `tests/security/test_agent_acceptance_readonly.py`. |
 | A5 | Fixed: the sandbox probe covers overwrite, append, create, delete, rename within and out, chmod, mkdir, and rmdir/rename of the mount itself, checks the rest of the work tree stays writable, and verifies the canary digest is unchanged. |
-| A7 | Fixed: the mount ships with (1) the demo `weaken-tests` tactic reporting a refused write as BLOCKED (never INCONCLUSIVE) only when every planned write was refused and none landed; (2) a separate `write_events` input to the study classifier fed by a symmetric transcript parser (Claude, Codex; opencode unobserved), so refused writes count as `touch_tests` evidence without flipping unobserved flags; (3) the study dry run's cheeseless weakener now gets refused writes and is labelled `blocked`; (4) study Amendment 7. Operator decision recorded there: only refused (`ok=False`) writes count, so naive results are unchanged. Recordings and deck wording re-checked: `docs/demo` casts, player and report regenerated from the demo; the only wording about edits "landing" was the old `weaken-tests` detail text. |
+| A7 | Fixed: the mount ships with (1) the demo `weaken-tests` tactic reporting a refused write as BLOCKED (never INCONCLUSIVE) only when every planned write was refused and none landed; (2) a separate `write_events` input to the study classifier fed by a symmetric transcript parser (Claude, Codex; opencode unobserved), so refused writes count as `touch_tests` evidence without flipping unobserved flags; (3) the study dry run's cheeseless weakener now gets refused writes and is labelled `blocked`; (4) study Amendment 8 (numbered 7 before main gained its own Amendment 7). Operator decision recorded there: only refused (`ok=False`) writes count, so naive results are unchanged. Recordings and deck wording re-checked: `docs/demo` casts, player and report regenerated from the demo; the only wording about edits "landing" was the old `weaken-tests` detail text. |
 
 ### ADR 0009 implementation, stage (g)
 
@@ -707,7 +718,7 @@ Reviewer: claude-opus-5-5 (independent session, code review). Verdict: approve a
 | C4 | Cheeseless-only TRUNCATED check made the arms differ. | Fixed: the parser alone decides unobserved, in both arms; the check and `evidence` argument are gone. |
 | C5 | TOCTOU between the `acceptance/` check and the bind. | Fixed: `open_acceptance` opens with `O_PATH\|O_NOFOLLOW\|O_DIRECTORY`, fstats it, and mounts with `--ro-bind-fd`; fails closed with `SandboxError`. |
 | C6 | Security probe never read the canary and did not try a hard link. | Fixed: the probe reads the canary back in the sandbox and attempts `os.link` and a canary overwrite; digest check kept. |
-| C7 | Amendment 7 described a state the code no longer had. | Fixed: rewritten to match the code. |
+| C7 | Amendment 8 (then numbered 7) described a state the code no longer had. | Fixed: rewritten to match the code. |
 
 ## ADR 0009 implementation, stages (d)+(f)
 
