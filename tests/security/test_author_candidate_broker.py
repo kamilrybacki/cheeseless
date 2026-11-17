@@ -144,3 +144,39 @@ def test_no_reference_starts_no_broker_and_every_candidate_call_is_refused(tmp_p
         "        candidate.run(['-c', 'printf x'])\n"
     )
     assert _outcome(*_author(tmp_path, None, test)) == "passed"
+
+
+MUTATE_BROKER_DIR = (
+    "import os, pathlib, pytest\n"
+    "d = pathlib.Path(os.environ[{env!r}]).parent\n"
+    "@pytest.mark.criterion('C1')\n"
+    "def test_dir_is_read_only():\n"
+    "    for op in (\n"
+    "        lambda: (d / 'planted').write_bytes(b'x' * 1048576),\n"
+    "        lambda: (d / 'sub').mkdir(),\n"
+    "        lambda: os.unlink(d / 'broker.sock'),\n"
+    "        lambda: os.chmod(d / 'broker.sock', 0o777),\n"
+    "        lambda: os.rename(d / 'broker.sock', d / 'moved.sock'),\n"
+    "    ):\n"
+    "        with pytest.raises(OSError):\n"
+    "            op()\n"
+    "    assert sorted(p.name for p in d.iterdir()) == ['broker.sock']\n"
+)
+
+
+@needs_bwrap
+def test_the_broker_directory_is_read_only_but_the_socket_still_connects(tmp_path):
+    tree = tmp_path / "ref"
+    tree.mkdir()
+    test = (
+        MUTATE_BROKER_DIR.format(env=AUTHOR_BROKER_ENV)
+        + f"{RAW_CLIENT}"
+        + "@pytest.mark.criterion('C2')\n"
+        + "def test_connects():\n"
+        + "    assert ask({'argv': ['-c', 'printf hi']})['stdout'] == 'hi'\n"
+    )
+    out, data = _author(tmp_path, tree, test)
+    assert data is not None, out.stderr_tail + out.stdout
+    suite = suite_from(data)
+    assert suite is not None
+    assert {o.value for o in suite.outcomes.values()} == {"passed"}, suite.outcomes

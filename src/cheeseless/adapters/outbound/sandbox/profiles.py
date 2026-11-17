@@ -195,7 +195,7 @@ def author(
     args = _common(bwrap, seccomp_fd)
     args += ["--ro-bind", str(acceptance), mount]
     if broker_dir is not None:
-        args += ["--bind", str(broker_dir), _inside(broker_inside)]
+        args += ["--ro-bind", str(broker_dir), _inside(broker_inside)]
     for path in extra_read_only:
         if str(path) in RESERVED_MOUNTS or not path.is_absolute():
             raise SandboxError(f"cannot mount {path} into the author runner")

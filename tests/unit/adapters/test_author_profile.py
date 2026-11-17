@@ -37,9 +37,9 @@ def test_author_profile_is_fully_unshared_with_a_read_only_acceptance_tree(tmp_p
     assert "--overlay" not in argv
     ro = [argv[i + 1 : i + 3] for i, a in enumerate(argv) if a == "--ro-bind"]
     assert [str(tmp_path / "acc"), INSIDE_A] in ro
-    # The only writable bind is the broker socket directory; the candidate tree is not mounted.
-    rw = [argv[i + 1 : i + 3] for i, a in enumerate(argv) if a == "--bind"]
-    assert rw == [[str(tmp_path / "brk"), INSIDE_R]]
+    # The broker socket directory is read-only too; nothing is writable and no tree is mounted.
+    assert [str(tmp_path / "brk"), INSIDE_R] in ro
+    assert "--bind" not in argv
     assert "--overlay-src" not in argv and "--tmp-overlay" not in argv
     assert argv[argv.index("--chdir") + 1] == INSIDE_A
 
