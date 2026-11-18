@@ -34,7 +34,7 @@ from cheeseless.app.reference_run import (
     reap_attempts,
     stop_attempt,
 )
-from cheeseless.bootstrap import _terminate, build_context, host_session
+from cheeseless.bootstrap import _terminate, build_context, host_session, resolve_cli_launch
 from cheeseless.domain import ids
 from cheeseless.domain.reference_attempt import (
     AttemptOwner,
@@ -178,6 +178,7 @@ def run_reference_attempt(
     attempt_id: str | None = None,
     panes: TmuxPanes | None = None,
     host_env: dict[str, str] | None = None,
+    agent_model: str = "",
 ) -> ReferenceRun:
     """Run one reference attempt to a terminal state and return its host record."""
     if not agent_command:
@@ -239,6 +240,7 @@ def run_reference_attempt(
             on_reference_stop=lambda _attempt: stop.set(),
             agent_pty=(rows, cols) if mode is ReferenceMode.TUI else None,
             log_file=log_file,
+            agent_model=agent_model,
         ) as info:
             attempt_record = info["reference_attempt"]
             if not isinstance(attempt_record, ReferenceAttempt):
@@ -305,6 +307,7 @@ def _payload(result: ReferenceRun) -> dict[str, object]:
 
 def run_reference_command(args: argparse.Namespace, agent: list[str] | None) -> int:
     try:
+        agent, agent_model = resolve_cli_launch(getattr(args, "launcher", None), agent)
         result = run_reference_attempt(
             lineage=args.lineage,
             spec_digest=args.spec_digest,
@@ -317,6 +320,7 @@ def run_reference_command(args: argparse.Namespace, agent: list[str] | None) -> 
             cols=args.cols,
             state_dir=getattr(args, "state_dir", None),
             attempt_id=args.attempt,
+            agent_model=agent_model,
         )
     except (SessionOptionError, ValueError, RuntimeError) as exc:
         print(f"dev-reference: {exc}", file=sys.stderr)
