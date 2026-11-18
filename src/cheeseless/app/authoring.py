@@ -721,6 +721,9 @@ __all__ = [
 # required because an exit code says the process ended, not that a judgement happened
 # (ADR 0015 decision 3).
 VERDICT_FILE = "verdict.txt"
+# A verdict is one short line. Anything at this size is not one, and must not be truncated
+# into something that parses.
+VERDICT_MAX_BYTES = 64 * 1024
 _VERDICT_LINE = "VERDICT:"
 
 
@@ -759,9 +762,14 @@ def read_review_verdict(evidence_home: Path) -> bool | None:
     except OSError:
         return None
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
             return None
-        data = os.read(fd, 64 * 1024)
+        if info.st_size > VERDICT_MAX_BYTES:
+            # Reading a prefix of an oversized file would let the first 64 KiB pose as the
+            # whole answer, and the verdict is meant to be one short line.
+            return None
+        data = os.read(fd, VERDICT_MAX_BYTES + 1)
     except OSError:
         return None
     finally:

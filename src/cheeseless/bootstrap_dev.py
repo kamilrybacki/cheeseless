@@ -140,11 +140,12 @@ def _tests_phase(
             ),
         },
         "the reference is done for this spec:\n"
-        "  1. `cheeseless freeze` proposes the tests and prints the proposal id\n"
-        "  2. `cheeseless strength-review --run --task <proposal> ...` has another vendor "
-        "review them, and refuses to record anything if it writes no verdict\n"
-        "  3. `cheeseless freeze --approve <proposal> --auto` freezes, refusing without "
-        "that review",
+        "  1. `cheeseless freeze` freezes the tests directly, unless an approval is "
+        "pending; `cheeseless freeze --approve <proposal> --auto` is the path that needs a "
+        "strength review, and it refuses without one the host ran itself\n"
+        "  2. `cheeseless strength-review --run --task <proposal> --author-model ... "
+        "--reviewer-model ... -- <reviewer agent>` has another vendor review the tests, and "
+        "refuses to record anything if the reviewer writes no verdict",
     )
     return 0 if ready else 1
 

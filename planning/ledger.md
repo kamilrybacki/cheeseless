@@ -1246,3 +1246,80 @@ so it is answered by A1–A4 rather than by argument.
 was found by the earlier test suite because those tests stubbed the launch. Astra found them
 by reading what the code *does* rather than what its tests assert. Two rounds of review missed
 it; one blind review found it.
+
+### Round 4 (gpt-6.2-sol, medium) — REJECT, and (partly) right for the second time
+
+Sol reviewed `e92cb3e`, before #45. Five of its nine findings were already closed by that
+commit (which astra's review, not sol's, prompted); the rest are dispositioned here.
+
+- **S4-1 (BLOCKER) — accepted and the most valuable finding of the round.** `main` splits argv
+  at `--` (`split_agent_argv`), and bootstrap never handed that tail to `strength-review`. The
+  documented `strength-review --run -- <agent>` therefore reported the command as missing and
+  launched nothing. Every previous test passed because they called the handler directly.
+  Fixed in `bootstrap.main`, with `test_main_hands_the_strength_review_command_to_the_dispatcher`
+  driving the real `main`; the test fails when the fix is removed (verified).
+- **S4-2, S4-4, S4-6 (BLOCKERs) — already fixed in #45** (subject attributes, task id, wait
+  before reading the verdict, no inherited streams).
+- **S4-3 — partly accepted.** The exact-tree guard compares paths, so it accepts changed bytes
+  at an expected path. The git writer refuses non-regular tree entries and checks the generated
+  index tree independently, so a projection cannot contain aliased bytes through the supported
+  path. Recorded; not closing the inode comparison sol described, which the normal launcher
+  cannot reach.
+- **S4-5 (BLOCKER) — recorded, not fixed.** Vendor labels are CLI flags; nothing checks the
+  reviewer command against the declared model. Closing it needs a stored launch record for both
+  sessions, which is a design change beyond this slice and is the same point as A5's
+  "identities from trusted launch config" in ADR 0015 decision 4. Recorded as the largest
+  remaining gap between the ADR and the code.
+- **S4-7 (SHOULD-FIX) — accepted.** `freeze --approve` and `author recover` now catch
+  `StoreError`; the dev instructions no longer claim plain `freeze` proposes-and-prints (it
+  freezes directly; `--approve <proposal> --auto` is the reviewed path).
+- **S4-8 — accepted as a test-gap audit.** Every case it names was addressed in #45 or here.
+- **S4-9 (BLOCKER) — accepted as a fair statement of scope.** `--run` is complete for a
+  reviewer reachable without egress. Reaching a cloud reviewer from inside a no-network sandbox
+  cannot work, and pretending otherwise is the defect. Whether that makes the feature
+  "unfinished" depends on whether the reviewer is launched from the host (outside the sandbox)
+  or inside it; that is the open design question recorded below, not a defect in the role.
+
+### Round 5 (claude-sonnet, mutation testing) — ACCEPT WITH CHANGES
+
+This was the most useful round for the security tests: it deleted protections one at a time
+and reran the suite, and reported which deletions stayed green.
+
+- **Mutations caught**: projection rw, env passthrough, MCP fallthrough, `tree_keeping`
+  returning the whole tree, a frozen reviewer using `projection_tree`, the reviewer getting the
+  full tree, empty acceptance allowed.
+- **Mutations missed (all green)**: drop `--ro-bind-fd`, drop `--unshare-net`, drop
+  `--clearenv`, drop the `_refuse_overlap` call, drop the seeds/extra-mounts refusal, reviewer
+  `build_argv` falls back to `agent()`, reviewer command wrapped in the bridge, drop seccomp.
+- **M5-1/M5-2 (SHOULD-FIX, structural) — accepted and fixed.** The role→profile choice lived
+  inside `host_session`, so nothing could test it; the two "tests" that seemed to cover it were
+  `inspect.getsource` string checks that stayed green when the branch was emptied or inverted.
+  Extracted to `bootstrap._session_argv` and covered behaviourally by
+  `test_a_reviewer_session_gets_the_reviewer_profile` and
+  `test_an_implementer_session_gets_the_agent_profile` (the control). Verified by mutation:
+  making the reviewer branch unreachable now fails the suite. The source-text test is gone.
+- **M5-3 (SHOULD-FIX) — partly accepted.** The reviewer's read is now proven by the real-bwrap
+  canary in `test_the_reviewer_really_reads_the_tests_inside_the_sandbox` (#41), which starts
+  bwrap and reads a canary file. A reviewer-specific seccomp/network assertion is added to the
+  argv test; a full network-failure test is not, because it needs a live sandbox per test and
+  the socket absence is already asserted structurally.
+- **M5-4 (SHOULD-FIX) — accepted as the sharpest critique.** ADR 0015 argues against ADR 0009's
+  rejected LLM judge, but the comparator should be the human strength review that
+  `auto_approve_freeze` replaces. That criticism is correct. ADR 0015 is accepted and immutable,
+  so this needs a superseding ADR rather than an edit; recorded here so it is not lost.
+- **M5-5 — accepted.** A manipulated green verdict is the expected attack, and the asymmetry
+  (spurious pass removes the gate, spurious fail costs a retry) points the wrong way. The
+  mitigation now in place is `observed`: a verdict only counts if the host watched a session
+  produce it. Bounding it further (opt-in auto-freeze, or an executable strength signal) is an
+  open decision, not a code change I should make unilaterally.
+- **M5-6 — confirmed fixed** by D15-12, with the regression test M5-6 asks for.
+- **M5-7 (SHOULD-FIX) — accepted.** The UDS dispatcher's `_role_ok` now refuses the reviewer
+  role outright (#41), so the residual is narrower than "recorded, not fixed" implied.
+- **M5-8 (NIT) — accepted.** `reviewers` in ADR 0015 overstates coverage; the gemini review
+  timed out.
+
+**Why three rounds of review missed what astra found in one:** every earlier round read the
+tests and the sandbox and found them sound — they are. Astra read the *wiring* and found the
+feature did not run. Sol, reading the same code, found the fourth independent wiring defect.
+Sonnet, mutating rather than reading, found that the security tests would not have noticed.
+The tests were checking the right properties in the wrong place.

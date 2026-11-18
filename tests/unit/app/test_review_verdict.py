@@ -88,3 +88,27 @@ def test_the_reviewer_is_not_shown_or_given_operator_stdin() -> None:
     assert "closed" in source
     # The branch that sets every stream to /dev/null must exist.
     assert "subprocess.DEVNULL, subprocess.DEVNULL, subprocess.DEVNULL" in source
+
+
+def test_an_oversized_verdict_file_is_refused_not_truncated(tmp_path) -> None:
+    """A valid verdict line at the front of a huge file must not become the verdict.
+
+    Reading a prefix would accept it; the size check is what refuses it.
+    """
+    from cheeseless.app.authoring import VERDICT_MAX_BYTES
+
+    (tmp_path / "verdict.txt").write_bytes(b"VERDICT: pass\n" + b"x" * VERDICT_MAX_BYTES)
+    assert read_review_verdict(tmp_path) is None
+
+
+def test_a_fifo_named_verdict_does_not_block_or_parse(tmp_path) -> None:
+    """The reader must not wait on a pipe the reviewer left open."""
+    import os as _os
+
+    _os.mkfifo(tmp_path / "verdict.txt")
+    assert read_review_verdict(tmp_path) is None
+
+
+def test_a_directory_named_verdict_is_refused(tmp_path) -> None:
+    (tmp_path / "verdict.txt").mkdir()
+    assert read_review_verdict(tmp_path) is None

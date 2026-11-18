@@ -12,6 +12,7 @@ import os
 import pytest
 
 from cheeseless.adapters.outbound.sandbox import profiles
+from cheeseless.domain.session_role import SessionRole
 
 
 def _common(tmp_path, **kw):
@@ -255,16 +256,45 @@ def test_the_environment_whitelist_admits_only_what_a_model_session_needs() -> N
     ]
 
 
-def test_a_reviewer_session_waits_for_no_egress_bridge() -> None:
-    """Found in review: the reviewer was launched behind the bridge wrapper and hung."""
-    import inspect
+def _session_argv(role):  # type: ignore[no-untyped-def]
+    """Run the real chooser `host_session` uses, with a valid-looking environment."""
+    from pathlib import Path
 
     from cheeseless import bootstrap
 
-    source = inspect.getsource(bootstrap.host_session)
-    # The readiness handshake is guarded, not unconditional: an isolated reviewer can never
-    # produce the marker, so waiting for it would block the session until the timeout.
-    assert "if bound is not SessionRole.REVIEWER:" in source
-    assert "_wait_for_bridge(egress_ready, proc)" in source
-    # And it is not wrapped by the bridge command either.
-    assert "if bound is SessionRole.REVIEWER:" in source
+    return bootstrap._session_argv(
+        role,
+        bwrap="bwrap",
+        projection=Path("projection"),
+        home=Path("home"),
+        sockets=[Path("sock/verifier.sock"), Path("egress/egress.sock")],
+        read_only=[Path("runtime"), Path("python")],
+        acceptance_fd=11,
+        acceptance_mode="ro",
+        pinned_read_only=(),
+        env=(("PATH", "/usr/bin"),),
+        command=["true"],
+        seccomp_fd=12,
+        info_fd=13,
+    )
+
+
+def test_an_implementer_session_gets_the_agent_profile() -> None:
+    """The control for the pair below.
+
+    Without it, an implementation that gave every role the reviewer profile would look like
+    it passed the reviewer test. Found in review: the reviewer choice had no behavioural test
+    at all, so reverting it to `agent` - writable projection, network, sockets - stayed green.
+    """
+    argv = _session_argv(SessionRole.IMPLEMENTER)
+    assert any(a.endswith("verifier.sock") for a in argv), "an implementer keeps its sockets"
+    assert any(a.endswith("egress.sock") for a in argv), "and its egress socket"
+    assert any(a == "projection" for a in argv), "and a writable projection"
+
+
+def test_a_reviewer_session_gets_the_reviewer_profile() -> None:
+    """The reviewer must reach the reviewer builder, not the writable agent one."""
+    argv = _session_argv(SessionRole.REVIEWER)
+    assert not any("verifier.sock" in a for a in argv), "a reviewer gets no verifier socket"
+    assert not any("egress.sock" in a for a in argv), "a reviewer gets no egress socket"
+    assert "true" in argv, "the command reaches the sandbox unwrapped"

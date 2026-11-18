@@ -502,8 +502,18 @@ def _cmd_approve(args: argparse.Namespace, ctx: Context) -> int:
                 no_reference=args.no_reference,
                 reason=args.reason,
             )
-    except AuthorError as exc:
-        _emit(args, {"approved": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
+    except (AuthorError, StoreError) as exc:
+        # Same reason as `author recover`: both paths load the proposal record, and an
+        # unreadable one is a refusal the operator can act on, not a crash.
+        _emit(
+            args,
+            {
+                "approved": False,
+                "error": getattr(exc, "kind", "store"),
+                "message": str(exc),
+            },
+            f"refused: {exc}",
+        )
         return 1
     except FreezeError as exc:
         _emit(
@@ -544,8 +554,15 @@ def _cmd_author(args: argparse.Namespace, ctx: Context) -> int:
             args.task,
             actor=args.actor,
         )
-    except AuthorError as exc:
-        _emit(args, {"recovered": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
+    except (AuthorError, StoreError) as exc:
+        # A corrupt or missing proposal record is a refusal, not a traceback: the CLI is the
+        # only place an operator sees it, and a stack trace hides what went wrong.
+        kind = getattr(exc, "kind", "store")
+        _emit(
+            args,
+            {"recovered": False, "error": kind, "message": str(exc)},
+            f"refused: {exc}",
+        )
         return 1
     except FreezeError as exc:
         _emit(

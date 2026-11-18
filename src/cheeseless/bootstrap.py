@@ -774,6 +774,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     head, agent = split_agent_argv(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(head)
+    if args.command == "strength-review":
+        # `main` split the argv at `--`, so the reviewer command is in `agent`, not in the
+        # args the parser produced. Dropping it made `--run -- <agent>` report the command as
+        # missing: the documented form could never work.
+        args.reviewer_command = list(agent or [])
     if args.command is None:
         parser.print_help()
         return 2
@@ -875,6 +880,59 @@ def _close_pins(pins: list[tuple[int, str]]) -> None:
         fd, _ = pins.pop()
         with contextlib.suppress(OSError):
             os.close(fd)
+
+
+def _session_argv(
+    bound: SessionRole,
+    *,
+    bwrap: str,
+    projection: Path,
+    home: Path,
+    sockets: Sequence[Path],
+    read_only: Sequence[Path],
+    acceptance_fd: int | None,
+    acceptance_mode: str,
+    pinned_read_only: Sequence[tuple[int, str]],
+    env: Sequence[tuple[str, str]],
+    command: Sequence[str],
+    seccomp_fd: int | None,
+    info_fd: int,
+) -> list[str]:
+    """Choose the argv for one session. The role decides which guarantees apply.
+
+    Extracted so the choice itself is testable: it used to live inside `host_session`, where
+    nothing could check that a reviewer really got the reviewer profile rather than the
+    agent one, which is writable and networked.
+    """
+    if bound is SessionRole.REVIEWER:
+        # ADR 0015: no sockets and no egress. It judges the tests it was given; a channel to
+        # the host or the network would let something else judge for it.
+        return profiles.reviewer(
+            bwrap=bwrap,
+            projection=projection,
+            home=home,
+            read_only=read_only,
+            acceptance_fd=acceptance_fd,
+            pinned_read_only=pinned_read_only,
+            env=_reviewer_env(env),
+            command=command,
+            seccomp_fd=seccomp_fd,
+            info_fd=info_fd,
+        )
+    return profiles.agent(
+        bwrap=bwrap,
+        projection=projection,
+        sockets=sockets,
+        home=home,
+        read_only=read_only,
+        acceptance_fd=acceptance_fd,
+        acceptance_mode=acceptance_mode,
+        pinned_read_only=pinned_read_only,
+        env=env,
+        command=command,
+        seccomp_fd=seccomp_fd,
+        info_fd=info_fd,
+    )
 
 
 @contextmanager
@@ -1262,26 +1320,12 @@ def host_session(
         )
 
         def build_argv(info_fd: int) -> list[str]:
-            if bound is SessionRole.REVIEWER:
-                # ADR 0015: no sockets and no egress. It judges the tests it was given; a
-                # channel to the host or the network would let something else judge for it.
-                return profiles.reviewer(
-                    bwrap=bwrap,
-                    projection=projection_dir,
-                    home=home_dir,
-                    read_only=[runtime.root, python_root],
-                    acceptance_fd=pinned_acceptance,
-                    pinned_read_only=pinned_read_only,
-                    env=_reviewer_env(env),
-                    command=launch_command,
-                    seccomp_fd=seccomp_fd,
-                    info_fd=info_fd,
-                )
-            return profiles.agent(
+            return _session_argv(
+                bound,
                 bwrap=bwrap,
                 projection=projection_dir,
-                sockets=[socket_path, egress_socket],
                 home=home_dir,
+                sockets=[socket_path, egress_socket],
                 read_only=[runtime.root, python_root, proxy.ca_cert_path],
                 acceptance_fd=pinned_acceptance,
                 acceptance_mode=mount_mode,

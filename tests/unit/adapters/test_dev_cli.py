@@ -220,3 +220,43 @@ def test_strength_review_without_run_still_parses_a_verdict() -> None:
     )
     assert args.run is False
     assert args.passed is True
+
+
+def test_main_hands_the_strength_review_command_to_the_dispatcher(monkeypatch) -> None:
+    """`main` splits argv at `--`, so the reviewer command arrives out of band.
+
+    Found in review: bootstrap discarded that tail, so the documented
+    `strength-review --run -- <agent>` reported the command as missing and never launched
+    anything. This test drives the real `main`, which the parser-level tests did not.
+    """
+    from cheeseless import bootstrap
+
+    seen: dict[str, object] = {}
+
+    def fake_dispatch(args, ctx):  # type: ignore[no-untyped-def]
+        seen["command"] = args.command
+        seen["reviewer_command"] = list(args.reviewer_command)
+        seen["run"] = args.run
+        return 0
+
+    monkeypatch.setattr(bootstrap, "build_context", lambda *a, **k: object())
+    monkeypatch.setattr(bootstrap, "dispatch", fake_dispatch)
+    code = bootstrap.main(
+        [
+            "strength-review",
+            "--task",
+            "a" * 64,
+            "--author-model",
+            "claude-sonnet-5-5",
+            "--reviewer-model",
+            "gpt-6.2-sol",
+            "--run",
+            "--",
+            "claude",
+            "-p",
+        ]
+    )
+    assert code == 0
+    assert seen["command"] == "strength-review"
+    assert seen["reviewer_command"] == ["claude", "-p"]
+    assert seen["run"] is True
