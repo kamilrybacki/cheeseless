@@ -17,3 +17,4 @@ Only critical, long-lived decisions live here. Everything else goes to
 | [0010](0010-author-runner-candidate-broker.md) | Reach the candidate from the author sandbox only through a host broker | accepted |
 | [0013](0013-interactive-dev-mode.md) | Drive spec, tests and code from one host command, `cheeseless dev` | accepted (point 2 superseded by ADR-0014) |
 | [0014](0014-dev-reference-tui-pane.md) | Run the dev-mode reference as a visible TUI in a second pane | accepted |
+| [0015](0015-strength-review-record.md) | Gate auto-freeze on a stored, bound strength-review record | accepted |

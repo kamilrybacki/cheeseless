@@ -999,3 +999,37 @@ launches it), so this slice implements an accepted decision and adds no new ADR.
 | D13-8a | Scripted agents, not real model sessions | The property under test is the host's reaction to events, not a model's behaviour. A fake agent that emits the same events keeps the run deterministic and cheap, and the freeze approval stays a human step (D13-6a) supplied explicitly rather than automated away. `planning/phase11-e2e.md` recorded this as the open choice; this closes it. |
 | D13-8b | **Bug found:** `require_clean_tree` took a `dirty` callable while the port exposes `is_clean()` | Every caller therefore had to write `lambda: not repo.is_clean()`, and the E2E test got the sign wrong, asserting a *clean* repo was refused. The production path in `bootstrap_dev` happened to pass `not …` and was correct, so no behaviour changed; the parameter now names the positive fact (`is_clean`) and the guard reads `if not clean`. `test_the_precondition_takes_the_clean_fact_not_a_dirty_flag` pins the name and the polarity. |
 | D13-8c | **Corrected understanding:** the implementer gets `acceptance/` read-only, not a tree without tests | `_projection_tree` only cuts the tree down for a REFERENCE; for an implementer the protection is `acceptance_mount(...) == "ro"`, a different mechanism. My first E2E test asserted "the implementer projection holds no test" and failed against correct code. The test now asserts the three mount modes, and says in its docstring that the two mechanisms are easy to confuse. |
+
+## ADR 0015 review: findings and their dispositions
+
+ADR 0013 point 3 already decided auto-freeze; what was missing was the mechanism, and a mechanism
+that decides who may freeze alone is not a ledger row. ADR 0015 records it. Reviewers:
+`gpt-6.2-sol`, `gpt-6.2-astra` (codex, two independent runs), `gemini-flash` (cross-vendor).
+
+Round 1 — **REJECT** from both codex reviewers. All four blockers were verified in the code
+before being accepted, not taken on trust.
+
+| # | finding | disposition |
+|---|---|---|
+| R15-1 | `actor == "cheeseless-dev"` cannot separate an automatic from an operator approval, because `cli/main.py:_cmd_approve` passes a caller-chosen `--as` | Accepted. A separate `auto_approve_freeze` use case sets the actor itself; the label never selects the mode (Decision 1). |
+| R15-2 | The verdict must bind to a snapshot the reviewer actually saw, not be stamped with the current proposal's ids | Accepted. The host records the three keys before the session and re-checks at approval (Decision 2). |
+| R15-3 | Cross-vendor independence must come from trusted launch config; a reviewer-reported model id is self-attestation | Accepted. Both vendors are compared from config recorded at their own launches (Decision 4). |
+| R15-4 | `--no-reference` waives the crosscheck in `_ready`, so a strength-review gate alone would still allow auto-freeze without a green crosscheck | Accepted, and real: `_ready` skips `_crosscheck_problem` when `no_reference` is set. The auto path refuses the waiver (Decision 1). |
+| R15-5 | Reuse/supersession of a verdict across re-proposals was undefined | Accepted in part: `proposal_id` is content-derived, so an identical proposal legitimately reuses a verdict that still binds all three keys; anything else fails the binding. No extra rule needed. |
+
+Round 2 — four blockers RESOLVED, then two SHOULD-FIX, both accepted and applied:
+
+| # | finding | disposition |
+|---|---|---|
+| R15-6 | "its trees" did not say which trees, and the record omits `reference_tree` which `_crosscheck_problem` binds | Accepted. Decision 2 names the three keys and says a changed reference is the crosscheck's job, which is where it is already caught. |
+| R15-7 | "both vendors" did not say which sessions' vendors | Accepted. Decision 4 compares the vendors recorded at the author's and the reviewer's launches, not the current defaults. |
+
+Round 3 — cross-vendor reviewer (**ACCEPT WITH CHANGES**), the finding that mattered most:
+
+| # | finding | disposition |
+|---|---|---|
+| R15-8 | Gating an irreversible action on one model's verdict contradicts ADR 0009, which rejected the LLM judge as "opaque, one more model to trust, no executable evidence" | **Partly rejected, with the text corrected.** ADR 0009 rejected an LLM judge *in place of* executable evidence; ADR 0013 point 3 adds this gate *on top of* every deterministic check, and Decision 3's preamble now says so explicitly. The finding did expose that the ADR read as if the review replaced something, which it does not. |
+| R15-9 | The verdict-extraction protocol from a read-only sandbox was unspecified | Accepted. Decision 3: a structured line the host parses, never a phrase it greps. |
+| R15-10 | Indirect prompt injection: the author's own test text is untrusted input the reviewer reads | Accepted into Consequences. This is the sharpest residual risk and it is now stated rather than hidden. |
+| R15-11 | "evidence and approval are different facts" overstates it, since the host is both witness and judge | Rejected as a framing change but the claim narrowed: the record is checkable *afterwards* and separates the two facts in the store; it never claimed an independent auditor. Consequences say a review ran, not that it was good. |
+| R15-12 | Simpler alternative: keep the freeze interactive and show the review as advisory | Rejected. That is the third option in the ADR, already available and unchanged; ADR 0013 point 3 chose the auto path for users who opt into it, and this ADR only makes it possible with evidence. |
