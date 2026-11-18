@@ -16,6 +16,7 @@ from cheeseless.app.authoring import (
     AuthorError,
     AuthorStore,
     approve_freeze,
+    auto_approve_freeze,
     record_reference,
     recover_approval,
     reference_failed,
@@ -117,6 +118,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Waive the reference crosscheck; needs --reason.",
     )
     freeze.add_argument("--reason", default="", help="Why the crosscheck is waived.")
+    freeze.add_argument(
+        "--auto",
+        action="store_true",
+        help="Host only: the automatic approval, needing a stored strength review (ADR 0015).",
+    )
     freeze.add_argument("--json", action="store_true")
 
     ref = sub.add_parser("reference", help="Host only: reference-session bookkeeping.")
@@ -383,22 +389,36 @@ def _emit(args: argparse.Namespace, payload: dict[str, object], text: str) -> No
 
 
 def _cmd_approve(args: argparse.Namespace, ctx: Context) -> int:
-    if not args.actor:
+    if args.auto and (args.actor or args.no_reference):
+        print("--auto takes no --as and cannot waive the crosscheck", file=sys.stderr)
+        return 2
+    if not args.auto and not args.actor:
         print("--approve needs --as <actor>", file=sys.stderr)
         return 2
     try:
         if ctx.author_sandbox is None:
             raise AuthorError("no_author_sandbox", "no contained author runner is available")
-        result = approve_freeze(
-            ctx.repo,
-            ctx.sandbox,
-            ctx.author_sandbox,
-            _author_store(ctx),
-            args.approve,
-            actor=args.actor,
-            no_reference=args.no_reference,
-            reason=args.reason,
-        )
+        if args.auto:
+            # The actor is the host's, not the caller's: the flag selects the mode, never the
+            # identity recorded against it (ADR 0015 decision 1).
+            result = auto_approve_freeze(
+                ctx.repo,
+                ctx.sandbox,
+                ctx.author_sandbox,
+                _author_store(ctx),
+                args.approve,
+            )
+        else:
+            result = approve_freeze(
+                ctx.repo,
+                ctx.sandbox,
+                ctx.author_sandbox,
+                _author_store(ctx),
+                args.approve,
+                actor=args.actor,
+                no_reference=args.no_reference,
+                reason=args.reason,
+            )
     except AuthorError as exc:
         _emit(args, {"approved": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
         return 1

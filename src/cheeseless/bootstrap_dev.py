@@ -117,9 +117,10 @@ def _tests_phase(
     """The tests phase cannot close without a done reference (ADR 0013 point 3).
 
     The reference is its own host process (ADR 0014), so this reports the next command
-    rather than nesting a second sandbox. It never approves a freeze: ADR 0013 lets the
-    host approve as ``cheeseless-dev`` only after a strength review, and no store record
-    can prove one yet (planning/dev-tests-phase.md, D13-6a).
+    rather than nesting a second sandbox. It still never approves a freeze: the automatic
+    approval needs a per-proposal `StrengthReview`, and nothing in this phase has run a
+    reviewer yet. `cheeseless freeze --approve … --auto` is where that gate applies
+    (ADR 0015, D13-6a).
     """
     digest = start.spec_digest or ""
     try:

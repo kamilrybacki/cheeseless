@@ -35,6 +35,7 @@ from cheeseless.domain.authoring import (
     TaskPhase,
     crosscheck_binds,
     spec_digest,
+    strength_review_binds,
 )
 from cheeseless.domain.contract import Contract, canonical_contract_bytes
 from cheeseless.domain.dlp import redact_sentinels, sentinel_problems
@@ -57,6 +58,11 @@ class AuthorError(Exception):
 
 class AuthorStore(Store, AuthoringStore, Protocol):
     """The trusted store as the authoring use cases need it."""
+
+
+# The actor an automatic approval records. Set by ``auto_approve_freeze`` itself, so a
+# caller-chosen ``--as`` label can never stand in for it (ADR 0015 decision 1).
+DEV_ACTOR = "cheeseless-dev"
 
 
 @dataclass(frozen=True, slots=True)
@@ -566,12 +572,74 @@ def _ready(repo: Repository, store: AuthoringStore, proposal: Proposal, no_refer
             raise problem
 
 
+def _strength_review_problem(store: AuthoringStore, proposal: Proposal) -> AuthorError | None:
+    """Why this proposal may not be frozen automatically, or ``None``.
+
+    ADR 0015: the host may freeze alone only with a green review by another vendor that binds
+    exactly this proposal."""
+    review = store.load_strength_review(proposal.proposal_id)
+    if review is None:
+        return AuthorError(
+            "no_strength_review",
+            "auto-freeze needs a passing strength review; run the reviewer first",
+        )
+    if not strength_review_binds(
+        review,
+        proposal_id=proposal.proposal_id,
+        acceptance_tree=proposal.acceptance_tree,
+        spec_digest=proposal.spec_digest,
+        baseline_commit=proposal.baseline_commit,
+    ):
+        return AuthorError(
+            "stale_strength_review",
+            "the strength review covers a different acceptance tree, spec or baseline",
+        )
+    if not review.green:
+        return AuthorError("strength_review_failed", "the strength review did not pass")
+    if review.author_vendor == review.reviewer_vendor:
+        return AuthorError(
+            "strength_review_not_independent",
+            "the reviewer must come from another vendor than the author",
+        )
+    return None
+
+
+def auto_approve_freeze(
+    repo: Repository,
+    sandbox: Sandbox,
+    author_sandbox: AuthorSandbox,
+    store: AuthorStore,
+    proposal_id: str,
+) -> object:
+    """Host-only: freeze a proposal the host reviewed itself, as ``cheeseless-dev``.
+
+    ADR 0013 point 3 as ADR 0015 makes it checkable. The actor is set here, never taken from a
+    caller-supplied label, and the ``--no-reference`` waiver is refused: an automatic approval
+    cannot waive the crosscheck that the operator would have to waive in person.
+    """
+    proposal = store.load_proposal(proposal_id)
+    if proposal is None:
+        raise AuthorError("unknown_proposal", "no such proposal")
+    problem = _strength_review_problem(store, proposal)
+    if problem is not None:
+        raise problem
+    return approve_freeze(
+        repo,
+        sandbox,
+        author_sandbox,
+        store,
+        proposal_id,
+        actor=DEV_ACTOR,
+    )
+
+
 __all__ = [
     "DRIVER",
     "RESULT_MARK",
     "AuthorCheckResult",
     "AuthorError",
     "approve_freeze",
+    "auto_approve_freeze",
     "author_check",
     "author_crosscheck",
     "freeze_propose",

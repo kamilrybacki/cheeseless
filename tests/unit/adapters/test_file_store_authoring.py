@@ -11,6 +11,7 @@ from cheeseless.domain.authoring import (
     AuthoringState,
     CrosscheckRecord,
     Proposal,
+    StrengthReview,
     TaskPhase,
 )
 from cheeseless.ports.store import StoreError
@@ -59,6 +60,22 @@ def test_crosscheck_round_trip(store: FileStore) -> None:
     assert store.load_crosscheck(PID) is None
     store.save_crosscheck(PID, "demo", rec, expected_version=0)
     assert store.load_crosscheck(PID) == rec
+
+
+def test_strength_review_round_trip(store: FileStore) -> None:
+    rec = StrengthReview(PID, OID, SPEC, OID, True, "openai", "anthropic")
+    assert store.load_strength_review(PID) is None
+    store.save_strength_review(PID, "demo", rec, expected_version=0)
+    assert store.load_strength_review(PID) == rec
+
+
+def test_a_strength_review_is_conditional_on_the_state_version(store: FileStore) -> None:
+    read = store.authoring_state("demo", SPEC)
+    store.save_authoring_state(read.proposed())
+    rec = StrengthReview(PID, OID, SPEC, OID, True, "openai", "anthropic")
+    with pytest.raises(AuthoringError, match="changed"):
+        store.save_strength_review(PID, "demo", rec, expected_version=read.version)
+    assert store.load_strength_review(PID) is None
 
 
 def test_files_are_private_and_lazy(store: FileStore, tmp_path: Path) -> None:

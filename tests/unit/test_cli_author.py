@@ -263,3 +263,59 @@ def test_promote_snapshot_refusal_text_escapes_the_path(monkeypatch, capsys) -> 
     assert cli.main(["promote", "--role", "author"], context=ctx) == 1
     err = capsys.readouterr().err
     assert "internal error" not in err and "\x1b" not in err and "symlink" in err
+
+
+# -- the automatic approval (ADR 0015) ---------------------------------------
+
+
+def test_parser_accepts_auto() -> None:
+    a = cli.build_parser().parse_args(["freeze", "--approve", "p1", "--auto", "--json"])
+    assert a.auto is True and a.actor is None
+
+
+def test_auto_routes_to_the_host_use_case(monkeypatch, capsys) -> None:
+    seen = {}
+
+    def fake(repo, sandbox, author_sandbox, store, pid):
+        seen["pid"] = pid
+        return SimpleNamespace(task_id="t" * 64, seed=b"s")
+
+    monkeypatch.setattr(cli, "auto_approve_freeze", fake)
+    monkeypatch.setattr(cli, "approve_freeze", _unreachable)
+    code = cli.main(["freeze", "--approve", "p1", "--auto", "--json"], context=_ctx())
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0 and seen == {"pid": "p1"}
+    assert out["approved"] is True
+
+
+def test_auto_takes_no_actor(capsys) -> None:
+    """Naming an actor would let the caller choose the identity an automatic approval records."""
+    code = cli.main(
+        ["freeze", "--approve", "p1", "--auto", "--as", "cheeseless-dev"], context=_ctx()
+    )
+    assert code == 2
+    assert "--auto" in capsys.readouterr().err
+
+
+def test_auto_cannot_waive_the_crosscheck(capsys) -> None:
+    """`--no-reference` is the operator's waiver; an automatic approval cannot take it."""
+    code = cli.main(
+        ["freeze", "--approve", "p1", "--auto", "--no-reference", "--reason", "r"],
+        context=_ctx(),
+    )
+    assert code == 2
+    assert "--auto" in capsys.readouterr().err
+
+
+def test_auto_refuses_without_a_strength_review(monkeypatch, capsys) -> None:
+    def boom(*a, **k):
+        raise AuthorError("no_strength_review", "no review")
+
+    monkeypatch.setattr(cli, "auto_approve_freeze", boom)
+    code = cli.main(["freeze", "--approve", "p", "--auto", "--json"], context=_ctx())
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["error"] == "no_strength_review"
+
+
+def _unreachable(*a, **k):
+    raise AssertionError("the operator path must not run for --auto")

@@ -19,6 +19,7 @@ from cheeseless.domain.authoring import (
     AuthoringState,
     CrosscheckRecord,
     Proposal,
+    StrengthReview,
     TaskPhase,
 )
 from cheeseless.ports.store import StoreError
@@ -262,3 +263,46 @@ class AuthoringStoreMixin:
             )
         except (KeyError, ValueError, TypeError) as exc:
             raise StoreError(f"corrupt crosscheck {pid}: {exc}") from exc
+
+    # -- strength review -----------------------------------------------------
+
+    def save_strength_review(
+        self,
+        proposal_id: str,
+        lineage_id: str,
+        record: StrengthReview,
+        *,
+        expected_version: int,
+    ) -> None:
+        pid = _digest(proposal_id, "proposal id")
+        self._write_if_current(
+            _lineage(lineage_id),
+            expected_version,
+            f"strength-review-{pid}.json",
+            {
+                "acceptance_tree": record.acceptance_tree,
+                "spec_digest": record.spec_digest,
+                "baseline_commit": record.baseline_commit,
+                "green": record.green,
+                "author_vendor": record.author_vendor,
+                "reviewer_vendor": record.reviewer_vendor,
+            },
+        )
+
+    def load_strength_review(self, proposal_id: str) -> StrengthReview | None:
+        pid = _digest(proposal_id, "proposal id")
+        data = self._read_authoring(f"strength-review-{pid}.json")
+        if data is None:
+            return None
+        try:
+            return StrengthReview(
+                proposal_id=proposal_id,
+                acceptance_tree=str(data["acceptance_tree"]),
+                spec_digest=str(data["spec_digest"]),
+                baseline_commit=str(data["baseline_commit"]),
+                green=bool(data["green"]),
+                author_vendor=str(data["author_vendor"]),
+                reviewer_vendor=str(data["reviewer_vendor"]),
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            raise StoreError(f"corrupt strength review {pid}: {exc}") from exc

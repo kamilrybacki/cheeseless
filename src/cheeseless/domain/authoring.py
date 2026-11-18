@@ -172,6 +172,84 @@ class CrosscheckRecord:
             raise ValueError("a green crosscheck cannot list red criteria")
 
 
+# Model family -> who makes it. Independence is decided here, from the family the host
+# launched, never from a string the reviewer reported (ADR 0015 decision 4).
+_VENDORS: tuple[tuple[str, str], ...] = (
+    ("gpt", "openai"),
+    ("o1", "openai"),
+    ("o3", "openai"),
+    ("o4", "openai"),
+    ("claude", "anthropic"),
+    ("gemini", "google"),
+    ("deepseek", "deepseek"),
+    ("llama", "meta"),
+    ("qwen", "alibaba"),
+    ("mistral", "mistral"),
+)
+
+
+def vendor_of_model(model: str) -> str | None:
+    """The vendor that makes ``model``, or ``None`` if it is not a recognised family.
+
+    ``None`` is not a fallback to "unknown": callers must refuse, never guess.
+    """
+    name = model.rsplit("/", 1)[-1].lower()
+    for prefix, vendor in _VENDORS:
+        if name.startswith(prefix):
+            return vendor
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class StrengthReview:
+    """Host-written evidence that another vendor reviewed a proposal's tests (ADR 0015).
+
+    Only the host writes this, and only after a reviewer session it launched itself. There is
+    deliberately no free-text field: a place to argue is a place to hide an argument.
+    """
+
+    proposal_id: str
+    acceptance_tree: str
+    spec_digest: str
+    baseline_commit: str
+    green: bool
+    author_vendor: str
+    reviewer_vendor: str
+
+    def __post_init__(self) -> None:
+        ids.sha256_hex(self.proposal_id, "proposal id")
+        ids.git_oid(self.acceptance_tree)
+        ids.sha256_hex(self.spec_digest, "spec digest")
+        ids.git_oid(self.baseline_commit)
+        for field, value in (
+            ("author", self.author_vendor),
+            ("reviewer", self.reviewer_vendor),
+        ):
+            if not value:
+                raise ValueError(f"the {field} vendor cannot be empty")
+        # A green review by the author's own vendor is not a review; it is the author agreeing
+        # with itself. Refused at construction so it can never reach the store.
+        if self.green and self.author_vendor == self.reviewer_vendor:
+            raise ValueError("a green review needs a reviewer from another vendor")
+
+
+def strength_review_binds(
+    record: StrengthReview,
+    *,
+    proposal_id: str,
+    acceptance_tree: str,
+    spec_digest: str,
+    baseline_commit: str,
+) -> bool:
+    """Whether ``record`` reviewed exactly the proposal now being approved."""
+    return (
+        record.proposal_id == proposal_id
+        and record.acceptance_tree == acceptance_tree
+        and record.spec_digest == spec_digest
+        and record.baseline_commit == baseline_commit
+    )
+
+
 def crosscheck_binds(
     record: CrosscheckRecord,
     *,
@@ -194,7 +272,10 @@ __all__ = [
     "AuthoringState",
     "CrosscheckRecord",
     "Proposal",
+    "StrengthReview",
     "TaskPhase",
     "crosscheck_binds",
     "spec_digest",
+    "strength_review_binds",
+    "vendor_of_model",
 ]

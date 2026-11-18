@@ -3,7 +3,12 @@
 from contextlib import AbstractContextManager
 from typing import Protocol
 
-from cheeseless.domain.authoring import AuthoringState, CrosscheckRecord, Proposal
+from cheeseless.domain.authoring import (
+    AuthoringState,
+    CrosscheckRecord,
+    Proposal,
+    StrengthReview,
+)
 
 
 class AuthoringStore(Protocol):
@@ -67,3 +72,14 @@ class AuthoringStore(Protocol):
         ...
 
     def load_crosscheck(self, proposal_id: str) -> CrosscheckRecord | None: ...
+
+    def save_strength_review(
+        self, proposal_id: str, lineage_id: str, record: StrengthReview, *, expected_version: int
+    ) -> None:
+        """Record another vendor's review of a proposal's tests (ADR 0015).
+
+        Written by the host only, after a reviewer session the host launched. Conditional on
+        the lifecycle version, like ``save_reference``."""
+        ...
+
+    def load_strength_review(self, proposal_id: str) -> StrengthReview | None: ...
