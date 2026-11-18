@@ -18,6 +18,7 @@ from cheeseless.app.authoring import (
     approve_freeze,
     auto_approve_freeze,
     record_reference,
+    record_strength_review,
     recover_approval,
     reference_failed,
     start_reference,
@@ -137,6 +138,21 @@ def build_parser() -> argparse.ArgumentParser:
         rp.add_argument("--json", action="store_true")
         if name == "record":
             rp.add_argument("--worktree", type=Path, required=True)
+
+    review = sub.add_parser(
+        "strength-review", help="Host only: record another vendor's review of a proposal."
+    )
+    review.add_argument("--task", required=True, help="The proposal (task) id.")
+    verdict = review.add_mutually_exclusive_group(required=True)
+    verdict.add_argument("--passed", action="store_true", help="The review found the tests sound.")
+    verdict.add_argument("--failed", action="store_true", help="The review did not.")
+    review.add_argument(
+        "--author-model", required=True, help="The model that wrote the tests (as launched)."
+    )
+    review.add_argument(
+        "--reviewer-model", required=True, help="The model that reviewed them (as launched)."
+    )
+    review.add_argument("--json", action="store_true")
 
     auth = sub.add_parser("author", help="Host only: authoring lifecycle recovery.")
     asub = auth.add_subparsers(dest="author_command")
@@ -386,6 +402,34 @@ def _emit(args: argparse.Namespace, payload: dict[str, object], text: str) -> No
         _print_json(payload)
     else:
         print(text)
+
+
+def _cmd_strength_review(args: argparse.Namespace, ctx: Context) -> int:
+    """Record a review the host ran. This stores evidence; it never approves anything."""
+    store = _author_store(ctx)
+    try:
+        review = record_strength_review(
+            store,
+            args.task,
+            green=bool(args.passed),
+            author_model=args.author_model,
+            reviewer_model=args.reviewer_model,
+        )
+    except AuthorError as exc:
+        _emit(args, {"recorded": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
+        return 1
+    _emit(
+        args,
+        {
+            "recorded": True,
+            "proposal_id": review.proposal_id,
+            "green": review.green,
+            "author_vendor": review.author_vendor,
+            "reviewer_vendor": review.reviewer_vendor,
+        },
+        "recorded the strength review",
+    )
+    return 0
 
 
 def _cmd_approve(args: argparse.Namespace, ctx: Context) -> int:
@@ -746,6 +790,8 @@ _NEXT_STEP = {
 
 
 def dispatch(args: argparse.Namespace, ctx: Context) -> int:
+    if args.command == "strength-review":
+        return _cmd_strength_review(args, ctx)
     if args.command == "freeze":
         return _cmd_freeze(args, ctx)
     if args.command == "reference":

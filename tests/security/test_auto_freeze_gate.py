@@ -137,3 +137,94 @@ def test_the_refusal_never_reaches_the_freeze() -> None:
     problem_check = source.index("_strength_review_problem")
     approve_call = source.index("return approve_freeze")
     assert problem_check < approve_call
+
+
+# -- writing the record (ADR 0015 decision 4) --------------------------------
+#
+# Vendors come from the models the host launched. A reviewer that could name its own
+# vendor would be attesting to its own independence.
+
+from cheeseless.app.authoring import record_strength_review  # noqa: E402
+
+
+class _WritingStore(_Store):
+    def __init__(self, proposal: Proposal) -> None:
+        super().__init__(proposal, None)
+        self.saved: StrengthReview | None = None
+
+    def load_proposal(self, proposal_id: str) -> Proposal | None:
+        # Only the stored proposal exists; any other id is the unknown case.
+        return self._proposal if self._proposal.proposal_id == proposal_id else None
+
+    def authoring_state(self, lineage_id: str, spec_digest: str) -> object:
+        return type("S", (), {"version": 3})()
+
+    def save_strength_review(self, pid, lineage, record, *, expected_version):
+        assert expected_version == 3
+        self.saved = record
+
+
+def test_the_host_derives_the_vendors_from_the_models_it_launched() -> None:
+    store = _WritingStore(_proposal())
+    review = record_strength_review(
+        store, PID, green=True, author_model="gpt-6.2-sol", reviewer_model="claude-opus-5"
+    )
+    assert (review.author_vendor, review.reviewer_vendor) == ("openai", "anthropic")
+    assert review.green and store.saved == review
+
+
+def test_a_review_by_the_author_model_family_is_refused() -> None:
+    with pytest.raises(AuthorError) as exc:
+        record_strength_review(
+            _WritingStore(_proposal()),
+            PID,
+            green=True,
+            author_model="gpt-6.2-sol",
+            reviewer_model="gpt-6.2-astra",
+        )
+    assert exc.value.kind == "strength_review_not_independent"
+
+
+@pytest.mark.parametrize("model", ["totally-unknown", "internal-ft-v1"])
+def test_an_unrecognised_model_is_refused_rather_than_assumed_independent(model: str) -> None:
+    """Guessing a vendor here would make the independence check meaningless."""
+    with pytest.raises(AuthorError) as exc:
+        record_strength_review(
+            _WritingStore(_proposal()),
+            PID,
+            green=True,
+            author_model="gpt-6.2-sol",
+            reviewer_model=model,
+        )
+    assert exc.value.kind == "unknown_vendor"
+
+
+def test_a_red_review_is_recordable() -> None:
+    """A failed review is a result, not an error; it must be storable to be honest."""
+    review = record_strength_review(
+        _WritingStore(_proposal()),
+        PID,
+        green=False,
+        author_model="gpt-6.2-sol",
+        reviewer_model="claude-opus-5",
+    )
+    assert not review.green
+
+
+def test_an_unknown_proposal_is_refused() -> None:
+    with pytest.raises(AuthorError) as exc:
+        record_strength_review(
+            _WritingStore(_proposal()),
+            "f" * 64,
+            green=True,
+            author_model="gpt-6.2-sol",
+            reviewer_model="claude-opus-5",
+        )
+    assert exc.value.kind == "unknown_proposal"
+
+
+def test_recording_a_review_never_freezes_anything() -> None:
+    """Writing evidence and acting on it stay separate (Decision 1)."""
+    source = inspect.getsource(record_strength_review)
+    assert "approve_freeze" not in source
+    assert "auto_approve_freeze" not in source

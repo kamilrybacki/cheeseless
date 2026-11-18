@@ -319,3 +319,96 @@ def test_auto_refuses_without_a_strength_review(monkeypatch, capsys) -> None:
 
 def _unreachable(*a, **k):
     raise AssertionError("the operator path must not run for --auto")
+
+
+# -- recording a strength review (ADR 0015) ----------------------------------
+
+
+def test_parser_accepts_strength_review() -> None:
+    a = cli.build_parser().parse_args(
+        [
+            "strength-review",
+            "--task",
+            "p1",
+            "--passed",
+            "--author-model",
+            "gpt-6.2-sol",
+            "--reviewer-model",
+            "claude-opus-5",
+            "--json",
+        ]
+    )
+    assert (a.task, a.passed, a.failed) == ("p1", True, False)
+
+
+def test_strength_review_needs_a_verdict() -> None:
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(
+            [
+                "strength-review",
+                "--task",
+                "p1",
+                "--author-model",
+                "a",
+                "--reviewer-model",
+                "b",
+            ]
+        )
+
+
+def test_strength_review_records_and_reports(monkeypatch, capsys) -> None:
+    seen = {}
+
+    def fake(store, pid, **kw):
+        seen.update(pid=pid, **kw)
+        return SimpleNamespace(
+            proposal_id=pid, green=True, author_vendor="openai", reviewer_vendor="anthropic"
+        )
+
+    monkeypatch.setattr(cli, "record_strength_review", fake)
+    code = cli.main(
+        [
+            "strength-review",
+            "--task",
+            "p1",
+            "--passed",
+            "--author-model",
+            "gpt-6.2-sol",
+            "--reviewer-model",
+            "claude-opus-5",
+            "--json",
+        ],
+        context=_ctx(),
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0 and out["recorded"] is True
+    assert seen == {
+        "pid": "p1",
+        "green": True,
+        "author_model": "gpt-6.2-sol",
+        "reviewer_model": "claude-opus-5",
+    }
+
+
+def test_strength_review_refusal_is_reported(monkeypatch, capsys) -> None:
+    def boom(*a, **k):
+        raise AuthorError("strength_review_not_independent", "same vendor")
+
+    monkeypatch.setattr(cli, "record_strength_review", boom)
+    code = cli.main(
+        [
+            "strength-review",
+            "--task",
+            "p1",
+            "--failed",
+            "--author-model",
+            "gpt-6.2-sol",
+            "--reviewer-model",
+            "gpt-6.2-astra",
+            "--json",
+        ],
+        context=_ctx(),
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["recorded"] is False
+    assert out["error"] == "strength_review_not_independent"

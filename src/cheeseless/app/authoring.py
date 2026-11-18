@@ -32,10 +32,12 @@ from cheeseless.domain.authoring import (
     AuthoringState,
     CrosscheckRecord,
     Proposal,
+    StrengthReview,
     TaskPhase,
     crosscheck_binds,
     spec_digest,
     strength_review_binds,
+    vendor_of_model,
 )
 from cheeseless.domain.contract import Contract, canonical_contract_bytes
 from cheeseless.domain.dlp import redact_sentinels, sentinel_problems
@@ -572,6 +574,55 @@ def _ready(repo: Repository, store: AuthoringStore, proposal: Proposal, no_refer
             raise problem
 
 
+def record_strength_review(
+    store: AuthorStore,
+    proposal_id: str,
+    *,
+    green: bool,
+    author_model: str,
+    reviewer_model: str,
+) -> StrengthReview:
+    """Host-only: store another vendor's review of a proposal's tests (ADR 0015).
+
+    Called after the reviewer session ends, never before: the record says a review happened.
+    Both vendors come from the model ids the *host* launched, not from anything the reviewer
+    reported about itself (Decision 4).
+    """
+    proposal = store.load_proposal(proposal_id)
+    if proposal is None:
+        raise AuthorError("unknown_proposal", "no such proposal")
+    author_vendor = vendor_of_model(author_model)
+    reviewer_vendor = vendor_of_model(reviewer_model)
+    if author_vendor is None:
+        raise AuthorError("unknown_vendor", f"cannot tell who makes {author_model!r}")
+    if reviewer_vendor is None:
+        raise AuthorError("unknown_vendor", f"cannot tell who makes {reviewer_model!r}")
+    if reviewer_vendor == author_vendor:
+        raise AuthorError(
+            "strength_review_not_independent",
+            "the reviewer must come from another vendor than the author",
+        )
+    state = store.authoring_state(proposal.lineage_id, proposal.spec_digest)
+    review = StrengthReview(
+        proposal_id=proposal.proposal_id,
+        acceptance_tree=proposal.acceptance_tree,
+        spec_digest=proposal.spec_digest,
+        baseline_commit=proposal.baseline_commit,
+        green=green,
+        author_vendor=author_vendor,
+        reviewer_vendor=reviewer_vendor,
+    )
+    _publish(
+        lambda: store.save_strength_review(
+            proposal.proposal_id,
+            proposal.lineage_id,
+            review,
+            expected_version=state.version,
+        )
+    )
+    return review
+
+
 def _strength_review_problem(store: AuthoringStore, proposal: Proposal) -> AuthorError | None:
     """Why this proposal may not be frozen automatically, or ``None``.
 
@@ -645,6 +696,7 @@ __all__ = [
     "freeze_propose",
     "proposal_id_for",
     "read_contract",
+    "record_strength_review",
     "recover_approval",
     "record_reference",
     "reference_failed",

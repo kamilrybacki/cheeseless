@@ -1033,3 +1033,26 @@ Round 3 — cross-vendor reviewer (**ACCEPT WITH CHANGES**), the finding that ma
 | R15-10 | Indirect prompt injection: the author's own test text is untrusted input the reviewer reads | Accepted into Consequences. This is the sharpest residual risk and it is now stated rather than hidden. |
 | R15-11 | "evidence and approval are different facts" overstates it, since the host is both witness and judge | Rejected as a framing change but the claim narrowed: the record is checkable *afterwards* and separates the two facts in the store; it never claimed an independent auditor. Consequences say a review ran, not that it was good. |
 | R15-12 | Simpler alternative: keep the freeze interactive and show the review as advisory | Rejected. That is the third option in the ADR, already available and unchanged; ADR 0013 point 3 chose the auto path for users who opt into it, and this ADR only makes it possible with evidence. |
+
+## ADR 0015 implementation
+
+- **D15-1**: `StrengthReview.__post_init__` refuses a green review whose reviewer vendor equals
+  the author's. Putting the check in the type rather than only in the approval path means such a
+  record cannot be *stored* at all, so no later reader has to remember to check it.
+- **D15-2**: `vendor_of_model` returns `None` for an unrecognised family, never a guess, and
+  `record_strength_review` refuses on `None`. A guessed vendor would make the independence check
+  compare two invented strings.
+- **D15-3**: `auto_approve_freeze` takes no `actor`, `no_reference` or `reason` parameter.
+  A security test asserts the signature, because adding any of them later is exactly how the
+  guarantee erodes. The CLI's `--auto` *rejects* `--as` and `--no-reference` rather than silently
+  ignoring them: an accepted-but-dropped flag looks like it worked.
+- **D15-4**: `record_strength_review` never calls an approval function; a security test asserts the
+  source holds no such call. Writing the evidence and acting on it stay separate.
+- **D15-5**: the reference is deliberately not in `StrengthReview`. A changed reference already
+  invalidates the crosscheck (`_crosscheck_problem` binds `reference_tree`), and duplicating it
+  here would make two places disagree about what a stale review is.
+- **D15-6**: `planning/dev-mode.md` Phase 3 asked for a security test that auto-freeze refuses
+  without a passing strength review, and one that the reviewer sandbox is read-only.
+  `tests/security/test_auto_freeze_gate.py` covers the first (seven refusal cases plus the
+  signature and actor pins). The second belongs to the reviewer sandbox, which does not exist yet:
+  recording a review is possible, *running* the reviewer is not, so this remains the open gap.
