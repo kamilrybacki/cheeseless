@@ -117,10 +117,10 @@ def _wait(fd: int, event: int, deadline: float) -> None:
         if left <= 0:
             raise PresenceRefused("timed out")
         for _fd, happened in poller.poll(max(1, int(left * 1000))):
+            if happened & _HANGUP:  # checked first: data that arrives with a hangup is refused
+                raise PresenceRefused("the terminal hung up")
             if happened & event:
                 return
-            if happened & _HANGUP:
-                raise PresenceRefused("the terminal hung up")
 
 
 def _read(fd: int, size: int) -> bytes:

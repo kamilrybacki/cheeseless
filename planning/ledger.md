@@ -1600,3 +1600,6 @@ Deviations from the ADR text, all fail-closed:
   commits a retargeted contract while the operator answers and expects `lineage_changed` with
   auto-freeze off for both lineages. With the post-answer lineage check removed it fails
   (`DID NOT RAISE AuthorError`).
+
+## ADR 0017 implementation review — gpt-6-luna (2026-11-18)
+- MEDIUM, accepted: `_wait` returned on `POLLIN` before checking `POLLHUP|POLLERR|POLLNVAL`, so input buffered alongside a hangup could be accepted. Hangup bits are now checked first; `test_input_arriving_with_a_hangup_is_refused` proves it. Verdict was APPROVE-WITH-CHANGES; no other findings.

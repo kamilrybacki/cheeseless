@@ -211,6 +211,21 @@ def test_a_hangup_is_refused(term) -> None:
     assert isinstance(out, PresenceRefused)
 
 
+def test_input_arriving_with_a_hangup_is_refused(monkeypatch) -> None:
+    # poll() may report POLLIN and POLLHUP together; buffered input must not be accepted.
+    class _HungPoller:
+        def register(self, _fd, _mask) -> None:
+            pass
+
+        def poll(self, _timeout):
+            return [(0, select.POLLIN | select.POLLHUP)]
+
+    monkeypatch.setattr(tty_mod.select, "poll", _HungPoller)
+    with pytest.raises(PresenceRefused) as caught:
+        tty_mod._wait(0, select.POLLIN, time.monotonic() + 5)
+    assert "hung up" in caught.value.reason
+
+
 def test_overlong_input_is_refused_without_reading_it_all(term) -> None:
     out = _run(term, _answer_with(lambda code: code + b"A" * (MAX_ANSWER * 4) + b"\n"))
     assert isinstance(out, PresenceRefused) and "too long" in out.reason
