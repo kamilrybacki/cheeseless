@@ -37,5 +37,4 @@ author nor reviewer sees the seed before the suite is fixed (ADR 0005, as ADR 00
 
 ## Consequences
 - ✅ Auto-freeze is possible with evidence checkable afterwards, and impossible without it; a stale review is refused on the same three keys the proposal binds.
-- ⚠️ The record proves a review *ran*, not that it was good: the author's test text is untrusted input the reviewer reads, so a pass can be argued for. User approval stays stronger.
-- ⚠️ Vendor identity is only as trustworthy as the config declaring it.
+- ⚠️ The record proves a review *ran*, not that it was good: the author's test text is untrusted input the reviewer reads, so a pass can be argued for. User approval stays stronger. Vendor identity is only as trustworthy as the config declaring it.
