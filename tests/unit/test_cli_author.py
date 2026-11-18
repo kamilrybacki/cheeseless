@@ -9,12 +9,20 @@ from cheeseless.adapters.inbound.cli import main as cli
 from cheeseless.app.authoring import AuthorError
 from cheeseless.app.freeze import FreezeError
 from cheeseless.domain.authoring import AuthoringState, TaskPhase
+from tests.presence_fakes import Approving
+
+PRESENCE = Approving()
 
 
 def _ctx():
     repo = SimpleNamespace(head_commit=lambda: "a" * 40)
     return cli.Context(
-        repo=repo, runner=object(), sandbox=object(), store=object(), author_sandbox=object()
+        repo=repo,
+        runner=object(),
+        sandbox=object(),
+        store=object(),
+        author_sandbox=object(),
+        presence=PRESENCE,
     )
 
 
@@ -53,6 +61,7 @@ def test_approve_success_json(monkeypatch, capsys) -> None:
     out = json.loads(capsys.readouterr().out)
     assert code == 0 and out["approved"] is True and out["task_id"] == "t" * 64
     assert "seed" not in out
+    assert seen.pop("presence") is PRESENCE  # the CLI hands the use case its presence port
     assert seen == {"pid": "p1", "actor": "alice", "no_reference": True, "reason": "why"}
 
 
@@ -136,17 +145,17 @@ def test_reference_error_paths_report_refusal_not_a_traceback(
 def test_author_recover_success_and_refusal(monkeypatch, capsys) -> None:
     seen = {}
 
-    def fake(repo, sandbox, author_sandbox, store, pid, *, actor):
-        seen.update(pid=pid, actor=actor)
+    def fake(repo, sandbox, author_sandbox, store, pid, *, actor, presence):
+        seen.update(pid=pid, actor=actor, presence=presence)
         return "rolled_back"
 
     monkeypatch.setattr(cli, "recover_approval", fake)
     code = cli.main(["author", "recover", "--task", "p1", "--as", "op", "--json"], context=_ctx())
     out = json.loads(capsys.readouterr().out)
     assert code == 0 and out == {"recovered": True, "outcome": "rolled_back", "task_id": "p1"}
-    assert seen == {"pid": "p1", "actor": "op"}
+    assert seen == {"pid": "p1", "actor": "op", "presence": PRESENCE}
 
-    def alive(repo, sandbox, author_sandbox, store, pid, *, actor):
+    def alive(repo, sandbox, author_sandbox, store, pid, *, actor, presence):
         raise AuthorError("approver_alive", "an approver is still running")
 
     monkeypatch.setattr(cli, "recover_approval", alive)

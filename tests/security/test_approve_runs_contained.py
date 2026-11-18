@@ -18,6 +18,7 @@ from cheeseless.adapters.outbound.sandbox.bwrap import DEFAULT_BWRAP, BwrapSandb
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app import authoring as uc
 from cheeseless.app.author_driver import DRIVER
+from tests.presence_fakes import Approving
 from tests.toy import TOY_FILES, make_repo
 
 needs_bwrap = pytest.mark.skipif(
@@ -136,6 +137,7 @@ def test_approval_never_runs_proposed_code_in_the_host_context(host):
         actor="tester",
         no_reference=True,
         reason="contained-run security test",
+        presence=Approving(),
     )
     assert result.task_id == proposal.proposal_id
     assert not (host.store.root / "planted").exists()

@@ -17,6 +17,7 @@ from cheeseless.app.authoring import (
     AuthorStore,
     approve_freeze,
     auto_approve_freeze,
+    configure_auto_freeze,
     proposal_id_for,
     record_reference,
     record_strength_review,
@@ -36,8 +37,10 @@ from cheeseless.domain.authoring import AuthoringError
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.dispute import DEFAULT_CAP, DisputeRecord
 from cheeseless.domain.launcher import Launcher, LauncherError
+from cheeseless.domain.presence import PresenceRefused
 from cheeseless.domain.result import Result
 from cheeseless.ports.launchers import LauncherCatalog
+from cheeseless.ports.presence import PresenceProof
 from cheeseless.ports.repository import Repository, SnapshotRejected
 from cheeseless.ports.runner import SuiteRunner
 from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
@@ -59,6 +62,9 @@ class Context:
     ) = None
     # The operator's trusted launcher declarations (`--launcher NAME`).
     launchers: LauncherCatalog | None = None
+    # Wired by the bootstrap: the controlling-terminal challenge for attended decisions
+    # (ADR 0017). Absent means every attended decision is refused, never skipped.
+    presence: PresenceProof | None = None
 
 
 def split_agent_argv(argv: Sequence[str]) -> tuple[list[str], list[str] | None]:
@@ -560,6 +566,7 @@ def _cmd_approve(args: argparse.Namespace, ctx: Context) -> int:
                 _author_store(ctx),
                 args.approve,
                 actor=args.actor,
+                presence=ctx.presence,
                 no_reference=args.no_reference,
                 reason=args.reason,
             )
@@ -614,6 +621,7 @@ def _cmd_author(args: argparse.Namespace, ctx: Context) -> int:
             _author_store(ctx),
             args.task,
             actor=args.actor,
+            presence=ctx.presence,
         )
     except (AuthorError, StoreError) as exc:
         # A corrupt or missing proposal record is a refusal, not a traceback: the CLI is the
@@ -675,8 +683,11 @@ def _cmd_auto_freeze_optin(args: argparse.Namespace, ctx: Context) -> int:
     Taken from the current contract's lineage, so the setting belongs to a project rather
     than to whatever proposal happens to be on the table.
     """
+    enabled = not args.no_allow_auto
     try:
-        contract = read_contract(ctx.repo, ctx.repo.head_commit())
+        lineage = configure_auto_freeze(
+            ctx.repo, _author_store(ctx), enabled=enabled, presence=ctx.presence
+        )
     except FreezeError as exc:
         _emit(
             args,
@@ -684,9 +695,9 @@ def _cmd_auto_freeze_optin(args: argparse.Namespace, ctx: Context) -> int:
             f"refused: {'; '.join(exc.problems)}",
         )
         return 1
-    enabled = not args.no_allow_auto
-    try:
-        _author_store(ctx).set_auto_freeze(contract.lineage_id, enabled)
+    except AuthorError as exc:
+        _emit(args, {"ok": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
+        return 1
     except (AuthoringError, StoreError) as exc:
         # Most likely an approval of this lineage is running right now. Say so plainly: the
         # setting did not change, and the running approval was decided on the old one.
@@ -694,7 +705,7 @@ def _cmd_auto_freeze_optin(args: argparse.Namespace, ctx: Context) -> int:
         return 1
     _emit(
         args,
-        {"lineage_id": contract.lineage_id, "auto_freeze": enabled},
+        {"lineage_id": lineage, "auto_freeze": enabled},
         "unattended freeze "
         + (
             "allowed; `freeze --approve ... --auto` still needs a stored review"
@@ -813,6 +824,7 @@ def _cmd_promote(args: argparse.Namespace, ctx: Context) -> int:
                 task_id=args.task,
                 worktree=worktree,
                 approved=tuple(args.approve),
+                presence=ctx.presence,
             )
     except AuthorError as exc:
         if args.json:
@@ -921,7 +933,13 @@ def _cmd_disputes(args: argparse.Namespace, ctx: Context) -> int:
 def _cmd_dispute(args: argparse.Namespace, ctx: Context) -> int:
     try:
         if args.dispute_command == "resolve":
-            rec = resolve_dispute(ctx.store, args.dispute_id, upheld=args.upheld, actor=args.actor)
+            rec = resolve_dispute(
+                ctx.store,
+                args.dispute_id,
+                upheld=args.upheld,
+                actor=args.actor,
+                presence=ctx.presence,
+            )
             if args.json:
                 _print_json(_dispute_to_dict(rec, show_note=False))
             else:
@@ -937,7 +955,7 @@ def _cmd_dispute(args: argparse.Namespace, ctx: Context) -> int:
             else:
                 print(f"disputes {'enabled' if policy.enabled else 'disabled'}, cap {policy.cap}")
             return 0
-    except StoreError as exc:
+    except (StoreError, PresenceRefused) as exc:
         print(f"dispute failed: {exc}", file=sys.stderr)
         return 1
     print("usage: cheeseless dispute {resolve,config}", file=sys.stderr)

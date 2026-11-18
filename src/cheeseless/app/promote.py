@@ -9,10 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from cheeseless.app.authoring import AuthorError, _require_open, read_contract, spec_of
+from cheeseless.app.presence import presence_note, require_presence
 from cheeseless.domain.authoring import AuthoringError
+from cheeseless.domain.presence import PresenceOperation, PresenceRefused, PresenceRequest
 from cheeseless.domain.promote_policy import decide_author_promote, decide_promote
-from cheeseless.domain.result import verify
+from cheeseless.domain.result import Result, verify
 from cheeseless.ports.authoring import AuthoringStore
+from cheeseless.ports.presence import PresenceProof
 from cheeseless.ports.repository import Repository
 from cheeseless.ports.store import Store
 
@@ -43,7 +46,14 @@ def promote(
     worktree: str | Path,
     ref: str | None = None,
     approved: Any = (),
+    presence: PresenceProof | None,
 ) -> PromoteOutcome:
+    """Promote a PASS candidate onto a ``gate/`` ref.
+
+    Approving a SENSITIVE path is an operator decision and needs a presence confirmation
+    (ADR 0017); a promote that uses no approval needs none. Rejected paths stay rejected.
+    After the answer the evidence is re-checked, so what was confirmed is what is promoted.
+    """
     if task_id is None:
         task_id = store.active_task_id()
     if task_id is None:
@@ -75,10 +85,50 @@ def promote(
     decision = decide_promote(changes, approved=approved)
     if not decision.ok:
         raise PromoteRejected(decision.rejected, decision.needs_approval)
+    used = decide_promote(changes).needs_approval
+    note = ""
+    if used:
+        note = _confirm_approvals(
+            repo, store, presence, task_id, frozen.task.lineage_id, result, worktree, used
+        )
 
     commit = repo.promote(frozen.baseline_commit, frozen.projection_tree, candidate_tree, ref)
-    store.log_event(task_id, "promote", commit)
+    store.log_event(task_id, "promote", f"{commit} {note}" if note else commit)
     return PromoteOutcome(ref=ref, commit=commit)
+
+
+def _confirm_approvals(
+    repo: Repository,
+    store: Store,
+    presence: PresenceProof | None,
+    task_id: str,
+    lineage_id: str,
+    result: Result,
+    worktree: str | Path,
+    used: tuple[str, ...],
+) -> str:
+    """Ask for the operator's confirmation of the approvals in use; return the audit note."""
+    try:
+        confirmation = require_presence(
+            presence,
+            PresenceRequest(
+                PresenceOperation.PROMOTE_APPROVE,
+                lineage_id,
+                result.tree_hash,
+                "operator",
+                "approve " + ",".join(used),
+            ),
+        )
+    except PresenceRefused as exc:
+        raise AuthorError("presence_refused", str(exc)) from exc
+    # The operator may take a while to answer: re-check the evidence the decision rests on.
+    if store.session_disputed(task_id):
+        raise ValueError("the session ended in a dispute and cannot be promoted")
+    if store.latest_result(task_id) != result:
+        raise ValueError("the result changed during confirmation")
+    if repo.snapshot(Path(worktree)) != result.tree_hash:
+        raise ValueError("candidate tree does not match the evaluated tree")
+    return presence_note(confirmation)
 
 
 def promote_author(

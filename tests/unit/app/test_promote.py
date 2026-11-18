@@ -7,6 +7,7 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.freeze import commit, prepare
 from cheeseless.app.gate_run import gate_run
 from cheeseless.app.promote import PromoteRejected, promote
+from tests.presence_fakes import Approving
 from tests.toy import FIXED_MAIN
 
 
@@ -21,7 +22,7 @@ def test_promote_valid_change(toy_repo, tmp_path):
     repo.create_projection(prepared.projection_tree, wt)
     (wt / "src" / "toy" / "__main__.py").write_text(FIXED_MAIN)
     gate_run(repo, store, runner, sandbox, worktree=wt)
-    out = promote(repo, store, worktree=wt)
+    out = promote(repo, store, worktree=wt, presence=Approving())
     assert out.commit
     assert out.ref.startswith("refs/heads/gate/")
 
@@ -41,4 +42,4 @@ def test_promote_rejects_protected_path(toy_repo, tmp_path):
     (wt / "acceptance" / "hidden" / "x.py").write_text("x")
     gate_run(repo, store, runner, sandbox, worktree=wt)
     with pytest.raises(PromoteRejected):
-        promote(repo, store, worktree=wt)
+        promote(repo, store, worktree=wt, presence=Approving())

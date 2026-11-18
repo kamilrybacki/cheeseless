@@ -14,6 +14,7 @@ import pytest
 from cheeseless.app import authoring as authoring_app
 from cheeseless.app.authoring import AuthorError, auto_approve_freeze
 from cheeseless.domain.authoring import Proposal, StrengthReview
+from tests.presence_fakes import Approving
 
 A = "a" * 40
 B = "b" * 40
@@ -338,6 +339,7 @@ def test_a_present_operator_is_not_held_to_the_unattended_gates() -> None:
             _Store(_proposal(), None, opted_in=False),  # type: ignore[arg-type]
             PID,
             actor="operator",
+            presence=Approving(),
         )
 
 

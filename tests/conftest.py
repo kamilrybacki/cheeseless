@@ -20,6 +20,19 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 
 
+@pytest.fixture(autouse=True)
+def _no_terminal_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In-process CLI calls get a refusing presence port (ADR 0017).
+
+    Whoever runs the suite from a terminal is never asked to type a code; a test that needs
+    the real adapter puts it back. Child processes are unaffected and use the real wiring.
+    """
+    from cheeseless import bootstrap
+    from tests.presence_fakes import Refusing
+
+    monkeypatch.setattr(bootstrap, "TtyPresence", Refusing)
+
+
 @pytest.fixture
 def toy_repo(tmp_path: Path) -> Path:
     return make_repo(tmp_path / "toy")

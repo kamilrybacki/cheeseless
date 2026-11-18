@@ -10,6 +10,7 @@ from cheeseless.app.freeze import CONTRACT_PATH, FreezeError
 from cheeseless.domain.authoring import MAX_REFERENCE_RETRIES, AuthoringError, TaskPhase
 from cheeseless.domain.evaluation import TestOutcome
 from cheeseless.ports.sandbox import AuthorOutcome
+from tests.presence_fakes import Approving
 from tests.toy import TOY_FILES, make_repo
 from tests.unit.app.test_freeze import _FakeRunner, _FakeSandbox, _suite
 
@@ -203,6 +204,7 @@ def _approve(repo, store, tmp_path, proposal, author_sandbox=None, **kw):
         proposal.proposal_id,
         actor="tester",
         **kw,
+        presence=Approving(),
     )
 
 
@@ -233,7 +235,13 @@ def test_approve_unknown_proposal(world):
     repo, store, tmp = world
     with pytest.raises(AuthorError) as caught:
         uc.approve_freeze(
-            repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, "f" * 64, actor="t"
+            repo,
+            _FakeSandbox(tmp / "sb"),
+            _red_sandbox(),
+            store,
+            "f" * 64,
+            actor="t",
+            presence=Approving(),
         )
     assert caught.value.kind == "unknown_proposal"
 
@@ -590,7 +598,13 @@ def test_recovery_rolls_an_unpublished_reservation_back_to_proposed(hooked):
         _approve(repo, store, tmp, proposal)
     assert caught.value.kind == "not_proposed"  # sealed: the reported bug
     uc.recover_approval(
-        repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+        repo,
+        _FakeSandbox(tmp / "sb"),
+        _red_sandbox(),
+        store,
+        proposal.proposal_id,
+        actor="op",
+        presence=Approving(),
     )
     state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
     assert state.phase is TaskPhase.PROPOSED
@@ -602,7 +616,13 @@ def test_recovery_finishes_a_published_task_to_frozen(hooked):
     proposal, contract = _strand(repo, store, tmp, publish=True)
     assert store.active_task_id() is None
     uc.recover_approval(
-        repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+        repo,
+        _FakeSandbox(tmp / "sb"),
+        _red_sandbox(),
+        store,
+        proposal.proposal_id,
+        actor="op",
+        presence=Approving(),
     )
     state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
     assert state.phase is TaskPhase.FROZEN
@@ -621,6 +641,7 @@ def test_recovery_refuses_while_the_approver_is_alive(hooked):
                 store,
                 proposal.proposal_id,
                 actor="op",
+                presence=Approving(),
             )
     assert caught.value.kind == "approver_alive"
     state = store.authoring_state(contract.lineage_id, uc.spec_of(contract))
@@ -634,12 +655,24 @@ def test_recovery_only_applies_to_an_approving_reservation(hooked):
     proposal = uc.freeze_propose(repo, store, _source(repo))
     with pytest.raises(AuthorError) as caught:
         uc.recover_approval(
-            repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+            repo,
+            _FakeSandbox(tmp / "sb"),
+            _red_sandbox(),
+            store,
+            proposal.proposal_id,
+            actor="op",
+            presence=Approving(),
         )
     assert caught.value.kind == "not_approving"
     with pytest.raises(AuthorError) as unknown:
         uc.recover_approval(
-            repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, "e" * 64, actor="op"
+            repo,
+            _FakeSandbox(tmp / "sb"),
+            _red_sandbox(),
+            store,
+            "e" * 64,
+            actor="op",
+            presence=Approving(),
         )
     assert unknown.value.kind == "unknown_proposal"
 
@@ -655,7 +688,13 @@ def test_recovery_loses_to_a_state_change_between_read_and_save(hooked):
     store.after_read = move_on
     with pytest.raises(AuthorError) as caught:
         uc.recover_approval(
-            repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+            repo,
+            _FakeSandbox(tmp / "sb"),
+            _red_sandbox(),
+            store,
+            proposal.proposal_id,
+            actor="op",
+            presence=Approving(),
         )
     assert caught.value.kind == "recovery_conflict"
 
@@ -683,7 +722,13 @@ def test_an_approval_holds_the_ownership_lock_for_its_whole_span(hooked):
 def _refused_and_sealed(repo, store, proposal, contract, fragment, tmp):
     with pytest.raises(AuthorError) as caught:
         uc.recover_approval(
-            repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+            repo,
+            _FakeSandbox(tmp / "sb"),
+            _red_sandbox(),
+            store,
+            proposal.proposal_id,
+            actor="op",
+            presence=Approving(),
         )
     assert caught.value.kind == "approval_incomplete"
     assert fragment in str(caught.value)
@@ -723,7 +768,13 @@ def test_recovery_of_a_waived_approval_does_not_need_a_crosscheck(hooked, monkey
         _approve(repo, store, tmp, proposal, no_reference=True, reason="no reference yet")
     monkeypatch.setattr(store, "load_crosscheck", lambda _pid: None)
     out = uc.recover_approval(
-        repo, _FakeSandbox(tmp / "sb"), _red_sandbox(), store, proposal.proposal_id, actor="op"
+        repo,
+        _FakeSandbox(tmp / "sb"),
+        _red_sandbox(),
+        store,
+        proposal.proposal_id,
+        actor="op",
+        presence=Approving(),
     )
     assert out == "finished"
 

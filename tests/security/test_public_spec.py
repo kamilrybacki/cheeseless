@@ -12,6 +12,7 @@ from cheeseless.domain.evaluation import TestOutcome
 from cheeseless.domain.result import CriterionResult, Result, sign
 from cheeseless.domain.status import Status
 from cheeseless.ports.repository import SnapshotRejected
+from tests.presence_fakes import Approving
 from tests.security.test_projection_canary import _all_objects, _worktree_bytes
 from tests.toy import CANARY, CRITERIA_YAML, commit_all, write_files
 from tests.unit.app.test_freeze import _FakeRunner, _FakeSandbox, _suite
@@ -71,7 +72,7 @@ def test_public_spec_projection_and_store_roundtrip(toy_repo: Path, tmp_path: Pa
     )
     store.save_result(result, "test")
     with pytest.raises(PromoteRejected) as caught:
-        promote(repo, store, worktree=dest)
+        promote(repo, store, worktree=dest, presence=Approving())
     assert caught.value.rejected == ("acceptance/contract/spec.md",)
 
 

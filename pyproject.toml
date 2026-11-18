@@ -120,6 +120,7 @@ modules = [
     "cheeseless.adapters.outbound.egress",
     "cheeseless.adapters.outbound.ci",
     "cheeseless.adapters.outbound.pane",
+    "cheeseless.adapters.outbound.presence",
 ]
 
 [[tool.importlinter.contracts]]
