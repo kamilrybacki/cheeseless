@@ -37,7 +37,7 @@ from cheeseless.app.dev_flow import (
     start_phase,
 )
 from cheeseless.app.dev_session import open_session
-from cheeseless.bootstrap import build_context, host_session
+from cheeseless.bootstrap import build_context, host_session, resolve_cli_launch
 from cheeseless.domain.dev_session import DevPhase, DevSessionError, DevState
 from cheeseless.ports.dev_session import DevSessionStore
 from cheeseless.ports.reference_attempt import ReferenceAttemptStore
@@ -86,6 +86,11 @@ def _preflight(
 def run_dev_command(args: argparse.Namespace, agent: Sequence[str] | None) -> int:
     """Drive one dev phase. ``agent`` is the argv after ``--``, as for ``session``."""
     try:
+        agent, agent_model = resolve_cli_launch(getattr(args, "launcher", None), agent)
+    except ValueError as exc:
+        print(f"dev: {exc}", file=sys.stderr)
+        return 1
+    try:
         lineage, state, start, store = _preflight(args, agent)
     except DevFlowError as exc:
         print(f"dev: {exc}", file=sys.stderr)
@@ -108,7 +113,7 @@ def run_dev_command(args: argparse.Namespace, agent: Sequence[str] | None) -> in
     )
     if start.reference:
         return _tests_phase(args, lineage, start, store)
-    return _run_session(args, start, list(agent or ()), lineage, store)
+    return _run_session(args, start, list(agent or ()), lineage, store, agent_model)
 
 
 def _tests_phase(
@@ -161,6 +166,7 @@ def _run_session(
     agent: Sequence[str],
     lineage: str,
     store: DevSessionStore,
+    agent_model: str = "",
 ) -> int:
     """Launch the one session this phase allows, with the flags that phase grants.
 
@@ -173,6 +179,7 @@ def _run_session(
             agent_command=list(agent),
             role=start.role,
             dev_lineage=start.dev_lineage,
+            agent_model=agent_model,
         ):
             # The session runs to completion inside the context; the host tears down.
             pass

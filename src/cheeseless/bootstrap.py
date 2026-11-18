@@ -33,6 +33,7 @@ from cheeseless.adapters.inbound.cli.main import (
 from cheeseless.adapters.inbound.mcp.server import build_mcp_server, run_stdio
 from cheeseless.adapters.inbound.uds.client import UdsVerifierClient
 from cheeseless.adapters.inbound.uds.server import SessionConfig, UdsVerifierServer
+from cheeseless.adapters.outbound.config.launchers import TomlLauncherCatalog
 from cheeseless.adapters.outbound.egress.bridge import (
     BRIDGE_HOST,
     BRIDGE_PORT,
@@ -52,6 +53,7 @@ from cheeseless.app.audit import StoreAuditSink
 from cheeseless.app.authoring import read_review_verdict
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.egress_supervisor import EgressBlock, EgressSupervisor
+from cheeseless.app.launching import resolve_launch
 from cheeseless.app.reference_view import reference_tree, reviewer_tree_of
 from cheeseless.domain import ids
 from cheeseless.domain.budget import Pool
@@ -117,7 +119,32 @@ def build_context(state_dir: Path | None = None, cwd: Path | None = None) -> Con
         store=store,
         author_sandbox=sandbox,
         reviewer_launch=_reviewer_launch_for(state_dir),
+        launchers=_launcher_catalog(repo),
     )
+
+
+def _launcher_catalog(repo: Any) -> TomlLauncherCatalog:
+    """The operator's launcher config; never read from inside the repository."""
+    return TomlLauncherCatalog(forbidden=_forbidden_roots(repo))
+
+
+def resolve_cli_launch(
+    launcher_name: str | None,
+    agent: Sequence[str] | None,
+    *,
+    label: str | None = None,
+    cwd: Path | None = None,
+) -> tuple[list[str], str]:
+    """``(command, model)`` for a CLI launch path (``session``, ``dev``, ``dev-reference``).
+
+    ``model`` is the operator-declared one for ``--launcher``, else empty: a launch nobody
+    configured records no model and so cannot satisfy the unattended-freeze vendor check.
+    Raises ``LauncherError`` (a ``ValueError``) on any refusal.
+    """
+    launcher = None
+    if launcher_name is not None:
+        launcher = _launcher_catalog(GitRepository.discover(cwd or Path.cwd())).get(launcher_name)
+    return resolve_launch(launcher, agent or [], label)
 
 
 def _reviewer_launch_for(
@@ -748,8 +775,9 @@ def serve_mcp(
 def _run_session_command(args: Any, agent: list[str] | None) -> int:
     """Map ``session`` options to a host session; usage and validation errors exit 2."""
     try:
+        agent, agent_model = resolve_cli_launch(getattr(args, "launcher", None), agent)
         if not agent:
-            raise SessionOptionError("an agent command is required after --")
+            raise SessionOptionError("an agent command is required after --, or --launcher NAME")
         env = dict(check_extra_env(dict(parse_key_value(i) for i in args.env), _RESERVED_ENV))
         seeds = dict(parse_seed_spec(item) for item in args.home_seed)
         policy = load_egress_policy(args.egress_policy) if args.egress_policy else None
@@ -767,6 +795,7 @@ def _run_session_command(args: Any, agent: list[str] | None) -> int:
             evidence_dir=args.evidence_dir,
             projection_dir=args.projection,
             role=args.role,
+            agent_model=agent_model,
         )
     except (SessionOptionError, PolicyError) as exc:
         print(f"session: {exc}", file=sys.stderr)

@@ -1458,3 +1458,25 @@ that was already published, but it cannot create a new frozen suite. The four fo
 **Reviewers and status.** `reviewers: [gpt-6.1-sol]`, and the status is accepted. The author,
 claude-opus-5-5, does not review its own ADR. Findings 2 and 5 from the first review are still open,
 for the trusted-launcher-config slice.
+
+### Trusted launcher config — findings 2 and 5 addressed
+
+Branch `feat/trusted-launcher-config`. The model recorded for a launched session now comes from
+`launchers.toml` in the operator's config directory, selected by `--launcher NAME`.
+- **Finding 2 (reviewer provenance is a caller flag) — addressed.** With `--launcher` the host
+  runs the configured command and records the configured model; a contradicting `--` command or
+  `--reviewer-model` is refused. `--reviewer-model` is only a label on `--run` and is never
+  recorded as the launched model.
+- **Finding 5 (author launches record no model) — addressed.** `session`, `dev` and
+  `dev-reference` take `--launcher` and pass the configured model as `agent_model`. A launch
+  without it records an empty model, so `author_unknown_launch` still fails closed.
+- Config trust: regular file, owned by the current uid, not group/world-writable, in a directory
+  with the same properties, opened `O_NOFOLLOW`, re-read on every lookup, and refused when it
+  resolves inside the repository or its common dir. Tests: `tests/security/test_launcher_config.py`
+  (each refusal has a canary) and `tests/unit/test_cli_launcher.py`.
+- Design: a `LauncherCatalog` port injected through `Context`, so the CLI adapter does not import
+  the config adapter (import-linter stays unchanged). No new ADR: ADR 0015/0016 already name
+  trusted config as the source.
+- **Remaining limit.** The config is operator-declared. cheeseless cannot verify what model a CLI
+  actually talks to, and anyone who controls the operator's config controls the recorded vendor.
+  The vendor-independence check is only as honest as that file.

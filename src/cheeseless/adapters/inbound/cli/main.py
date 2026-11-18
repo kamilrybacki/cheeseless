@@ -29,12 +29,15 @@ from cheeseless.app.dispute import configure_disputes, list_disputes, resolve_di
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.freeze import FreezeError, read_contract
 from cheeseless.app.gate_run import gate_run
+from cheeseless.app.launching import resolve_launch
 from cheeseless.app.promote import PromoteRejected, promote, promote_author
 from cheeseless.app.status import status
 from cheeseless.domain.authoring import AuthoringError
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.dispute import DEFAULT_CAP, DisputeRecord
+from cheeseless.domain.launcher import Launcher, LauncherError
 from cheeseless.domain.result import Result
+from cheeseless.ports.launchers import LauncherCatalog
 from cheeseless.ports.repository import Repository, SnapshotRejected
 from cheeseless.ports.runner import SuiteRunner
 from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
@@ -54,6 +57,8 @@ class Context:
     reviewer_launch: (
         Callable[[Sequence[str], str, str], Callable[[str], tuple[bool | None, str]]] | None
     ) = None
+    # The operator's trusted launcher declarations (`--launcher NAME`).
+    launchers: LauncherCatalog | None = None
 
 
 def split_agent_argv(argv: Sequence[str]) -> tuple[list[str], list[str] | None]:
@@ -63,6 +68,13 @@ def split_agent_argv(argv: Sequence[str]) -> tuple[list[str], list[str] | None]:
         return items, None
     cut = items.index("--")
     return items[:cut], items[cut + 1 :]
+
+
+LAUNCHER_HELP = (
+    "Run the command and record the model declared for NAME in the operator's launchers.toml "
+    "(see README). Without it the launch records no model, so it cannot satisfy the "
+    "unattended-freeze vendor check."
+)
 
 
 def _add_session_parser(sub: Any) -> None:
@@ -78,6 +90,7 @@ def _add_session_parser(sub: Any) -> None:
         default="implementer",
         help="Session role, bound by the host at launch (default: implementer).",
     )
+    ses.add_argument("--launcher", default=None, metavar="NAME", help=LAUNCHER_HELP)
     ses.add_argument("--profile", choices=("local", "ci"), default="local")
     ses.add_argument("--timeout", type=float, default=300.0)
     ses.add_argument("--egress-policy", type=Path, default=None, metavar="FILE")
@@ -174,8 +187,12 @@ def build_parser() -> argparse.ArgumentParser:
         "which is what the vendor is taken from; omit it and the record alone decides.",
     )
     review.add_argument(
-        "--reviewer-model", required=True, help="The model that reviewed them (as launched)."
+        "--reviewer-model",
+        default=None,
+        help="A label for the model that reviewed them. Needed to record a review by hand; "
+        "with --run it is only checked against --launcher and never recorded as the launch.",
     )
+    review.add_argument("--launcher", default=None, metavar="NAME", help=LAUNCHER_HELP)
     review.add_argument(
         "--run",
         action="store_true",
@@ -274,6 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     devref.add_argument("--rows", type=int, default=24)
     devref.add_argument("--cols", type=int, default=80)
     devref.add_argument("--attempt", default=None, help="Attempt id (default: generated).")
+    devref.add_argument("--launcher", default=None, metavar="NAME", help=LAUNCHER_HELP)
     devref.add_argument("--json", action="store_true")
 
     dev = sub.add_parser(
@@ -290,6 +308,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the reference without a tmux pane (the no-tmux fallback).",
     )
     dev.add_argument("--reference-timeout", type=float, default=1800.0)
+    dev.add_argument("--launcher", default=None, metavar="NAME", help=LAUNCHER_HELP)
     dev.add_argument("--json", action="store_true")
 
     uds = sub.add_parser("serve-uds", help="Run the verifier UDS server for one session.")
@@ -438,6 +457,15 @@ def _emit(args: argparse.Namespace, payload: dict[str, object], text: str) -> No
         print(text)
 
 
+def _launcher_for(ctx: Context, name: str | None) -> Launcher | None:
+    """The configured launcher called ``name``, or ``None`` when none was asked for."""
+    if name is None:
+        return None
+    if ctx.launchers is None:
+        raise LauncherError("launchers are not available in this context")
+    return ctx.launchers.get(name)
+
+
 def _cmd_strength_review(args: argparse.Namespace, ctx: Context) -> int:
     """Record a review the host ran. This stores evidence; it never approves anything."""
     store = _author_store(ctx)
@@ -445,23 +473,27 @@ def _cmd_strength_review(args: argparse.Namespace, ctx: Context) -> int:
     if args.run:
         # Launching a session is the bootstrap's job, so it is injected rather than imported:
         # an inbound adapter that reached for the bootstrap would invert the layering.
-        reviewer_command = [a for a in (args.reviewer_command or []) if a != "--"]
-        if not reviewer_command or ctx.reviewer_launch is None:
-            print("--run needs the reviewer command after --", file=sys.stderr)
+        if ctx.reviewer_launch is None:
+            print("--run is not available in this context", file=sys.stderr)
+            return 2
+        try:
+            reviewer_command, launched_model = resolve_launch(
+                _launcher_for(ctx, args.launcher), args.reviewer_command or [], args.reviewer_model
+            )
+        except LauncherError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        if not reviewer_command:
+            print("--run needs --launcher NAME or the reviewer command after --", file=sys.stderr)
             return 2
         # The task id goes with the launch: `host_session` would otherwise pick the active
         # task, and the reviewer could judge a different proposal than the record names.
-        # The declared reviewer model goes into the launch so the binding records it there;
-        # `run_strength_review` then reads the vendor back from that launch record. It is a
-        # label for the launcher, not the evidence: a label that disagrees with the record
-        # is refused.
-        if not args.reviewer_model:
-            print(
-                "--run needs --reviewer-model: the vendor must be declared up front",
-                file=sys.stderr,
-            )
-            return 2
-        launch = ctx.reviewer_launch(reviewer_command, args.task, args.reviewer_model)
+        # The model recorded comes from the launcher config; without --launcher it is empty and
+        # `run_strength_review` refuses, because a typed label is not launch provenance.
+        launch = ctx.reviewer_launch(reviewer_command, args.task, launched_model)
+    elif not args.reviewer_model:
+        print("recording a review by hand needs --reviewer-model", file=sys.stderr)
+        return 2
     try:
         if launch is not None:
             review = run_strength_review(

@@ -30,6 +30,30 @@ cheeseless session [--task TASK] [--ro PATH] [--home-seed REL=SRC] [--env K=V] \
     [--evidence-dir NEW_DIR] -- AGENT [ARGS...]
 ```
 
+## Launchers: which model a session ran
+
+The model cheeseless records for a launched agent session comes from operator-owned config,
+not from a typed label. Declare named launchers in `$XDG_CONFIG_HOME/cheeseless/launchers.toml`
+(default `~/.config/cheeseless/launchers.toml`):
+
+```toml
+[launchers.claude-sonnet]
+command = ["claude", "--model", "claude-sonnet-5-5"]
+model = "claude-sonnet-5-5"
+```
+
+Names match `[a-z0-9._-]+`; `command` is a non-empty list of strings and `model` a non-empty
+string. Select one with `--launcher NAME` on `session`, `dev`, `dev-reference` and
+`strength-review --run`: the host runs the configured command and records the configured model.
+A command after `--` or a `--reviewer-model` that contradicts the launcher is refused.
+
+- The file is refused unless it is a regular file owned by you that group and others cannot
+  write, in a directory that is likewise yours; it is never read from inside the repository.
+- Without `--launcher` a session still runs, but no model is recorded, so unattended freeze
+  keeps refusing (`author_unknown_launch`). Attended use is unaffected.
+- Limit: the file is operator-declared. cheeseless records what you configured and cannot
+  verify which model the CLI actually talks to.
+
 ## Real-agent study
 
 A preregistered comparison of naive vs cheeseless runs with real coding agents lives in
