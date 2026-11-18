@@ -30,6 +30,14 @@ cheeseless session [--task TASK] [--ro PATH] [--home-seed REL=SRC] [--env K=V] \
     [--evidence-dir NEW_DIR] -- AGENT [ARGS...]
 ```
 
+Operator decisions need a person at the terminal (ADR 0017): `freeze --approve ID --as ACTOR`,
+`dispute resolve`, the `author recover` finish step, `promote --approve` on sensitive paths and
+`freeze --allow-auto` each show a random code on the controlling terminal (`/dev/tty`, never
+stdin) that you must retype. Piped, headless or terminal-less runs are refused. Headless
+operators use the unattended route, `freeze --approve ID --auto` (ADR 0016), which takes no
+challenge. The challenge proves terminal interaction, not a human: an agent that drives its own
+pty can pass it.
+
 ## Launchers: which model a session ran
 
 The model cheeseless records for a launched agent session comes from operator-owned config,

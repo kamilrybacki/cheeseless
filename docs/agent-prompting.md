@@ -104,3 +104,11 @@ captured evidence afterwards: it contains the seeded files.
 
 Deterministic tests for the harness itself run in the normal suite and make no network or
 paid calls (`tests/e2e/test_agent_harness.py`).
+
+## Operator decisions need a terminal
+
+`freeze --approve ... --as`, `dispute resolve`, the `author recover` finish step,
+`promote --approve` on sensitive paths and `freeze --allow-auto` require a random code retyped
+on the controlling terminal (ADR 0017). They need an interactive terminal; piped or headless
+runs are refused. Do not script them for an agent. Headless operators use the ADR 0016
+`freeze --approve ID --auto` route, which takes no challenge.
