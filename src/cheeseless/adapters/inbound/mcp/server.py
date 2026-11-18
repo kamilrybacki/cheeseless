@@ -39,6 +39,10 @@ def build_mcp_server(
         if dev:  # ADR 0014: a dev TUI reference may only say it is done
             _register_reference(server, client)
         return server  # otherwise the reference snapshot is host-recorded: no tools
+    if role is SessionRole.REVIEWER:
+        # ADR 0015: a reviewer never acts. Falling through to the implementer branch here
+        # would hand it gate_run, so the refusal is explicit rather than implied by order.
+        return server
 
     def _view_payload(view: AgentView) -> dict[str, Any]:
         return agent_view_to_dict(view)

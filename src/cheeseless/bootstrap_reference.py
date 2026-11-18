@@ -193,8 +193,7 @@ def run_reference_attempt(
     warning = None
     if mode is ReferenceMode.HEADLESS and not headless:
         warning = (
-            "tmux is not available: running the reference headless "
-            "(no pane, no reference_done)"
+            "tmux is not available: running the reference headless (no pane, no reference_done)"
         )
 
     ctx = build_context(state_dir, cwd)

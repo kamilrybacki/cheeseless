@@ -57,6 +57,10 @@ class Repository(Protocol):
         """``tree`` minus everything under ``prefix`` except ``keep``."""
         ...
 
+    def tree_keeping(self, tree: str, prefix: str) -> str:
+        """``tree`` reduced to ``prefix`` and what is under it; nothing else survives."""
+        ...
+
     def replace_subtree(self, tree: str, prefix: str, source_tree: str, keep: str) -> str:
         """``tree`` minus everything under ``prefix``, plus ``source_tree``'s ``keep`` entries."""
         ...

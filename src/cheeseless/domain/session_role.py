@@ -10,6 +10,9 @@ class SessionRole(StrEnum):
     AUTHOR = "author"
     REFERENCE = "reference"
     IMPLEMENTER = "implementer"
+    # ADR 0015: reads the author's tests to judge them, and can change nothing. It has no
+    # tools and no writable tree, because a reviewer that could act would not be a reader.
+    REVIEWER = "reviewer"
 
 
 def parse_role(value: str) -> SessionRole:
@@ -39,6 +42,8 @@ def acceptance_mount(role: SessionRole) -> str:
         return "rw"
     if role is SessionRole.REFERENCE:
         return "contract"
+    # The implementer and the reviewer both read it without writing it. They differ in
+    # everything else, not in this.
     return "ro"
 
 
@@ -52,6 +57,10 @@ def tool_names(role: SessionRole, *, disputes: bool = False, dev: bool = False) 
         return (*author, "spec_done") if dev else author
     if role is SessionRole.REFERENCE:
         return ("reference_done",) if dev else ()
+    if role is SessionRole.REVIEWER:
+        # ADR 0015: never any tool, whatever the flags say. Its verdict is the host's to
+        # record, after the session ends, from what this session produced.
+        return ()
     base = ("gate_run", "gate_status")
     return (*base, "gate_dispute") if disputes else base
 

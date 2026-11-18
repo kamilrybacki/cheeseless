@@ -309,3 +309,55 @@ def agent(
     for key, value in agent_env.items():
         args += ["--setenv", key, value]
     return [*args, *_command(command)]
+
+
+def reviewer(
+    *,
+    bwrap: str,
+    projection: Path,
+    home: Path,
+    env: Sequence[tuple[str, str]],
+    command: Sequence[str],
+    acceptance_fd: int | None,
+    sockets: Sequence[Path] = (),
+    read_only: Sequence[Path] = (),
+    pinned_read_only: Sequence[tuple[int, str]] = (),
+    seccomp_fd: int | None = None,
+    info_fd: int | None = None,
+) -> list[str]:
+    """The strength reviewer: it reads the tests and writes nothing (ADR 0015).
+
+    ``agent`` binds the projection writable because an implementer must edit code. A reviewer
+    that inherited that bind could edit the very tests it is judging, so this builder exists to
+    make the difference structural rather than a flag someone has to remember.
+
+    ``sockets`` is accepted and ignored: a reviewer talks to no host operation, and taking the
+    argument lets callers share their plumbing without silently granting a channel.
+    """
+    if not command:
+        raise SandboxError("no command to run in the sandbox")
+    if acceptance_fd is None:
+        raise ValueError("a reviewer needs a pinned read-only acceptance fd")
+    acceptance_dir = projection / "acceptance"
+    args = [bwrap, *_NAMESPACES, *_system(), *_try_binds((*ETC_ALLOW, *AGENT_ETC_ALLOW))]
+    args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", SANDBOX_TMP]
+    # Read-only projection first, so the writable HOME below cannot widen it. The HOME bind is
+    # a separate path, never an ancestor of the projection: callers keep them disjoint.
+    args += ["--ro-bind", str(projection), str(projection)]
+    args += ["--bind", str(home), str(home)]
+    # Landed on top of the read-only projection through the pinned fd, exactly as the
+    # implementer's is, so a swapped path cannot redirect it.
+    args += ["--ro-bind-fd", str(acceptance_fd), str(acceptance_dir)]
+    for path in read_only:
+        args += ["--ro-bind", str(path), str(path)]
+    for fd, destination in pinned_read_only:
+        args += ["--ro-bind-fd", str(fd), destination]
+    if info_fd is not None:
+        args += ["--info-fd", str(info_fd)]
+    if seccomp_fd is not None:
+        args += ["--seccomp", str(seccomp_fd)]
+    args += ["--chdir", str(projection)]
+    reviewer_env = {**BASE_ENV, **dict(env), "TMPDIR": SANDBOX_TMP, "HOME": str(home)}
+    for key, value in reviewer_env.items():
+        args += ["--setenv", key, value]
+    return [*args, *_command(command)]

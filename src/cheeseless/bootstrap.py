@@ -50,7 +50,7 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.audit import StoreAuditSink
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.egress_supervisor import EgressBlock, EgressSupervisor
-from cheeseless.app.reference_view import reference_tree
+from cheeseless.app.reference_view import reference_tree, reviewer_tree
 from cheeseless.domain import ids
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.dlp import Fingerprints
@@ -407,6 +407,37 @@ def _disputes_enabled(store: Store) -> bool:
         return False
 
 
+# Environment a reviewer must not inherit: every one of these is a route off the tests.
+_REVIEWER_STRIPPED = frozenset(
+    {
+        "CHEESELESS_SOCKET",
+        "CHEESELESS_TASK",
+        "EGRESS_SOCKET_ENV",
+        "EGRESS_PORT_ENV",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "https_proxy",
+        "http_proxy",
+        "all_proxy",
+        "no_proxy",
+        "CODEX_CA_CERTIFICATE",
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+    }
+)
+
+
+def _reviewer_env(env: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
+    """``env`` without any channel to the host or the network (ADR 0015).
+
+    The reviewer keeps the interpreter and runtime variables it needs to start a model
+    session; it loses the verifier socket, the egress bridge and every proxy variable.
+    """
+    return [(k, v) for k, v in env if k not in _REVIEWER_STRIPPED]
+
+
 def _mcp_shim_source(
     python: str,
     site: Path,
@@ -722,10 +753,16 @@ def _projection_tree(repo: Any, frozen: Any, role: SessionRole) -> str:
     """The tree a session's projection repo is built from.
 
     A reference session never sees a test, so its tree is cut down to the allowlist before the
-    projection's ``.git`` is written, before or after a freeze.
+    projection's ``.git`` is written, before or after a freeze. A reviewer (ADR 0015) sees every
+    test and nothing else: the candidate's code must not reach a session whose verdict decides
+    whether the suite freezes.
     """
-    tree = frozen.projection_tree if frozen is not None else repo.tree_of(repo.head_commit())
-    return reference_tree(repo, tree) if role is SessionRole.REFERENCE else tree
+    tree: str = frozen.projection_tree if frozen is not None else repo.tree_of(repo.head_commit())
+    if role is SessionRole.REFERENCE:
+        return reference_tree(repo, tree)
+    if role is SessionRole.REVIEWER:
+        return reviewer_tree(repo, tree)
+    return tree
 
 
 def _close_pins(pins: list[tuple[int, str]]) -> None:
@@ -1079,6 +1116,21 @@ def host_session(
         )
 
         def build_argv(info_fd: int) -> list[str]:
+            if bound is SessionRole.REVIEWER:
+                # ADR 0015: no sockets and no egress. It judges the tests it was given; a
+                # channel to the host or the network would let something else judge for it.
+                return profiles.reviewer(
+                    bwrap=bwrap,
+                    projection=projection_dir,
+                    home=home_dir,
+                    read_only=[runtime.root, python_root],
+                    acceptance_fd=pinned_acceptance,
+                    pinned_read_only=pinned_read_only,
+                    env=_reviewer_env(env),
+                    command=launch_command,
+                    seccomp_fd=seccomp_fd,
+                    info_fd=info_fd,
+                )
             return profiles.agent(
                 bwrap=bwrap,
                 projection=projection_dir,

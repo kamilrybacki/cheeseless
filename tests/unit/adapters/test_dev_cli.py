@@ -12,9 +12,7 @@ from cheeseless.adapters.inbound.cli.main import build_parser, split_agent_argv
 
 
 def test_the_dev_parser_takes_a_lineage_and_an_agent() -> None:
-    head, agent = split_agent_argv(
-        ["dev", "--lineage", "demo", "--", "claude", "--model", "m"]
-    )
+    head, agent = split_agent_argv(["dev", "--lineage", "demo", "--", "claude", "--model", "m"])
     args = build_parser().parse_args(head)
     assert args.command == "dev"
     assert args.lineage == "demo"

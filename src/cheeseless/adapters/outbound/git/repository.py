@@ -232,6 +232,10 @@ class GitRepository:
         ]
         return self._write_tree(kept)
 
+    def tree_keeping(self, tree: str, prefix: str) -> str:
+        rel_path(prefix)
+        return self._write_tree([(e.mode, e.oid, e.path) for e in self._entries(tree, prefix)])
+
     def replace_subtree(self, tree: str, prefix: str, source_tree: str, keep: str) -> str:
         rel_path(prefix)
         rel_path(keep)

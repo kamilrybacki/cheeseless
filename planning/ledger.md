@@ -1056,3 +1056,29 @@ Round 3 — cross-vendor reviewer (**ACCEPT WITH CHANGES**), the finding that ma
   `tests/security/test_auto_freeze_gate.py` covers the first (seven refusal cases plus the
   signature and actor pins). The second belongs to the reviewer sandbox, which does not exist yet:
   recording a review is possible, *running* the reviewer is not, so this remains the open gap.
+
+## ADR 0015: the reviewer role and sandbox (closes D15-6)
+
+- **D15-7**: a reviewer's projection is `acceptance/` **and nothing else** (`reviewer_tree`,
+  built with a new `Repository.tree_keeping` port method). The reference's cut is the mirror
+  image: it keeps the contract and drops the tests. The reviewer needs the tests, so the only
+  thing left to cut is the candidate's code — and it must be cut from the *tree*, not merely
+  unmounted, or the projection's `.git` would still hold it. Pinned by
+  `test_the_candidates_code_is_absent_from_the_git_objects`.
+- **D15-8**: `profiles.reviewer` is a separate builder rather than `agent(..., read_only=True)`.
+  `agent()` binds the projection writable because an implementer must edit code; a flag would
+  leave the safe case depending on every caller remembering to pass it. A reviewer that
+  inherited that bind could edit the tests it judges.
+- **D15-9**: `profiles.reviewer` accepts `sockets` and ignores it. Taking the argument lets
+  callers share their plumbing without the argument silently granting a channel; the ignoring
+  is a test (`test_the_reviewer_argv_is_built_without_sockets`), not a comment.
+- **D15-10**: the reviewer loses the verifier socket, the egress bridge and every proxy
+  variable (`_reviewer_env`). It keeps only what starts its model session. It still gets a
+  writable `HOME`, because a toolchain that cannot write `$HOME` does not start; that is the
+  one writable path and it is outside the projection.
+- **D15-11**: **D15-6 is closed for the sandbox, not for the host loop.** A reviewer can now be
+  launched contained, read-only over the tests, with no code and no channels. Nothing yet
+  launches one from `cheeseless dev`; the verdict is still recorded by the operator through
+  `cheeseless strength-review`. That is deliberate: `test_the_reviewer_gets_no_tools_at_all`
+  guarantees the reviewer cannot report its own verdict, so whoever parses its output is the
+  host, and that parser is the next piece.

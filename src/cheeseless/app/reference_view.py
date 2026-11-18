@@ -20,3 +20,13 @@ def reference_tree(repo: Repository, tree: str) -> str:
     # children along. Keep only the allowlisted paths that are themselves files.
     exact = tuple(b.path for b in repo.blobs_under(narrowed, ACCEPTANCE) if b.path in keep)
     return repo.tree_without(narrowed, ACCEPTANCE, exact)
+
+
+def reviewer_tree(repo: Repository, tree: str) -> str:
+    """``tree`` reduced to ``acceptance/``: the tests to judge, and nothing else.
+
+    ADR 0015: the reviewer's verdict is about the tests. Showing it the candidate's code
+    would let it judge the implementation instead, and would hand an untrusted agent's code
+    to a model whose verdict decides whether the suite freezes.
+    """
+    return repo.tree_keeping(tree, ACCEPTANCE)
