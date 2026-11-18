@@ -130,13 +130,16 @@ def test_the_reviewer_mount_is_read_only() -> None:
     assert acceptance_mount(SessionRole.REVIEWER) == "ro"
 
 
-def test_the_reviewer_projection_is_built_from_the_reviewer_tree(tmp_path: Path) -> None:
-    """`_projection_tree` must cut for a reviewer too, not only for a reference."""
+def test_the_reviewer_projection_differs_from_both_other_roles(tmp_path: Path) -> None:
+    """A reviewer sees more than a reference and less than an implementer."""
     root = make_repo(tmp_path / "r2", FILES)
     repo = GitRepository.discover(root)
+    whole = repo.tree_of(repo.head_commit())
+    from cheeseless.app.reference_view import reviewer_tree
+
     reference = bootstrap._projection_tree(repo, None, SessionRole.REFERENCE)
-    reviewer = bootstrap._projection_tree(repo, None, SessionRole.REVIEWER)
     implementer = bootstrap._projection_tree(repo, None, SessionRole.IMPLEMENTER)
+    reviewer = reviewer_tree(repo, whole)
     assert reference != reviewer, "a reviewer must see more than a reference"
     assert reviewer != implementer, "a reviewer must see less than an implementer"
 
@@ -244,3 +247,30 @@ def test_a_reviewer_session_cannot_inherit_operator_stdio() -> None:
 
     source = inspect.getsource(bootstrap.host_session)
     assert "a reviewer session cannot inherit the operator's stdio" in source
+
+
+def test_the_projection_tree_refuses_a_reviewer_without_a_subject(tmp_path: Path) -> None:
+    """No proposal, no frozen task, no verdict: `_projection_tree` must not invent a tree."""
+    root = make_repo(tmp_path / "r7", FILES)
+    repo = GitRepository.discover(root)
+    from cheeseless.session_options import SessionOptionError
+
+    with pytest.raises(SessionOptionError, match="proposal or a frozen task"):
+        bootstrap._projection_tree(repo, None, SessionRole.REVIEWER)
+
+
+def test_a_reviewer_refuses_when_no_proposal_exists() -> None:
+    """Without a proposal there is no acceptance tree for a verdict to bind.
+
+    Found while reviewing the fix myself: the remaining `None` fallback would review HEAD,
+    which is the hole the proposal lookup was added to close.
+    """
+
+    class _Store:
+        def load_proposal(self, proposal_id):  # noqa: ANN001, ANN202
+            return None
+
+    from cheeseless.session_options import SessionOptionError
+
+    with pytest.raises(SessionOptionError, match="stored proposal"):
+        bootstrap._load_proposal_for_review(_Store(), "a" * 64)

@@ -1172,3 +1172,14 @@ Round 3 — cross-vendor reviewer (**ACCEPT WITH CHANGES**), the finding that ma
   network by design, so a model needing a network API cannot run in it. That is a design
   question for the host loop (a reviewer model reached through the host, not the sandbox), and
   it means the `--run` path is still not end-to-end.
+
+### Found while reviewing my own fix (no reviewer available: sol out of credits, gemini timed out, sonnet rate-limited)
+
+- **D15-12**: `_load_proposal_for_review` still fell back to `HEAD` when no proposal existed,
+  and `_projection_tree` still had a `frozen is None` branch that cut the whole repository tree
+  for a reviewer. Together they restored the exact hole the proposal lookup was added to close:
+  a verdict bound to a tree nobody proposed. Both now refuse (`SessionOptionError`). A reviewer
+  needs a proposal or a frozen task; without one there is nothing for a verdict to bind.
+- This is the third hole of the same shape in this feature, all found by asking "what happens
+  when the input the guarantee depends on is missing" rather than "does the happy path work".
+  Worth remembering as a review prompt, not just a fixed bug.

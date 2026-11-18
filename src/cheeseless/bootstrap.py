@@ -50,7 +50,7 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.audit import StoreAuditSink
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.egress_supervisor import EgressBlock, EgressSupervisor
-from cheeseless.app.reference_view import reference_tree, reviewer_tree, reviewer_tree_of
+from cheeseless.app.reference_view import reference_tree, reviewer_tree_of
 from cheeseless.domain import ids
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.dlp import Fingerprints
@@ -147,7 +147,10 @@ def _load_proposal_for_review(store: Any, task_id: str) -> Any:
     """
     proposal = store.load_proposal(task_id)
     if proposal is None:
-        return None
+        # A verdict must bind an acceptance tree, and without a proposal there is none to
+        # bind. Falling back to HEAD here would silently restore the hole this function
+        # exists to close, so a reviewer refuses instead.
+        raise SessionOptionError("a reviewer needs a stored proposal to bind its verdict to")
     if proposal.proposal_id != task_id:
         raise RuntimeError("the stored proposal does not match the requested task")
     return _ReviewSubject(acceptance_tree=proposal.acceptance_tree)
@@ -799,13 +802,12 @@ def _projection_tree(repo: Any, frozen: Any, role: SessionRole) -> str:
         # shown *that* tree. `projection_tree` is the wrong one on both sides of a freeze:
         # before it, otherwise; after it, it is the public projection with the hidden tests
         # taken out, so the reviewer would judge a suite that is not the frozen one.
-        if frozen is not None:
-            # Both a frozen task and a stored proposal answer the same question: which
-            # acceptance tree must this verdict be about.
-            return reviewer_tree_of(repo, frozen.acceptance_tree)
-        # Before a freeze there is no record to point at, so the whole repository tree is the
-        # only honest source and it is cut down to `acceptance/` like any other.
-        return reviewer_tree(repo, tree)
+        if frozen is None:
+            # Both a frozen task and a stored proposal answer "which tree must this verdict be
+            # about", and `host_session` refuses a reviewer without one. Reaching here would
+            # mean a caller bypassed that refusal, so this fails rather than guessing a tree.
+            raise SessionOptionError("a reviewer needs a proposal or a frozen task to review")
+        return reviewer_tree_of(repo, frozen.acceptance_tree)
     return tree
 
 
