@@ -107,17 +107,16 @@ source of truth; changes land through `promote`, not hooks.
   live checks in section 6 of [`research/ci-budget-counter.md`](research/ci-budget-counter.md)
   (P10-7); checks 12 and 13 cover `cheeseless ci-budget-init`, which seeds the ledger root
   (P10-29, P10-30). The `ci.yml` bwrap step is verified (P10-8).
-- GitHub `refs/pull/1` and `refs/pull/2` still hold commits with the old author email;
-  removing them needs GitHub Support or a fresh repository (operator decision).
+- The repository is public since 2026-11-18 (operator decision). GitHub `refs/pull/1` and
+  `refs/pull/2` still hold commits with the old author email; the operator accepted this at
+  publication. Removing them needs GitHub Support.
 - The real-agent E2E ran and PASSED on 2026-11-15 with Claude Code (ledger P14-2). It stays
   opt-in; run it with the manual command in
   [`docs/agent-prompting.md`](../docs/agent-prompting.md); it needs an operator-owned
   wrapper, credentials and an egress policy outside this repository.
-- Phase 12 sanitizer is implemented and the local audit is clean, but publication is
-  still blocked by the live GitHub P10-6 gate, the server-side `refs/pull/1`/`refs/pull/2`
-  history, and explicit operator publication approval (Q34). The live gate (P13-10) and the
-  real-agent E2E (P14-2) have both passed. The local audit cannot see server-side refs and
-  does not prove history is sanitized.
+- Phase 12 sanitizer: before publication on 2026-11-18 every branch and tag on GitHub was
+  re-checked and carries only noreply author addresses; the only residue is the pull refs
+  above. Public runners made CI free, so the release gate runs on every push again.
 - Residual phase 8 limits (P8-12): freeze requires two private sentinel markers per
   artifact class, but markers split across files or hidden behind other reversible
   encodings are not detected; 64-bit rolling-hash collisions are theoretical; bytes clean before a mid-stream
