@@ -19,4 +19,4 @@ Only critical, long-lived decisions live here. Everything else goes to
 | [0014](0014-dev-reference-tui-pane.md) | Run the dev-mode reference as a visible TUI in a second pane | accepted |
 | [0015](0015-strength-review-record.md) | Gate auto-freeze on a stored, bound strength-review record | accepted (substitute and trusted-config claims superseded by ADR-0016) |
 | [0016](0016-strength-review-substitutes-human-approval.md) | A strength review replaces the operator's strength review, not the executable checks; bounded, not safe | accepted |
-| [0017](0017-attended-approval-tty-challenge.md) | Attended freeze approval and dispute resolution need a typed challenge on the controlling terminal | proposed |
+| [0017](0017-attended-approval-tty-challenge.md) | Attended operator decisions (approve, resolve, recover-finish, sensitive promote, auto-freeze opt-in) need a typed challenge on the controlling terminal | accepted |

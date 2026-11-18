@@ -1393,10 +1393,10 @@ What the ADR review found, and what changed because of it:
   Consent is now read *inside* ownership, and `_ready` moved after it, so a project that never
   opted in is refused before its repository is touched. `set_auto_freeze` takes the same
   ownership, so a withdrawal during an approval is refused rather than silently ineffective.
-- **Open: `--as` is reachable by an agent.** Any process that can run the CLI can pass
-  `--approve <id> --as <name>` and get the attended path. This predates ADR 0016 (ADR 0009
-  trusts the host to be a human) and is not widened by it; closing it needs a host-side proof
-  of presence (a TTY or a signed operator token), tracked as follow-up.
+- **`--as` is reachable by an agent.** Any process that can run the CLI can pass
+  `--approve <id> --as <name>` and get the attended path. This predates ADR 0016 and is not
+  widened by it. Narrowed (not closed) by ADR 0017, the typed `/dev/tty` challenge; see
+  "ADR 0017 review — gpt-6.1-sol".
 
 Rejected: making the reviewer's toolchain, rather than its launch record, the source of vendor.
 The launcher that selects the executable is the same thing that records the launch; deriving
@@ -1519,3 +1519,35 @@ Cross-vendor review of the trusted-launcher-config slice (commit 9bc1f99). Three
      all five refusal tests fail.
    - The configured model is replaced by the label: all ten tests that expect the configured model
      fail.
+
+## ADR 0017 review — gpt-6.1-sol (2026-11-18)
+
+Cross-vendor review of the proposed ADR 0017 (author: claude-opus-5-5). Verdict
+ACCEPT-WITH-CHANGES. A second reviewer (DeepSeek via opencode) was refused by the operator's
+routing policy for restricted work, so this ADR has one cross-vendor reviewer, the minimum.
+Every finding was checked against the code and accepted:
+
+1. HIGH, `author recover` "freezes nothing" was false: the finish branch
+   (`app/authoring.py` `_verify_published` → `set_active` → `frozen()`) completes a freeze.
+   Accepted: finishing a recovery needs the challenge; rolling back an unpublished reservation
+   does not.
+2. HIGH, PR and CI do not replace ADR 0006's human approval of sensitive paths; `promote`
+   forwards `--approve` strings to `decide_promote` unchecked. Accepted: sensitive-path
+   approval is in scope; hard-denied paths stay denied.
+3. HIGH, `freeze --allow-auto` records the project's ADR 0016 consent with no confirmation, so
+   a host agent could grant itself the opt-in (it would still need a qualifying review).
+   Accepted: enabling needs the challenge, withdrawing does not.
+4. MEDIUM, an id alone does not bind the confirmation. Accepted: the prompt names operation,
+   lineage, proposal digest or dispute id, actor, outcome and waiver, escaped; the proof is a
+   single-use confirmation taken under approval ownership, and state is revalidated after it.
+5. MEDIUM, the adapter's fail-closed contract was underspecified. Accepted: the ADR now lists the
+   failure cases, flush-before-display, no echo, one monotonic deadline, bounded input, terminal
+   restore in `finally` and `compare_digest`.
+6. MEDIUM, the benefit was overstated. Accepted: it blocks stdin-fed, preloaded and terminal-less
+   invocation without terminal emulation; it proves terminal interaction, not a human.
+7. MEDIUM, fake ports alone cannot prove production wiring. Accepted: security tests drive the
+   real CLI (piped stdin, no terminal, typed-ahead, timeout) and a test-owned pty for success,
+   assert refusals leave state unchanged, and include the canary.
+8. LOW, predecessor wording. Accepted: the ADR quotes ADR 0009's "a human or an orchestrator
+   agent", says it revises that operator only for the five decisions, and calls the remainder a
+   trusted-host residual instead of attributing it to ADR 0001 (which accepts a sandbox escape).
