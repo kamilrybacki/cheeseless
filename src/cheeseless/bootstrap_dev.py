@@ -130,8 +130,21 @@ def _tests_phase(
         return 1
     _emit(
         args,
-        {"lineage": lineage, "reference_ready": ready, "spec_digest": digest},
-        "the reference is done for this spec: run `cheeseless freeze` to propose and approve",
+        {
+            "lineage": lineage,
+            "reference_ready": ready,
+            "spec_digest": digest,
+            "strength_review": (
+                "cheeseless strength-review --run --task <proposal> "
+                "--author-model <as launched> --reviewer-model <as launched> -- <reviewer agent>"
+            ),
+        },
+        "the reference is done for this spec:\n"
+        "  1. `cheeseless freeze` proposes the tests and prints the proposal id\n"
+        "  2. `cheeseless strength-review --run --task <proposal> ...` has another vendor "
+        "review them, and refuses to record anything if it writes no verdict\n"
+        "  3. `cheeseless freeze --approve <proposal> --auto` freezes, refusing without "
+        "that review",
     )
     return 0 if ready else 1
 
