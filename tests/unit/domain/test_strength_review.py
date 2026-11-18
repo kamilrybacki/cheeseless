@@ -122,4 +122,6 @@ def test_the_record_carries_no_free_text_a_reviewer_could_steer() -> None:
         "green",
         "author_vendor",
         "reviewer_vendor",
+        # A boolean, not prose: it records who said this, not what they argued.
+        "observed",
     }

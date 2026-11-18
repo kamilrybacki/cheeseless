@@ -286,6 +286,7 @@ class AuthoringStoreMixin:
                 "green": record.green,
                 "author_vendor": record.author_vendor,
                 "reviewer_vendor": record.reviewer_vendor,
+                "observed": record.observed,
             },
         )
 
@@ -303,6 +304,9 @@ class AuthoringStoreMixin:
                 green=bool(data["green"]),
                 author_vendor=str(data["author_vendor"]),
                 reviewer_vendor=str(data["reviewer_vendor"]),
+                # Absent means an older, unobserved record: defaulting to False is the
+                # direction that cannot overstate what the host saw.
+                observed=bool(data.get("observed", False)),
             )
         except (KeyError, ValueError, TypeError) as exc:
             raise StoreError(f"corrupt strength review {pid}: {exc}") from exc

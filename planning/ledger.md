@@ -1202,3 +1202,47 @@ Round 3 — cross-vendor reviewer (**ACCEPT WITH CHANGES**), the finding that ma
 - The reviewer still has no network by design, so a model that needs a network API cannot run
   inside it. The `--run` path is complete for models reachable without egress; for the others
   the recorded-manual path remains.
+
+### Independent review (gpt-6.2-astra, high) — "would not ship", 7 findings, 6 accepted
+
+This reviewer read the code without the ledger first. It found the `--run` path did not work
+at all, which the previous rounds had not noticed because they tested a stubbed launch.
+
+- **A1 (BLOCKER) — accepted.** `_launch_agent` passed `None` for stdin/stdout/stderr when
+  `agent_stdio=False`, and `None` in `Popen` *inherits* the host's descriptors. A reviewer
+  whose operator had project text on stdin read it without any mount. Now `closed=True` for
+  this role, all three to `/dev/null`.
+- **A2 (BLOCKER) — accepted.** The `--run` callback left the context without waiting, then
+  read the verdict *after* teardown removed HOME. The verdict could never be collected, and a
+  fast reviewer's file was read as absent. It now waits for the process and reads while the
+  session is open.
+- **A3 (BLOCKER) — accepted.** `_ReviewSubject` carried only `acceptance_tree`, while
+  `host_session` reads `frozen.contract.lineage_id` and `frozen.projection_tree` before
+  reaching the reviewer branch. `--run` would have raised `AttributeError` deep in setup. The
+  subject now carries both.
+- **A4 (BLOCKER) — accepted.** The launch callback got no task id, so `host_session` picked the
+  active task: the reviewer could judge a different proposal than the record names. The task id
+  is now passed through.
+- **A5 (SHOULD-FIX, the most important) — accepted.** A manual `strength-review --passed`
+  produced a record indistinguishable from one the host observed, and auto-freeze accepted it.
+  `StrengthReview.observed` now separates them, `run_strength_review` sets it, the store
+  persists it (absent means `False`), and **auto-freeze refuses an unobserved review**. This is
+  the reviewer's own "first change", and it was right: an operator's assertion is not a review.
+- **A6 (SHOULD-FIX) — accepted.** `read_review_verdict` followed symlinks and took any file
+  type. Now `O_NOFOLLOW` plus an `S_ISREG` check.
+- **A7 (NIT) — recorded, not fixed.** `_refuse_overlap` compares realpath strings, so two bind
+  aliases of one directory can evade it. Reproducing it needs host layout beyond an
+  ordinary candidate tree, and the normal launcher always creates a fresh private HOME with an
+  absent or empty projection. Recorded as a known limit rather than closing it with a
+  device/inode comparison, which the reviewer did not ask for.
+
+**Not accepted:** the claim that `--run` cannot work for its purpose. With the four blockers
+above fixed the path is complete for a model reachable without egress; whether a model can be
+reached that way is a configuration question, not a defect in the role. The reviewer's "would
+not ship" verdict was written against code where `--run` could not collect a verdict at all,
+so it is answered by A1–A4 rather than by argument.
+
+**Note on process.** Every blocker in this round was in the wiring, not the sandbox, and none
+was found by the earlier test suite because those tests stubbed the launch. Astra found them
+by reading what the code *does* rather than what its tests assert. Two rounds of review missed
+it; one blind review found it.

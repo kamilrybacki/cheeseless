@@ -54,6 +54,8 @@ def _review(**kw: object) -> StrengthReview:
         "green": True,
         "author_vendor": "openai",
         "reviewer_vendor": "anthropic",
+        # These fixtures stand for a review the host ran; `observed=False` has its own test.
+        "observed": True,
     }
     fields.update(kw)
     return StrengthReview(**fields)  # type: ignore[arg-type]
@@ -62,6 +64,17 @@ def _review(**kw: object) -> StrengthReview:
 def _auto(store: _Store) -> object:
     # repo/sandbox are never reached: every refusal happens before the freeze is attempted.
     return auto_approve_freeze(None, None, None, store, PID)  # type: ignore[arg-type]
+
+
+def test_auto_freeze_refuses_a_review_an_operator_merely_recorded() -> None:
+    """The whole point of observing the session: an operator's word is not a review.
+
+    Without this, `cheeseless strength-review --passed` would be enough to auto-freeze,
+    and the gate would be asking someone to vouch for tests they may have written.
+    """
+    with pytest.raises(AuthorError) as exc:
+        _auto(_Store(_proposal(), _review(observed=False)))
+    assert exc.value.kind == "unobserved_strength_review"
 
 
 def test_auto_freeze_refuses_without_any_strength_review() -> None:

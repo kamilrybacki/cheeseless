@@ -16,6 +16,7 @@ import sysconfig
 import tempfile
 import threading
 import time as _time
+import types
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -121,24 +122,35 @@ def build_context(state_dir: Path | None = None, cwd: Path | None = None) -> Con
 
 def _reviewer_launch_for(
     state_dir: Path | None,
-) -> Callable[[Sequence[str]], Callable[[str], bool | None]]:
+) -> Callable[[Sequence[str], str], Callable[[str], bool | None]]:
     """The launch seam `strength-review --run` uses (ADR 0015).
 
     The reviewer's model session is started by the host, not by the CLI: an inbound adapter
     cannot import the bootstrap, and the sandbox setup belongs here anyway.
     """
 
-    def make(command: Sequence[str]) -> Callable[[str], bool | None]:
+    def make(command: Sequence[str], task_id: str) -> Callable[[str], bool | None]:
         def launch(brief: str) -> bool | None:
             with host_session(
                 state_dir=state_dir,
                 agent_command=list(command),
                 role=SessionRole.REVIEWER,
                 brief_file=brief,
+                task_id=task_id,
             ) as info:
-                # The session runs to completion inside the context, as every phase does.
-                pass
-            return read_review_verdict(Path(info["home_dir"]))
+                # Teardown removes HOME, so the verdict has to be read while the session is
+                # still open - and only once the agent has finished, or a fast reviewer's file
+                # would be read as absent or half-written.
+                proc: subprocess.Popen[Any] = info["agent_proc"]
+                try:
+                    code = proc.wait()
+                except KeyboardInterrupt:
+                    code = 1
+                verdict = read_review_verdict(Path(info["home_dir"]))
+            if code != 0:
+                # A reviewer that crashed recorded nothing; a refusal would hide the crash.
+                return None
+            return verdict
 
         return launch
 
@@ -161,9 +173,18 @@ def _forbidden_roots(repo: Any) -> tuple[Path, ...]:
 
 @dataclass(frozen=True, slots=True)
 class _ReviewSubject:
-    """The one thing a reviewer projection needs: the acceptance tree a verdict binds."""
+    """What a reviewer projection needs from a pre-freeze proposal.
+
+    `host_session` reads `contract` and `projection_tree` before it reaches the reviewer
+    branch, so a subject without them would fail deep in setup with an `AttributeError`
+    rather than a refusal. They are named here rather than discovered later.
+    """
 
     acceptance_tree: str
+    # Which lineage is being reviewed, for the DLP identity markers. A proposal knows it.
+    contract: Any
+    # Nothing is public before a freeze: the tests are not hidden from anyone yet.
+    projection_tree: str
 
 
 def _load_proposal_for_review(store: Any, task_id: str) -> Any:
@@ -181,7 +202,11 @@ def _load_proposal_for_review(store: Any, task_id: str) -> Any:
         raise SessionOptionError("a reviewer needs a stored proposal to bind its verdict to")
     if proposal.proposal_id != task_id:
         raise RuntimeError("the stored proposal does not match the requested task")
-    return _ReviewSubject(acceptance_tree=proposal.acceptance_tree)
+    return _ReviewSubject(
+        acceptance_tree=proposal.acceptance_tree,
+        contract=types.SimpleNamespace(lineage_id=proposal.lineage_id),
+        projection_tree=proposal.acceptance_tree,
+    )
 
 
 def _refuse_wrong_reviewer_tree(repo: Any, projection: Path, tree: str) -> None:
@@ -361,6 +386,7 @@ def _launch_agent(
     stdio: bool = False,
     pty_slave: int | None = None,
     log_fd: int | None = None,
+    closed: bool = False,
     timeout: float = SESSION_START_TIMEOUT,
 ) -> tuple[subprocess.Popen[Any], int]:
     """Start bwrap with ``--info-fd`` and pin the sandbox PID namespace.
@@ -376,10 +402,14 @@ def _launch_agent(
     the host's log file, so nothing is inherited from or flushed to the operator terminal.
     ``pty_slave``, ``stdio`` and ``log_fd`` are mutually exclusive.
     """
-    if sum(option is not None for option in (pty_slave, log_fd)) + int(stdio) > 1:
-        raise ValueError("pty_slave, log_fd and stdio are mutually exclusive")
+    if sum(option is not None for option in (pty_slave, log_fd)) + int(stdio) + int(closed) > 1:
+        raise ValueError("pty_slave, log_fd, closed and stdio are mutually exclusive")
     if pty_slave is not None:
         stdin = stdout = stderr = pty_slave
+    elif closed:
+        # Every stream detached from the host: `None` would *inherit* the operator's
+        # descriptors, which is how project text reaches a session that mounts nothing.
+        stdin, stdout, stderr = subprocess.DEVNULL, subprocess.DEVNULL, subprocess.DEVNULL
     elif log_fd is not None:
         stdin, stdout, stderr = subprocess.DEVNULL, log_fd, log_fd
     else:
@@ -1271,6 +1301,9 @@ def host_session(
             stdio=agent_stdio,
             pty_slave=pty_slave,
             log_fd=log_fd,
+            # A reviewer gets no host descriptor at all (ADR 0015): its evidence is the tree
+            # it was given, and inherited stdin is evidence from outside it.
+            closed=bound is SessionRole.REVIEWER,
         )
         if pty_slave is not None:
             os.close(pty_slave)

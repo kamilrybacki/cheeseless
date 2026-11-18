@@ -50,7 +50,7 @@ class Context:
     author_sandbox: AuthorSandbox | None = None
     # Wired by the bootstrap: runs a reviewer session for `strength-review --run`. The CLI
     # cannot import the bootstrap, so the launch seam arrives as a callable.
-    reviewer_launch: Callable[[Sequence[str]], Callable[[str], bool | None]] | None = None
+    reviewer_launch: Callable[[Sequence[str], str], Callable[[str], bool | None]] | None = None
 
 
 def split_agent_argv(argv: Sequence[str]) -> tuple[list[str], list[str] | None]:
@@ -429,7 +429,9 @@ def _cmd_strength_review(args: argparse.Namespace, ctx: Context) -> int:
         if not reviewer_command or ctx.reviewer_launch is None:
             print("--run needs the reviewer command after --", file=sys.stderr)
             return 2
-        launch = ctx.reviewer_launch(reviewer_command)
+        # The task id goes with the launch: `host_session` would otherwise pick the active
+        # task, and the reviewer could judge a different proposal than the record names.
+        launch = ctx.reviewer_launch(reviewer_command, args.task)
     try:
         if launch is not None:
             review = run_strength_review(

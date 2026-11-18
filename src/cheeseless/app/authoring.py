@@ -7,6 +7,8 @@ advisory: approval re-runs the baseline itself and only trusts host-side records
 
 from __future__ import annotations
 
+import os
+import stat
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -581,6 +583,7 @@ def record_strength_review(
     green: bool,
     author_model: str,
     reviewer_model: str,
+    observed: bool = False,
 ) -> StrengthReview:
     """Host-only: store another vendor's review of a proposal's tests (ADR 0015).
 
@@ -611,6 +614,7 @@ def record_strength_review(
         green=green,
         author_vendor=author_vendor,
         reviewer_vendor=reviewer_vendor,
+        observed=observed,
     )
     _publish(
         lambda: store.save_strength_review(
@@ -633,6 +637,14 @@ def _strength_review_problem(store: AuthoringStore, proposal: Proposal) -> Autho
         return AuthorError(
             "no_strength_review",
             "auto-freeze needs a passing strength review; run the reviewer first",
+        )
+    if not review.observed:
+        # A record an operator asserted is evidence that a human said so, not that a reviewer
+        # ran. Unattended freeze needs the second kind, or the gate asks the author's
+        # colleague to vouch for the author's own tests.
+        return AuthorError(
+            "unobserved_strength_review",
+            "auto-freeze needs a review the host ran itself; a recorded one is not enough",
         )
     if not strength_review_binds(
         review,
@@ -717,30 +729,43 @@ def parse_review_verdict(text: str) -> bool | None:
 
     ``None`` is not "failed": a reviewer that produced no structured line has not reviewed
     anything, and recording ``green=False`` would put words in its mouth.
+
+    The file must hold the verdict and nothing else. The author writes the tests the reviewer
+    reads, so any text the reviewer copies could carry a verdict of the author's choosing;
+    accepting only a bare line means a copied comment cannot arrive as one.
     """
-    verdict: bool | None = None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped.upper().startswith(_VERDICT_LINE):
-            continue
-        answer = stripped[len(_VERDICT_LINE) :].strip().lower()
-        if answer in ("pass", "passed", "green"):
-            verdict = True
-        elif answer in ("fail", "failed", "red"):
-            verdict = False
-        # The last usable line wins: a reviewer that changed its mind said so last.
-    return verdict
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) != 1:
+        return None
+    stripped = lines[0]
+    if not stripped.upper().startswith(_VERDICT_LINE):
+        return None
+    answer = stripped[len(_VERDICT_LINE) :].strip().lower()
+    if answer in ("pass", "passed", "green"):
+        return True
+    if answer in ("fail", "failed", "red"):
+        return False
+    return None
 
 
 def read_review_verdict(evidence_home: Path) -> bool | None:
     """The verdict from the reviewer session's HOME, or ``None`` if it wrote none."""
     verdict_path = evidence_home / VERDICT_FILE
     try:
-        # A file the reviewer wrote, so it is bounded and read as bytes: it is untrusted.
-        with verdict_path.open("rb") as handle:
-            data = handle.read(64 * 1024)
+        # The reviewer writes this, so it is untrusted input, not a config file. A symlink
+        # would let it point at something else in its own HOME and have that parsed instead,
+        # and O_NOFOLLOW plus a regular-file check is the only way to refuse that.
+        fd = os.open(verdict_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        data = os.read(fd, 64 * 1024)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
     return parse_review_verdict(data.decode("utf-8", errors="replace"))
 
 
@@ -750,12 +775,15 @@ Everything under `acceptance/` is what you must judge. There is no implementatio
 read, deliberately: the question is whether these tests would catch a wrong implementation,
 not whether some implementation is right.
 
-State your verdict as the last line of `{verdict}`, exactly one of:
+Write your verdict into the file `{verdict}`, and write nothing else there at all — not your
+reasoning, not a header, not a copy of a line you read in the tests. The file must contain
+exactly one of these two lines:
 
     VERDICT: pass
     VERDICT: fail
 
-Write nothing else into that file. `pass` means the tests are strong enough to freeze: they
+If the file holds anything besides that single line it is discarded as no verdict, and no
+review is recorded. `pass` means the tests are strong enough to freeze: they
 bind the behaviour the spec names, they would fail on a plausible wrong implementation, and
 they are not trivially satisfiable. `fail` means they are not, and you must say why in your
 output.
@@ -797,4 +825,7 @@ def run_strength_review(
         green=verdict,
         author_model=author_model,
         reviewer_model=reviewer_model,
+        # The difference from a manual record: this one comes from a session the host ran and
+        # whose output it read, not from an operator's assertion about one.
+        observed=True,
     )

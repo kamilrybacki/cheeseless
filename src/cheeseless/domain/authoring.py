@@ -215,6 +215,9 @@ class StrengthReview:
     green: bool
     author_vendor: str
     reviewer_vendor: str
+    # Whether the host watched a reviewer session produce this, or an operator asserted it.
+    # A record cannot tell you whether judgment happened; it can tell you who said so.
+    observed: bool = False
 
     def __post_init__(self) -> None:
         ids.sha256_hex(self.proposal_id, "proposal id")
