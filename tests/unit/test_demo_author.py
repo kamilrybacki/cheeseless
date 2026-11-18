@@ -85,3 +85,49 @@ def test_pty_operator_without_a_prompt_types_nothing(tmp_path) -> None:
     assert result.returncode == 0
     assert result.typed is None
     assert "refused before any prompt" in result.output
+
+
+def _open_fds() -> set[int]:
+    import os
+
+    return {int(name) for name in os.listdir("/proc/self/fd")}
+
+
+def test_pty_operator_times_out_and_reaps_the_whole_group(tmp_path) -> None:
+    import os
+    import sys
+
+    import pytest
+
+    from demo.author_demo import run_on_pty
+
+    pidfile = tmp_path / "grandchild.pid"
+    child = tmp_path / "hang.py"
+    child.write_text(
+        "import subprocess, sys, time\n"
+        "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"open({str(pidfile)!r}, 'w').write(str(g.pid))\n"
+        "time.sleep(60)\n"
+    )
+    before = _open_fds()
+    with pytest.raises(TimeoutError):
+        run_on_pty([sys.executable, str(child)], cwd=tmp_path, env={}, timeout=2)
+    assert _open_fds() == before
+    grandchild = int(pidfile.read_text())
+    with pytest.raises(ProcessLookupError):  # the descendant was killed with the group
+        for _ in range(50):
+            os.kill(grandchild, 0)
+            import time
+
+            time.sleep(0.1)
+
+
+def test_pty_operator_closes_the_terminal_when_the_command_cannot_start(tmp_path) -> None:
+    import pytest
+
+    from demo.author_demo import run_on_pty
+
+    before = _open_fds()
+    with pytest.raises(OSError):
+        run_on_pty([str(tmp_path / "missing")], cwd=tmp_path, env={}, timeout=5)
+    assert _open_fds() == before

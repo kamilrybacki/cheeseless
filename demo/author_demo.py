@@ -11,6 +11,7 @@ stable label before anything is written.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import html
 import json
@@ -18,6 +19,7 @@ import os
 import pty
 import re
 import select
+import signal
 import subprocess  # noqa: S404 - the demo drives the real cheeseless CLI and git
 import sys
 import tempfile
@@ -127,17 +129,22 @@ def run_on_pty(
     def adopt_terminal() -> None:  # runs in the child, after setsid
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
-    proc = subprocess.Popen(  # noqa: S603 - the venv's own cheeseless entry point
-        list(argv),
-        cwd=cwd,
-        env=dict(env),
-        stdin=slave,
-        stdout=slave,
-        stderr=slave,
-        start_new_session=True,
-        preexec_fn=adopt_terminal,  # noqa: PLW1509 - needed to take the controlling terminal
-    )
-    os.close(slave)
+    try:
+        proc = subprocess.Popen(  # noqa: S603 - the venv's own cheeseless entry point
+            list(argv),
+            cwd=cwd,
+            env=dict(env),
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            start_new_session=True,
+            preexec_fn=adopt_terminal,  # noqa: PLW1509 - needed to take the controlling terminal
+        )
+    except BaseException:
+        os.close(master)
+        raise
+    finally:
+        os.close(slave)
     seen = b""
     typed: str | None = None
     deadline = time.monotonic() + timeout
@@ -159,14 +166,19 @@ def run_on_pty(
             elif proc.poll() is not None:
                 break
         else:
-            proc.kill()
             raise TimeoutError(f"pty command exceeded {timeout}s")
         returncode = proc.wait(timeout=30)
     finally:
         os.close(master)
-        if proc.poll() is None:
-            proc.kill()
+        _reap_group(proc)
     return PtyResult(returncode, seen.decode("utf-8", errors="replace"), typed)
+
+
+def _reap_group(proc: subprocess.Popen[bytes]) -> None:
+    """Kill the child's whole session (it leads its own group) and wait for the child."""
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    proc.wait(timeout=30)
 
 
 class Masker:

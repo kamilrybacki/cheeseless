@@ -1603,3 +1603,7 @@ Deviations from the ADR text, all fail-closed:
 
 ## ADR 0017 implementation review — gpt-6-luna (2026-11-18)
 - MEDIUM, accepted: `_wait` returned on `POLLIN` before checking `POLLHUP|POLLERR|POLLNVAL`, so input buffered alongside a hangup could be accepted. Hangup bits are now checked first; `test_input_arriving_with_a_hangup_is_refused` proves it. Verdict was APPROVE-WITH-CHANGES; no other findings.
+
+## PR #35 review — gpt-6-luna (2026-11-18)
+- MEDIUM, accepted: the demo pty driver leaked the pty fds if `Popen` raised and killed only the direct child on timeout. Both fds now close on setup failure and cleanup kills and reaps the child's whole session.
+- LOW, accepted: added tests for timeout cleanup (fds and a descendant) and for a command that cannot start.
