@@ -500,6 +500,11 @@ class UdsVerifierServer:
         (fail closed).
         """
         s = self.session
+        if s.role == "reviewer":
+            # ADR 0015: a reviewer has no RPC at all. The sandbox gives it no socket, so this
+            # is unreachable by design — refused anyway so the guarantee does not rest on the
+            # mount staying correct.
+            return False
         if (kind in _REFERENCE_KINDS) != (s.role == "reference") or claimed != s.role:
             return False
         if s.task_id is None or s.session_id is None or s.generation is None:

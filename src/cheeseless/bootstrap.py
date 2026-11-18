@@ -131,6 +131,49 @@ def _forbidden_roots(repo: Any) -> tuple[Path, ...]:
     return (Path(repo.root), Path(repo.common_dir()))
 
 
+@dataclass(frozen=True, slots=True)
+class _ReviewSubject:
+    """The one thing a reviewer projection needs: the acceptance tree a verdict binds."""
+
+    acceptance_tree: str
+
+
+def _load_proposal_for_review(store: Any, task_id: str) -> Any:
+    """The stored proposal a reviewer must be shown, or a refusal (ADR 0015 decision 2).
+
+    A reviewer's verdict binds an acceptance tree. Reviewing ``HEAD`` instead would bind the
+    verdict to a tree nobody proposed, so the fallback is only allowed when no proposal was
+    made at all — a corrupt or unreadable proposal is a failure, not an invitation.
+    """
+    proposal = store.load_proposal(task_id)
+    if proposal is None:
+        return None
+    if proposal.proposal_id != task_id:
+        raise RuntimeError("the stored proposal does not match the requested task")
+    return _ReviewSubject(acceptance_tree=proposal.acceptance_tree)
+
+
+def _refuse_wrong_reviewer_tree(repo: Any, projection: Path, tree: str) -> None:
+    """The projection must be exactly ``tree``: no candidate code, no extra blob.
+
+    ``stray_hidden`` cannot be used here because a reviewer is *given* the hidden tests.
+    Comparing the files actually written against the tree that was selected catches both a
+    stray hidden blob and a stray implementation blob.
+    """
+    expected = {b.path for b in repo.blobs_under(tree, "")}
+    actual = {
+        str(path.relative_to(projection))
+        for path in projection.rglob("*")
+        if path.is_file() and ".git" not in path.relative_to(projection).parts
+    }
+    if actual != expected:
+        extra = sorted(actual - expected)[:5]
+        missing = sorted(expected - actual)[:5]
+        raise RuntimeError(
+            f"the reviewer projection is not the selected tree (extra={extra}, missing={missing})"
+        )
+
+
 def _refuse_overlap(a: Path, b: Path) -> None:
     """Refuse two mounts where one contains the other: the second bind shadows the first."""
     if _within(a, b) or _within(b, a):
@@ -757,6 +800,8 @@ def _projection_tree(repo: Any, frozen: Any, role: SessionRole) -> str:
         # before it, otherwise; after it, it is the public projection with the hidden tests
         # taken out, so the reviewer would judge a suite that is not the frozen one.
         if frozen is not None:
+            # Both a frozen task and a stored proposal answer the same question: which
+            # acceptance tree must this verdict be about.
             return reviewer_tree_of(repo, frozen.acceptance_tree)
         # Before a freeze there is no record to point at, so the whole repository tree is the
         # only honest source and it is cut down to `acceptance/` like any other.
@@ -860,6 +905,12 @@ def host_session(
         raise ValueError("no active task")
     if bound is SessionRole.IMPLEMENTER:
         frozen: Any = ctx.store.load_task(task_id)[0]
+    elif bound is SessionRole.REVIEWER:
+        # ADR 0015 decision 2: the verdict names an acceptance tree, so a reviewer must be
+        # shown the stored proposal's snapshot. Falling back on any StoreError would let a
+        # corrupt record quietly downgrade the session to "review HEAD instead", which is the
+        # one thing the record exists to prevent.
+        frozen = _load_proposal_for_review(ctx.store, task_id)
     else:
         try:
             frozen = ctx.store.load_task(task_id)[0]
@@ -943,6 +994,10 @@ def host_session(
             # candidate content into the reviewer's view. Refusing is the only honest answer;
             # filtering would leave the question of what was missed.
             raise SessionOptionError("a reviewer session accepts no home seeds or extra mounts")
+        if bound is SessionRole.REVIEWER and agent_stdio:
+            # Inherited stdio is a stream of content that is not in the snapshot the verdict
+            # binds. A review whose evidence came from outside its tree is not evidence.
+            raise SessionOptionError("a reviewer session cannot inherit the operator's stdio")
         if bound is SessionRole.REVIEWER:
             # A writable bind laid over a read-only one shadows it. The builder cannot see
             # whether HOME is an ancestor of the projection, so the caller that picks both
@@ -970,11 +1025,19 @@ def host_session(
 
         tree = _projection_tree(ctx.repo, frozen, bound)
         ctx.repo.create_projection(tree, projection_dir)
-        strays = (
-            ctx.repo.stray_hidden(projection_dir, frozen.hidden_blobs) if frozen is not None else []
-        )
-        if strays:
-            raise RuntimeError(f"stray hidden material in the projection: {strays}")
+        # ADR 0015: the reviewer is the one session *meant* to hold the hidden tests, so the
+        # leak check that protects every other projection would abort it before it launched.
+        # It gets the exact-tree check instead, which catches a stray blob just as firmly.
+        if bound is SessionRole.REVIEWER:
+            _refuse_wrong_reviewer_tree(ctx.repo, projection_dir, tree)
+        else:
+            strays = (
+                ctx.repo.stray_hidden(projection_dir, frozen.hidden_blobs)
+                if frozen is not None
+                else []
+            )
+            if strays:
+                raise RuntimeError(f"stray hidden material in the projection: {strays}")
 
         session_id, binding = ctx.store.register_session(task_id, bound.value)
         session = SessionConfig(

@@ -1132,3 +1132,43 @@ Round 3 — cross-vendor reviewer (**ACCEPT WITH CHANGES**), the finding that ma
   is not a cross-vendor review at all.
 - `gpt-6.2-sol` at `reasoningEffort: medium` is the review model of record for this change
   (operator instruction).
+
+### Re-review of #40 (gpt-6.2-sol, medium) — REJECT, both blockers verified in code
+
+- **FINDING 1 (BLOCKER) — accepted.** `stray_hidden` ran for every role, so the one session
+  that is *meant* to hold the hidden tests aborted before `_launch_agent`. A frozen reviewer
+  could never start, which is its only real use. Replaced for this role with
+  `_refuse_wrong_reviewer_tree`, which compares the files actually written against the tree
+  that was selected — catching a stray implementation blob (`stray_hidden`'s job) as firmly as
+  a stray hidden one.
+- **FINDING 2 (BLOCKER) — accepted.** The reviewer never loaded the stored proposal and fell
+  back to `HEAD`, and the fallback swallowed *any* `StoreError`, including a failed integrity
+  check. `_load_proposal_for_review` now takes `proposal.acceptance_tree` from the proposal the
+  task id names, and a proposal that exists but is unreadable raises instead of downgrading the
+  session. Also checks `proposal.proposal_id == task_id`.
+- **FINDING 3 (SHOULD-FIX) — partly accepted.** `agent_stdio` is now refused: inherited stdin
+  is content outside the snapshot a verdict binds. `agent_command` stays as the launch seam
+  (the host must be able to name the executable); the finding's deeper point — that a
+  record-producing review should take its command from trusted configuration rather than an
+  operator argument — is a design change for the host loop, not this role, and is recorded
+  here rather than silently deferred.
+- **FINDING 4 (SHOULD-FIX) — accepted.** `_role_ok` now refuses `role == "reviewer"` outright,
+  so the guarantee does not rest on the socket mount staying correct.
+- **FINDING 5 (SHOULD-FIX) — accepted.** The pre-freeze guard now calls `blobs_under` scoped to
+  `acceptance/`, so an unrelated symlink or gitlink elsewhere cannot reject a valid suite.
+- **FINDING 6 (SHOULD-FIX) — accepted; the most useful finding of both rounds.** Several tests
+  asserted shapes rather than behaviour:
+  - the frozen-projection test derived the proposal tree from `HEAD`, so a `HEAD` fallback
+    passed — rebuilt with a *stale* test that exists in `HEAD` but not in the proposal, which is
+    exactly what a `HEAD` fallback would show;
+  - the acceptance-read "positive control" never ran the command — replaced with a real bwrap
+    run that cats a canary, so it fails if the mounts disappear;
+  - the socket test read source text — replaced with a behavioural check over every bind form;
+  - the env test hand-listed names — replaced with the allowlist property;
+  - added a test that the exact-tree check rejects extra material, and one that it accepts a
+    correct projection.
+- **NOT fixed, stated plainly.** Whether a reviewer can start a real model session with no
+  egress is unproven: the sandbox and argv are verified, the model launch is not. It has no
+  network by design, so a model needing a network API cannot run in it. That is a design
+  question for the host loop (a reviewer model reached through the host, not the sandbox), and
+  it means the `--run` path is still not end-to-end.

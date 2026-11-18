@@ -44,6 +44,8 @@ def reviewer_tree(repo: Repository, tree: str) -> str:
     Fails closed when ``acceptance/`` is not a directory: an empty tree would let the reviewer
     judge a suite it was never shown and still record a verdict.
     """
-    if not any(b.path.startswith(f"{ACCEPTANCE}/") for b in repo.blobs_under(tree, "")):
+    # Scoped to the subtree: `blobs_under` on the whole tree validates entry modes, so an
+    # unrelated symlink or gitlink elsewhere would reject a perfectly good suite.
+    if not repo.blobs_under(tree, ACCEPTANCE):
         raise ValueError("the tree holds no acceptance tests to review")
     return repo.tree_keeping(tree, ACCEPTANCE)

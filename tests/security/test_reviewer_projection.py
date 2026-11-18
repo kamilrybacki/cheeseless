@@ -5,6 +5,7 @@ session where a leak of the candidate's code would matter most: its verdict deci
 the suite freezes, so its input must be the tests and nothing else.
 """
 
+import inspect
 import os
 import subprocess
 from pathlib import Path
@@ -140,31 +141,42 @@ def test_the_reviewer_projection_is_built_from_the_reviewer_tree(tmp_path: Path)
     assert reviewer != implementer, "a reviewer must see less than an implementer"
 
 
-def test_the_reviewer_is_shown_the_frozen_acceptance_tree_not_the_public_projection(
-    tmp_path: Path,
-) -> None:
-    """Found in review: after a freeze `projection_tree` has the hidden tests removed."""
+def test_the_reviewer_is_shown_the_proposed_tree_not_head(tmp_path: Path) -> None:
+    """Found in review twice: an earlier fixture made HEAD and the subject the same tree, so
+    falling back to HEAD passed. Here the proposal differs from HEAD and from the public
+    projection, and each carries its own canary."""
     import types
 
-    root = make_repo(tmp_path / "r3", FILES)
+    STALE = "CANARY-STALE-IN-HEAD-1122"
+    root = make_repo(
+        tmp_path / "r3",
+        {
+            "src/app.py": f"{CODE_CANARY}\n",
+            "acceptance/contract/spec.md": SPEC,
+            "acceptance/contract/test_smoke.py": CONTRACT,
+            "acceptance/hidden/test_old.py": f"{STALE}\n",
+        },
+    )
     repo = GitRepository.discover(root)
     head = repo.head_commit()
-    acceptance = repo.tree_of(head, "acceptance")
-    # A frozen task, minimally shaped: the reviewer must key off `acceptance_tree`.
+    head_acceptance = repo.tree_of(head, "acceptance")
+    # The proposal dropped the stale test; HEAD still holds it. A HEAD fallback would show it.
+    proposed = repo.tree_without(head_acceptance, "hidden/test_old.py", ())
     frozen = types.SimpleNamespace(
-        acceptance_tree=acceptance,
-        projection_tree=repo.tree_without(
-            repo.tree_of(head), "acceptance", ("acceptance/contract/spec.md",)
-        ),
+        acceptance_tree=proposed,
+        projection_tree=repo.tree_without(repo.tree_of(head), "acceptance", ()),
     )
     reviewer = bootstrap._projection_tree(repo, frozen, SessionRole.REVIEWER)
-    implementer = bootstrap._projection_tree(repo, frozen, SessionRole.IMPLEMENTER)
-    assert reviewer != implementer
     proj = tmp_path / "proj"
     repo.create_projection(reviewer, proj)
-    text = "".join(p.read_text() for p in proj.rglob("*") if p.is_file() and ".git" not in p.parts)
-    assert HIDDEN in text, "the reviewer must see the hidden tests it is judging"
+    files = [p for p in proj.rglob("*") if p.is_file() and ".git" not in p.parts]
+    text = "".join(p.read_text(errors="replace") for p in files)
+    # The tree the verdict binds, and not the one HEAD happens to hold.
+    assert CONTRACT in text and SPEC in text
+    assert STALE not in text, "the reviewer was shown HEAD, not the proposed acceptance tree"
     assert CODE_CANARY not in text
+    paths = {str(p.relative_to(proj)) for p in files}
+    assert paths and all(p.startswith("acceptance/") for p in paths), paths
 
 
 def test_an_empty_acceptance_tree_is_refused(tmp_path: Path) -> None:
@@ -179,3 +191,56 @@ def test_an_empty_acceptance_tree_is_refused(tmp_path: Path) -> None:
     empty = repo.tree_without(empty, "src", ())
     with pytest.raises(ValueError, match="empty"):
         reviewer_tree_of(repo, empty)
+
+
+def test_a_projection_holding_extra_material_is_refused(tmp_path: Path) -> None:
+    """The reviewer is given the hidden tests, so `stray_hidden` cannot guard it.
+
+    Found in review: the exact-tree check must catch a stray implementation blob, which is the
+    thing `stray_hidden` exists to catch for every other role.
+    """
+    root = make_repo(tmp_path / "r5", FILES)
+    repo = GitRepository.discover(root)
+    tree = repo.tree_of(repo.head_commit(), "acceptance")
+    proj = tmp_path / "proj"
+    repo.create_projection(reviewer_tree(repo, repo.tree_of(repo.head_commit())), proj)
+    # A blob that is not in the selected tree appears in the projection.
+    (proj / "src").mkdir()
+    (proj / "src" / "leak.py").write_text(CODE_CANARY)
+    with pytest.raises(RuntimeError, match="not the selected tree"):
+        bootstrap._refuse_wrong_reviewer_tree(repo, proj, tree)
+
+
+def test_a_correct_projection_passes_the_exact_tree_check(tmp_path: Path) -> None:
+    root = make_repo(tmp_path / "r6", FILES)
+    repo = GitRepository.discover(root)
+    tree = reviewer_tree(repo, repo.tree_of(repo.head_commit()))
+    proj = tmp_path / "proj"
+    repo.create_projection(tree, proj)
+    bootstrap._refuse_wrong_reviewer_tree(repo, proj, tree)  # must not raise
+
+
+def test_a_reviewer_session_refuses_operator_seeds(tmp_path: Path) -> None:
+    """Seeds are an unfiltered route for candidate content, so the refusal is in host_session.
+
+    Driving `host_session` needs a full context, so this asserts on the refusal branch being
+    reached by role — and `tests/unit/test_reviewer_role.py` pins that the reviewer is the
+    only role for which it fires.
+    """
+    from cheeseless import bootstrap
+
+    source = inspect.getsource(bootstrap.host_session)
+    marker = "bound is SessionRole.REVIEWER and (extras.seeds or extras.read_only)"
+    assert marker in source
+    after = source[source.index(marker) :]
+    assert "SessionOptionError" in after.split("\n\n")[0]
+
+
+def test_a_reviewer_session_cannot_inherit_operator_stdio() -> None:
+    """Found in review: stdio can carry content the verdict does not bind."""
+    import inspect
+
+    from cheeseless import bootstrap
+
+    source = inspect.getsource(bootstrap.host_session)
+    assert "a reviewer session cannot inherit the operator's stdio" in source

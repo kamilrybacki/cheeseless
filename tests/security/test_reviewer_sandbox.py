@@ -138,66 +138,77 @@ def test_the_reviewer_argv_differs_from_the_implementer_in_the_projection_bind(
 
 
 def test_the_reviewer_environment_carries_no_channel_off_the_tests() -> None:
+    """A property, not a list of names: nothing outside the allowlist survives, ever."""
     from cheeseless import bootstrap
 
     env = [
+        ("CHEESELESS_RUNTIME", "/rt"),
+        ("CHEESELESS_MCP", "/mcp"),
         ("CHEESELESS_SOCKET", "/s.sock"),
         ("CHEESELESS_TASK", "t1"),
-        ("CHEESELESS_RUNTIME", "/rt"),
+        ("CHEESELESS_EGRESS_READY", "/ready"),
+        ("CHEESELESS_EGRESS_PORT", "18080"),
         ("EGRESS_SOCKET_ENV", "/e.sock"),
         ("HTTPS_PROXY", "http://p:1"),
-        ("HTTP_PROXY", "http://p:1"),
-        ("ALL_PROXY", "http://p:1"),
-        ("https_proxy", "http://p:1"),
-        ("http_proxy", "http://p:1"),
-        ("all_proxy", "http://p:1"),
         ("SSL_CERT_FILE", "/ca"),
-        ("NODE_EXTRA_CA_CERTS", "/ca"),
-        ("CODEX_CA_CERTIFICATE", "/ca"),
+        ("GIT_CONFIG_GLOBAL", "/candidate/.gitconfig"),
+        ("ANY_VARIABLE_ADDED_LATER", "leak"),
     ]
-    kept = dict(bootstrap._reviewer_env(env))
-    for stripped in (
-        "CHEESELESS_SOCKET",
-        "CHEESELESS_TASK",
-        "EGRESS_SOCKET_ENV",
-        "HTTPS_PROXY",
-        "HTTP_PROXY",
-        "ALL_PROXY",
-        "https_proxy",
-        "http_proxy",
-        "all_proxy",
-        "SSL_CERT_FILE",
-        "NODE_EXTRA_CA_CERTS",
-        "CODEX_CA_CERTIFICATE",
-    ):
-        assert stripped not in kept, stripped
-    # It still needs to find its own interpreter and runtime.
-    assert kept["CHEESELESS_RUNTIME"] == "/rt"
+    kept = bootstrap._reviewer_env(env)
+    allowed = {"CHEESELESS_RUNTIME", "CHEESELESS_MCP"}
+    assert {k for k, _ in kept} == allowed
+    assert dict(kept)["CHEESELESS_RUNTIME"] == "/rt"
 
 
-def test_the_reviewer_argv_is_built_without_sockets() -> None:
-    """Even if a caller passes sockets, `reviewer()` never turns them into a bind."""
-    import inspect
-
-    from cheeseless.adapters.outbound.sandbox import profiles as p
-
-    source = inspect.getsource(p.reviewer)
-    assert "sockets" in source  # accepted, so callers can share plumbing
-    assert '--bind", str(s' not in source
+def test_the_reviewer_argv_is_built_without_sockets(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Even if a caller passes sockets, none of them becomes a mount."""
+    sock = tmp_path / "verifier.sock"
+    sock.write_text("")
+    args, fd = _common(tmp_path, sockets=[sock])
+    try:
+        argv = profiles.reviewer(**args)
+    finally:
+        os.close(fd)
+    for flag in ("--bind", "--ro-bind", "--bind-try", "--ro-bind-try"):
+        assert not [p for p, _ in _pairs(argv, flag) if p.endswith(".sock")], flag
+    assert str(sock) not in argv
 
 
 # -- the protections must fail when removed -----------------------------------
 
 
-def test_an_acceptance_read_is_a_positive_control(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """A reviewer that cannot even read the tests would 'pass' every write-denial test."""
-    args, fd = _common(tmp_path)
+def test_the_reviewer_really_reads_the_tests_inside_the_sandbox(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """A positive control that runs the command and reads a canary.
+
+    Found in review: asserting that *some* mount exists proves nothing, because HOME would
+    satisfy it. A write-denial test is only meaningful if the sandbox starts and the tests are
+    actually readable, so this runs the real command through the real argv.
+    """
+    import subprocess
+
+    canary = "CANARY-READ-9c1e"
+    proj = tmp_path / "proj"
+    (proj / "acceptance" / "hidden").mkdir(parents=True)
+    (proj / "acceptance" / "hidden" / "test_hidden.py").write_text(canary)
+    home = tmp_path / "home"
+    home.mkdir()
+    fd = profiles.open_acceptance(proj)
     try:
-        argv = profiles.reviewer(**dict(args, command=["/bin/sh", "-c", "cat acceptance/x"]))
+        argv = profiles.reviewer(
+            bwrap="/usr/bin/bwrap",
+            projection=proj,
+            home=home,
+            env=[],
+            command=["/bin/sh", "-c", "cat acceptance/hidden/test_hidden.py"],
+            acceptance_fd=fd,
+        )
+        out = subprocess.run(  # noqa: S603
+            argv, capture_output=True, pass_fds=(fd,), timeout=60
+        )
     finally:
         os.close(fd)
-    mounts = [a for a in argv if a in ("--ro-bind", "--bind", "--ro-bind-fd")]
-    assert mounts, "the reviewer must mount something, or its silence proves nothing"
+    assert out.returncode == 0, out.stderr
+    assert canary in out.stdout.decode()
 
 
 def test_the_reviewer_mount_refuses_to_lie_about_a_missing_projection(tmp_path) -> None:  # type: ignore[no-untyped-def]
