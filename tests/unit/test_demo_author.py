@@ -39,3 +39,49 @@ def test_player_escapes_the_transcript_and_fetches_nothing() -> None:
     assert "<scripted agent" not in html
     for external in ("http://", "https://", "src=", "@import"):
         assert external not in html
+
+
+def test_challenge_code_is_found_in_the_prompt() -> None:
+    from demo.author_demo import find_challenge_code
+
+    prompt = "  actor:     host\r\ntype this code to confirm: K7QX2MNP\r\n"
+    assert find_challenge_code(prompt) == "K7QX2MNP"
+    assert find_challenge_code("type this code to confirm: K7Q") is None
+    assert find_challenge_code("no prompt yet") is None
+
+
+def test_pty_operator_answers_a_challenge_on_the_controlling_terminal(tmp_path) -> None:
+    import sys
+
+    from demo.author_demo import run_on_pty
+
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import os\n"
+        "fd = os.open('/dev/tty', os.O_RDWR)\n"
+        "os.write(fd, b'type this code to confirm: ABCD2345\\n')\n"
+        "answer = os.read(fd, 64).strip()\n"
+        "print('accepted' if answer == b'ABCD2345' else 'refused')\n",
+        encoding="utf-8",
+    )
+    result = run_on_pty([sys.executable, str(child)], cwd=tmp_path, env={}, timeout=30)
+    assert result.returncode == 0
+    assert result.typed == "ABCD2345"
+    assert "type this code to confirm: ABCD2345" in result.output
+    assert "accepted" in result.output
+
+
+def test_pty_operator_without_a_prompt_types_nothing(tmp_path) -> None:
+    import sys
+
+    from demo.author_demo import run_on_pty
+
+    result = run_on_pty(
+        [sys.executable, "-c", "print('refused before any prompt')"],
+        cwd=tmp_path,
+        env={},
+        timeout=30,
+    )
+    assert result.returncode == 0
+    assert result.typed is None
+    assert "refused before any prompt" in result.output

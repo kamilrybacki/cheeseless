@@ -71,7 +71,19 @@ $ cheeseless session --role author --task &lt;placeholder-task&gt; --projection 
 $ cheeseless promote --role author --worktree &lt;author-worktree-2&gt;
 promoted refs/heads/spec/toy &lt;id-3&gt;
 $ git merge --ff-only spec/toy
+
+#    Operator decisions need a code retyped on the terminal (ADR 0017).
+#    The demo plays the operator on a pty it owns: it reads the code and types it back.
 $ cheeseless freeze --approve &lt;proposal-2&gt; --as host
+cheeseless: confirm an operator decision at this terminal
+  operation: freeze-approve
+  lineage:   toy
+  subject:   &lt;proposal-2&gt;
+  actor:     host
+  outcome:   freeze
+type this code to confirm: A4Q98FJW
+(typed back: A4Q98FJW)
+
 frozen task: &lt;proposal-2&gt;
 
 # 4. After the freeze the author can no longer change the suite.
@@ -107,6 +119,15 @@ $ cheeseless disputes --show-note --json
 
 #    The host reads the note, checks the spec and rejects the dispute.
 $ cheeseless dispute resolve d-1 --rejected --as host
+cheeseless: confirm an operator decision at this terminal
+  operation: dispute-resolve
+  lineage:   toy
+  subject:   d-1
+  actor:     host
+  outcome:   rejected
+type this code to confirm: WCNVA7GW
+(typed back: WCNVA7GW)
+
 d-1: rejected by host
 A fresh implementer session may start for this task.
 
