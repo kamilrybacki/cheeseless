@@ -1342,5 +1342,16 @@ round's BLOCKER 1, sonnet's M5-5 "make auto-freeze opt-in per project"). It is a
   ADR 0013 already settled against.
 - **C. Anywhere, as today.** Then ADR 0013's consequence is wrong and should be superseded.
 
-Left undecided on purpose: this changes what the project promises, and guessing either way
-would settle a product question in a comment.
+**Decided: B (operator, this session).** Auto-freeze stays available in any repository but is
+off until the project opts in. `AuthoringStore.auto_freeze_enabled(lineage)` reads a stored
+boolean, `set_auto_freeze` writes it, and `auto_approve_freeze` refuses with
+`auto_freeze_not_enabled` before it looks at any review. The operator-facing switch is
+`cheeseless freeze --allow-auto` / `--no-allow-auto`, scoped to the current contract's lineage.
+
+Two details of the implementation worth keeping:
+
+- **An absent record is `False`, a corrupt one is `StoreError`.** Reading a missing setting as
+  "no" is the safe default; reading an unparseable one as either value would be a guess, and
+  one of the two guesses opens the gate on garbage.
+- **The use case keeps its own check, not the CLI's.** `auto_approve_freeze` asks the store for
+  the proposal's lineage, so nothing a caller supplies can widen the scope of an opt-in.

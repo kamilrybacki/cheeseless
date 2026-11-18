@@ -290,6 +290,22 @@ class AuthoringStoreMixin:
             },
         )
 
+    def auto_freeze_enabled(self, lineage_id: str) -> bool:
+        lineage = _lineage(lineage_id)
+        data = self._read_authoring(f"auto-freeze-{lineage}.json")
+        if data is None:
+            return False
+        enabled = data.get("enabled")
+        if not isinstance(enabled, bool):
+            # Anything but a stored boolean is a broken record. Neither `True` nor `False` is
+            # a safe guess: one opens the gate on garbage, the other hides that it is broken.
+            raise StoreError(f"corrupt auto-freeze setting for {lineage}")
+        return enabled
+
+    def set_auto_freeze(self, lineage_id: str, enabled: bool) -> None:
+        lineage = _lineage(lineage_id)
+        self._write_authoring(f"auto-freeze-{lineage}.json", {"enabled": bool(enabled)})
+
     def load_strength_review(self, proposal_id: str) -> StrengthReview | None:
         pid = _digest(proposal_id, "proposal id")
         data = self._read_authoring(f"strength-review-{pid}.json")

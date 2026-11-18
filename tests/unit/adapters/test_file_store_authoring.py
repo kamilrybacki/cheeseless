@@ -294,3 +294,28 @@ def test_a_corrupt_author_check_record_is_a_store_error(store: FileStore, tmp_pa
     (tmp_path / "state" / "authoring" / "author-check-demo.json").write_text('{"tree": "x"}')
     with pytest.raises(StoreError):
         store.load_author_check("demo")
+
+
+def test_auto_freeze_optin_is_off_until_recorded_and_survives_a_corrupt_record(
+    store: FileStore,
+) -> None:
+    """Decision B lives in the store, so its default is what a missing or broken file does."""
+    lineage = "demo-project"
+
+    assert store.auto_freeze_enabled(lineage) is False, "an absent record is not consent"
+
+    store.set_auto_freeze(lineage, True)
+    assert store.auto_freeze_enabled(lineage) is True
+    assert store.auto_freeze_enabled("other-project") is False, "the setting is per project"
+
+    store.set_auto_freeze(lineage, False)
+    assert store.auto_freeze_enabled(lineage) is False
+
+    # A corrupt record must not open the gate. The store refuses it outright rather than
+    # guessing `False`: an unreadable setting is a broken store, not a quiet "no".
+    paths = list(Path(store.root).rglob("auto-freeze-*.json"))
+    assert paths, "the opt-in record should exist before it is corrupted"
+    for path in paths:
+        path.write_text('{"enabled": "yes"}')
+    with pytest.raises(StoreError):
+        store.auto_freeze_enabled(lineage)

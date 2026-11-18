@@ -83,3 +83,14 @@ class AuthoringStore(Protocol):
         ...
 
     def load_strength_review(self, proposal_id: str) -> StrengthReview | None: ...
+
+    def auto_freeze_enabled(self, lineage_id: str) -> bool:
+        """Whether this project has opted in to unattended freeze (ledger: decision B).
+
+        Off unless a record says otherwise: the default is the one an operator must change
+        deliberately, and an absent record must never read as consent."""
+        ...
+
+    def set_auto_freeze(self, lineage_id: str, enabled: bool) -> None:
+        """Record the project's choice. The host writes this; a proposal cannot."""
+        ...

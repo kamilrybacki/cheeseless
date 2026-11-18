@@ -679,10 +679,22 @@ def auto_approve_freeze(
     ADR 0013 point 3 as ADR 0015 makes it checkable. The actor is set here, never taken from a
     caller-supplied label, and the ``--no-reference`` waiver is refused: an automatic approval
     cannot waive the crosscheck that the operator would have to waive in person.
+
+    Requires the project's own opt-in (``store.auto_freeze_enabled``): the default is that a
+    human approves, so a repository that never asked for unattended freeze cannot get one.
     """
     proposal = store.load_proposal(proposal_id)
     if proposal is None:
         raise AuthorError("unknown_proposal", "no such proposal")
+    if not store.auto_freeze_enabled(proposal.lineage_id):
+        # Decision B (ledger): unattended freeze is possible anywhere but on nowhere until the
+        # project says so. An absent setting is not consent, and an operator who wants the
+        # gate to open without them present has to write that down first.
+        raise AuthorError(
+            "auto_freeze_not_enabled",
+            "this project has not opted in to unattended freeze; "
+            "run `cheeseless freeze --allow-auto` first",
+        )
     problem = _strength_review_problem(store, proposal)
     if problem is not None:
         raise problem

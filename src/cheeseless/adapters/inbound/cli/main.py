@@ -128,6 +128,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Host only: the automatic approval, needing a stored strength review (ADR 0015).",
     )
+    freeze.add_argument(
+        "--allow-auto",
+        action="store_true",
+        help="Opt this project in to unattended freeze (ledger decision B).",
+    )
+    freeze.add_argument(
+        "--no-allow-auto",
+        action="store_true",
+        help="Withdraw the opt-in; unattended freeze stops working immediately.",
+    )
     freeze.add_argument("--json", action="store_true")
 
     ref = sub.add_parser("reference", help="Host only: reference-session bookkeeping.")
@@ -608,7 +618,39 @@ def _cmd_reference(args: argparse.Namespace, ctx: Context) -> int:
     return 0
 
 
+def _cmd_auto_freeze_optin(args: argparse.Namespace, ctx: Context) -> int:
+    """Record or withdraw this project's consent to unattended freeze.
+
+    Taken from the current contract's lineage, so the setting belongs to a project rather
+    than to whatever proposal happens to be on the table.
+    """
+    try:
+        contract = read_contract(ctx.repo, ctx.repo.head_commit())
+    except FreezeError as exc:
+        _emit(
+            args,
+            {"ok": False, "error": "freeze", "problems": list(exc.problems)},
+            f"refused: {'; '.join(exc.problems)}",
+        )
+        return 1
+    enabled = not args.no_allow_auto
+    _author_store(ctx).set_auto_freeze(contract.lineage_id, enabled)
+    _emit(
+        args,
+        {"lineage_id": contract.lineage_id, "auto_freeze": enabled},
+        "unattended freeze "
+        + (
+            "allowed; `freeze --approve ... --auto` still needs a stored review"
+            if enabled
+            else "withdrawn"
+        ),
+    )
+    return 0
+
+
 def _cmd_freeze(args: argparse.Namespace, ctx: Context) -> int:
+    if args.allow_auto or args.no_allow_auto:
+        return _cmd_auto_freeze_optin(args, ctx)
     if args.approve:
         return _cmd_approve(args, ctx)
     try:

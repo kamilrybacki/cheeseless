@@ -24,9 +24,19 @@ DIGEST = "d" * 64
 class _Store:
     """The little of the authoring store these tests exercise."""
 
-    def __init__(self, proposal: Proposal | None, review: StrengthReview | None) -> None:
+    def __init__(
+        self,
+        proposal: Proposal | None,
+        review: StrengthReview | None,
+        *,
+        opted_in: bool = True,
+    ) -> None:
         self._proposal = proposal
         self._review = review
+        self._opted_in = opted_in
+
+    def auto_freeze_enabled(self, lineage_id: str) -> bool:
+        return self._opted_in
 
     def load_proposal(self, proposal_id: str) -> Proposal | None:
         return self._proposal
@@ -75,6 +85,17 @@ def test_auto_freeze_refuses_a_review_an_operator_merely_recorded() -> None:
     with pytest.raises(AuthorError) as exc:
         _auto(_Store(_proposal(), _review(observed=False)))
     assert exc.value.kind == "unobserved_strength_review"
+
+
+def test_auto_freeze_refuses_a_project_that_never_opted_in() -> None:
+    """Decision B: unattended freeze is opt-in per project, and an absent record is not consent.
+
+    A repo that has never written the setting must not get an unattended freeze, even with a
+    perfect observed review - otherwise the opt-in is a formality, not a gate.
+    """
+    with pytest.raises(AuthorError) as exc:
+        _auto(_Store(_proposal(), _review(), opted_in=False))
+    assert exc.value.kind == "auto_freeze_not_enabled"
 
 
 def test_auto_freeze_refuses_without_any_strength_review() -> None:
@@ -241,3 +262,21 @@ def test_recording_a_review_never_freezes_anything() -> None:
     source = inspect.getsource(record_strength_review)
     assert "approve_freeze" not in source
     assert "auto_approve_freeze" not in source
+
+
+def test_the_optin_is_written_by_the_host_and_withdrawable() -> None:
+    """Decision B: the flag exists, is per lineage, and can be taken back."""
+    from cheeseless.adapters.inbound.cli import main as cli
+
+    parser = cli.build_parser()
+    args = parser.parse_args(["freeze", "--allow-auto"])
+    assert args.allow_auto is True
+    assert args.no_allow_auto is False
+    args = parser.parse_args(["freeze", "--no-allow-auto"])
+    assert args.no_allow_auto is True
+
+    # The use case reads the setting before it looks at any review, and the store is asked
+    # for the proposal's own lineage rather than a caller-supplied one.
+    source = inspect.getsource(authoring_app.auto_approve_freeze)
+    assert "auto_freeze_enabled" in source
+    assert "auto_freeze_not_enabled" in source
