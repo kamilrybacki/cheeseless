@@ -33,14 +33,16 @@ class DevTestsPhaseError(DevFlowError):
     """The tests phase cannot close yet; the message says which check failed."""
 
 
-def require_clean_tree(dirty: Callable[[], bool] | bool) -> None:
+def require_clean_tree(is_clean: Callable[[], bool] | bool) -> None:
     """Refuse a dirty working tree (ADR 0013: clean tree only).
 
-    ``dirty`` is a callable or a bool so this layer stays free of git I/O: the caller
-    passes ``ctx.repo.is_clean`` or a boolean.
+    ``is_clean`` is a callable or a bool so this layer stays free of git I/O: the caller
+    passes ``ctx.repo.is_clean`` or a boolean. The parameter names the *positive* fact,
+    because a ``dirty`` flag read through ``not`` is a sign error waiting to happen: the
+    first draft of the E2E asserted a clean repo was refused.
     """
-    is_dirty = dirty() if callable(dirty) else dirty
-    if is_dirty:
+    clean = is_clean() if callable(is_clean) else is_clean
+    if not clean:
         raise DevFlowError("the working tree is not clean: commit or stash before `cheeseless dev`")
 
 
@@ -59,9 +61,7 @@ def require_token(value: str | None) -> str:
             "before `cheeseless dev`"
         )
     if any(character < " " or character == "\x7f" for character in value):
-        raise DevFlowError(
-            f"{CREDENTIAL_VAR} contains a control character: re-export a clean one"
-        )
+        raise DevFlowError(f"{CREDENTIAL_VAR} contains a control character: re-export a clean one")
     return value
 
 

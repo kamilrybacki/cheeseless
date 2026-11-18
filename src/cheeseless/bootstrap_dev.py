@@ -71,7 +71,7 @@ def _preflight(
     """Everything that must hold before a phase is staged; raises ``DevFlowError``."""
     lineage = args.lineage
     ctx = build_context(getattr(args, "state_dir", None), None)
-    require_clean_tree(lambda: not ctx.repo.is_clean())
+    require_clean_tree(ctx.repo.is_clean)
     if not agent:
         raise DevFlowError("no agent command: put it after --, e.g. `cheeseless dev -- claude`")
     store = cast(DevSessionStore, ctx.store)
