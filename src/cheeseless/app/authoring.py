@@ -28,6 +28,7 @@ from cheeseless.app.freeze import (
     read_contract,
     rebuild_fingerprints,
 )
+from cheeseless.app.presence import presence_note, require_presence
 from cheeseless.domain import ids
 from cheeseless.domain.authoring import (
     AuthoringError,
@@ -46,8 +47,10 @@ from cheeseless.domain.dlp import redact_sentinels, sentinel_problems
 from cheeseless.domain.evaluation import SuiteRun, TestOutcome, freeze_problems
 from cheeseless.domain.freeze import FrozenTask, freeze_digest
 from cheeseless.domain.holdout import split as holdout_split
+from cheeseless.domain.presence import PresenceOperation, PresenceRefused, PresenceRequest
 from cheeseless.domain.session_role import SessionRole
 from cheeseless.ports.authoring import AuthoringStore
+from cheeseless.ports.presence import PresenceProof
 from cheeseless.ports.repository import Repository, RepositoryError
 from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
 from cheeseless.ports.store import Store, StoreError
@@ -329,6 +332,7 @@ def approve_freeze(
     proposal_id: str,
     *,
     actor: str,
+    presence: PresenceProof | None,
     no_reference: bool = False,
     reason: str = "",
     unattended: bool = False,
@@ -337,7 +341,11 @@ def approve_freeze(
 
     The author's acceptance code runs only inside ``author_sandbox``. ``unattended`` is set
     only by :func:`auto_approve_freeze`: it adds the project's opt-in and a host-observed
-    strength review (ADR 0016) on top of the checks a present operator gets (ADR 0009)."""
+    strength review (ADR 0016) on top of the checks a present operator gets (ADR 0009).
+
+    An attended approval also needs a fresh presence confirmation (ADR 0017), asked under
+    the approval ownership once the proposal is ready, and the state is re-read after the
+    answer: what the operator confirmed is what is frozen."""
     reason = reason.strip()
     if no_reference and not reason:
         raise AuthorError("reason_required", "--no-reference needs a --reason")
@@ -357,6 +365,13 @@ def approve_freeze(
             if unattended:
                 _unattended_problem(store, proposal)
             _ready(repo, store, proposal, no_reference)
+            note = (
+                ""
+                if unattended
+                else _attended_presence(
+                    store, proposal, state, presence, actor, no_reference, reason
+                )
+            )
             return _approve_owned(
                 repo,
                 sandbox,
@@ -368,9 +383,39 @@ def approve_freeze(
                 actor=actor,
                 no_reference=no_reference,
                 reason=reason,
+                note=note,
             )
     except AuthoringError as exc:
         raise AuthorError("approval_conflict", f"another approval is in progress: {exc}") from exc
+    except PresenceRefused as exc:
+        raise AuthorError("presence_refused", str(exc)) from exc
+
+
+def _attended_presence(
+    store: AuthorStore,
+    proposal: Proposal,
+    state: AuthoringState,
+    presence: PresenceProof | None,
+    actor: str,
+    no_reference: bool,
+    reason: str,
+) -> str:
+    """Ask for the operator's confirmation of exactly this freeze; return the audit note."""
+    confirmation = require_presence(
+        presence,
+        PresenceRequest(
+            PresenceOperation.FREEZE_APPROVE,
+            proposal.lineage_id,
+            proposal.proposal_id,
+            actor,
+            "freeze no-reference" if no_reference else "freeze",
+            waiver=reason if no_reference else "",
+        ),
+    )
+    # The operator may take a while to answer: the decision stands only on the state it saw.
+    if store.authoring_state(proposal.lineage_id, proposal.spec_digest) != state:
+        raise AuthorError("approval_conflict", "the authoring state changed during confirmation")
+    return presence_note(confirmation)
 
 
 def _unattended_problem(store: AuthorStore, proposal: Proposal) -> None:
@@ -405,6 +450,7 @@ def _approve_owned(
     actor: str,
     no_reference: bool,
     reason: str,
+    note: str,
 ) -> object:
     if resuming:
         reserved = state
@@ -445,9 +491,8 @@ def _approve_owned(
         store.save_authoring_state(reserved.released())
         raise
     store.save_authoring_state(reserved.frozen())
-    store.log_event(
-        result.task_id, "freeze-approve", f"{actor}{' no-reference' if no_reference else ''}"
-    )
+    cause = f"{actor}{' no-reference' if no_reference else ''}"
+    store.log_event(result.task_id, "freeze-approve", f"{cause} {note}" if note else cause)
     return result
 
 
@@ -459,19 +504,24 @@ def recover_approval(
     proposal_id: str,
     *,
     actor: str,
+    presence: PresenceProof | None,
 ) -> str:
     """Host-only: clear an APPROVING reservation whose approver died. Returns the outcome.
 
     Refused while the approver is alive (it holds the ownership lock). Never reachable
     through the UDS or MCP surfaces. Published task: finish it to FROZEN; otherwise roll
-    back to PROPOSED. Every state change goes through the lifecycle compare-and-set."""
+    back to PROPOSED. Every state change goes through the lifecycle compare-and-set.
+    Finishing activates a task, so it needs a presence confirmation (ADR 0017); rolling
+    back only returns the proposal to the operator and does not."""
     proposal = store.load_proposal(proposal_id)
     if proposal is None:
         raise AuthorError("unknown_proposal", "no such proposal")
     try:
         owner = store.approval_ownership(proposal.lineage_id)
         with owner:
-            return _recover_owned(repo, sandbox, author_sandbox, store, proposal, actor)
+            return _recover_owned(repo, sandbox, author_sandbox, store, proposal, actor, presence)
+    except PresenceRefused as exc:
+        raise AuthorError("presence_refused", str(exc)) from exc
     except AuthoringError as exc:
         text = str(exc)
         if "held" in text:
@@ -488,6 +538,7 @@ def _recover_owned(
     store: AuthorStore,
     proposal: Proposal,
     actor: str,
+    presence: PresenceProof | None,
 ) -> str:
     state = store.authoring_state(proposal.lineage_id, proposal.spec_digest)
     if state.phase is not TaskPhase.APPROVING:
@@ -497,10 +548,19 @@ def _recover_owned(
         store.save_authoring_state(state.released())
         store.log_event(tid, "freeze-recover", f"{actor} rolled-back")
         return "rolled_back"
+    confirmation = require_presence(
+        presence,
+        PresenceRequest(
+            PresenceOperation.FREEZE_RECOVER, proposal.lineage_id, tid, actor, "finish"
+        ),
+    )
+    current = store.authoring_state(proposal.lineage_id, proposal.spec_digest)
+    if current != state or not store.has_task(tid):
+        raise AuthorError("recovery_conflict", "the authoring state changed during confirmation")
     _verify_published(repo, sandbox, author_sandbox, store, proposal)
     store.set_active(tid)
     store.save_authoring_state(state.frozen())
-    store.log_event(tid, "freeze-recover", f"{actor} finished")
+    store.log_event(tid, "freeze-recover", f"{actor} finished {presence_note(confirmation)}")
     return "finished"
 
 
@@ -736,8 +796,46 @@ def auto_approve_freeze(
         store,
         proposal_id,
         actor=DEV_ACTOR,
+        presence=None,
         unattended=True,
     )
+
+
+def configure_auto_freeze(
+    repo: Repository,
+    store: AuthorStore,
+    *,
+    enabled: bool,
+    presence: PresenceProof | None,
+) -> str:
+    """Host-only: record or withdraw the project's consent to unattended freeze.
+
+    Returns the lineage the setting belongs to (the current contract's, so it belongs to a
+    project rather than to one proposal). Enabling hands future freezes to the host, so it
+    needs a presence confirmation (ADR 0017); withdrawing only takes power away and does
+    not. The confirmation is asked before the store's own ownership is taken (that lock is
+    not reentrant) and the lineage is re-read after the answer."""
+    lineage = read_contract(repo, repo.head_commit()).lineage_id
+    note = ""
+    if enabled:
+        try:
+            confirmation = require_presence(
+                presence,
+                PresenceRequest(
+                    PresenceOperation.AUTO_FREEZE_ENABLE, lineage, lineage, "operator", "allow"
+                ),
+            )
+        except PresenceRefused as exc:
+            raise AuthorError("presence_refused", str(exc)) from exc
+        if read_contract(repo, repo.head_commit()).lineage_id != lineage:
+            raise AuthorError(
+                "lineage_changed", "the project's contract changed during confirmation"
+            )
+        note = presence_note(confirmation)
+    store.set_auto_freeze(lineage, enabled)
+    if enabled:
+        store.log_event(lineage, "auto-freeze-enable", f"operator {note}")
+    return lineage
 
 
 __all__ = [
@@ -748,6 +846,7 @@ __all__ = [
     "approve_freeze",
     "auto_approve_freeze",
     "author_check",
+    "configure_auto_freeze",
     "author_crosscheck",
     "freeze_propose",
     "proposal_id_for",

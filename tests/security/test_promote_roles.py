@@ -21,6 +21,7 @@ from cheeseless.app.freeze import commit, prepare
 from cheeseless.app.gate_run import gate_run
 from cheeseless.app.promote import PromoteRejected, promote, promote_author
 from cheeseless.domain.authoring import TaskPhase
+from tests.presence_fakes import Approving
 from tests.toy import CANARY, FIXED_MAIN, SENTINEL
 from tests.unit.app.test_author_promote import _check, _edit_acceptance, _lineage, _ref_files
 
@@ -129,7 +130,7 @@ def test_implementer_promote_refuses_any_acceptance_change(implementer):
     (wt / "acceptance" / "hidden" / "x.py").write_text("x")
     gate_run(repo, store, runner, sandbox, worktree=wt)
     with pytest.raises(PromoteRejected) as err:
-        promote(repo, store, worktree=wt)
+        promote(repo, store, worktree=wt, presence=Approving())
     assert "acceptance/hidden/x.py" in err.value.rejected
 
 
@@ -137,7 +138,7 @@ def test_implementer_promote_lands_on_gate_and_never_carries_hidden_content(impl
     repo, runner, sandbox, store, wt, _ = implementer
     (wt / "src" / "toy" / "__main__.py").write_text(FIXED_MAIN)
     gate_run(repo, store, runner, sandbox, worktree=wt)
-    out = promote(repo, store, worktree=wt)
+    out = promote(repo, store, worktree=wt, presence=Approving())
     assert out.ref.startswith("refs/heads/gate/")
     added = _newly_added(repo.root, out.ref)
     assert added  # the control below is meaningless if the scan saw nothing
@@ -150,7 +151,7 @@ def test_implementer_promote_cannot_be_pointed_at_a_spec_ref(implementer):
     (wt / "src" / "toy" / "__main__.py").write_text(FIXED_MAIN)
     gate_run(repo, store, runner, sandbox, worktree=wt)
     with pytest.raises(ValueError, match="gate/"):
-        promote(repo, store, worktree=wt, ref="refs/heads/spec/x")
+        promote(repo, store, worktree=wt, ref="refs/heads/spec/x", presence=Approving())
 
 
 def test_implementer_promote_on_a_stale_tree_is_refused(implementer):
@@ -159,7 +160,7 @@ def test_implementer_promote_on_a_stale_tree_is_refused(implementer):
     gate_run(repo, store, runner, sandbox, worktree=wt)
     (wt / "src" / "toy" / "__main__.py").write_text(FIXED_MAIN + "\n# edited after the gate\n")
     with pytest.raises(ValueError, match="does not match"):
-        promote(repo, store, worktree=wt)
+        promote(repo, store, worktree=wt, presence=Approving())
 
 
 def test_author_state_alone_cannot_authorise_an_implementer_promote(author):
@@ -168,7 +169,7 @@ def test_author_state_alone_cannot_authorise_an_implementer_promote(author):
     assert _check(repo, store, wt).ok
     assert uc.read_contract(repo, repo.snapshot(wt)).lineage_id
     with pytest.raises(ValueError):
-        promote(repo, store, worktree=wt)
+        promote(repo, store, worktree=wt, presence=Approving())
 
 
 class _ApprovalLands:

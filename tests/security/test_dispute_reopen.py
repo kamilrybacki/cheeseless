@@ -9,6 +9,7 @@ from cheeseless.adapters.outbound.store.file_store import FileStore
 from cheeseless.app.dispute import configure_disputes, gate_dispute, resolve_dispute
 from cheeseless.domain.errors import ErrorCode
 from tests.factories import frozen_task
+from tests.presence_fakes import Approving
 from tests.support import bind_session
 
 SEED = bytes(range(32))
@@ -60,7 +61,9 @@ def _status_after_reject(tmp_path: Path, *, bind_before: bool) -> bytes:
         code="untestable",
         note="n",
     )
-    resolve_dispute(store, store.disputes()[-1].dispute_id, upheld=False, actor="op")
+    resolve_dispute(
+        store, store.disputes()[-1].dispute_id, upheld=False, actor="op", presence=Approving()
+    )
     server = _server(store, binding or bind_session(store, tid))
     out = _W()
     server._route(out, "/status", b"{}")  # noqa: SLF001

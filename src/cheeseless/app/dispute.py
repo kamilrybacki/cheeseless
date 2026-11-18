@@ -7,6 +7,7 @@ changes are host-only and are reachable from the CLI alone.
 from __future__ import annotations
 
 from cheeseless.app.gate_run import PRE_HIDDEN_ATTEMPT_LIMIT, PRE_HIDDEN_ATTEMPT_WINDOW
+from cheeseless.app.presence import presence_note, require_presence
 from cheeseless.domain.dispute import (
     ACK_TEXT,
     DisputeCode,
@@ -16,6 +17,8 @@ from cheeseless.domain.dispute import (
     check_note,
 )
 from cheeseless.domain.errors import ErrorCode, GateError, gate_error
+from cheeseless.domain.presence import PresenceOperation, PresenceRequest
+from cheeseless.ports.presence import PresenceProof
 from cheeseless.ports.store import DisputeRefused, Store, StoreError
 
 
@@ -55,10 +58,41 @@ def list_disputes(store: Store) -> tuple[DisputeRecord, ...]:
     return store.disputes()
 
 
-def resolve_dispute(store: Store, dispute_id: str, *, upheld: bool, actor: str) -> DisputeRecord:
-    """Record the outcome once. Raises ``StoreError`` on a repeat or an unknown id."""
+def resolve_dispute(
+    store: Store,
+    dispute_id: str,
+    *,
+    upheld: bool,
+    actor: str,
+    presence: PresenceProof | None,
+) -> DisputeRecord:
+    """Record the outcome once. Raises ``StoreError`` on a repeat or an unknown id.
+
+    The decision needs a presence confirmation (ADR 0017), asked only for a dispute that is
+    still open. Raises ``PresenceRefused`` without one. The store's resolve is itself a
+    compare-and-set on OPEN, so a dispute resolved elsewhere while the operator answered
+    is refused rather than resolved twice.
+    """
     outcome = DisputeStatus.UPHELD if upheld else DisputeStatus.REJECTED
+    pending = next((d for d in store.disputes() if d.dispute_id == dispute_id), None)
+    if pending is None:
+        raise StoreError("no such dispute")
+    if pending.status is not DisputeStatus.OPEN:
+        raise StoreError(f"dispute {dispute_id} is already resolved")
+    confirmation = require_presence(
+        presence,
+        PresenceRequest(
+            PresenceOperation.DISPUTE_RESOLVE,
+            pending.lineage_id,
+            dispute_id,
+            actor,
+            outcome.value,
+        ),
+    )
     record = store.resolve_dispute(dispute_id, outcome, actor)
+    store.log_event(
+        record.task_id, "dispute-presence", f"{dispute_id} {actor} {presence_note(confirmation)}"
+    )
     if outcome is DisputeStatus.REJECTED:
         store.log_event(
             record.task_id,

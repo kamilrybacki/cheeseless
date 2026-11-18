@@ -9,6 +9,7 @@ from cheeseless.adapters.outbound.store.file_store import FileStore
 from cheeseless.app.dispute import configure_disputes, gate_dispute, resolve_dispute
 from cheeseless.domain.errors import ErrorCode, GateError
 from tests.factories import frozen_task
+from tests.presence_fakes import Approving
 
 SEED = bytes(range(32))
 WINDOW = 3600.0
@@ -49,7 +50,7 @@ def test_rejection_starts_a_new_generation_and_clears_the_attempt_window(
     for _ in range(4):
         store.record_attempt(_tid(), 1000.0, WINDOW)
     did = _file(store)
-    resolve_dispute(store, did, upheld=False, actor="alice")
+    resolve_dispute(store, did, upheld=False, actor="alice", presence=Approving())
     assert store.session_generation(_tid()) == 1
     # The old attempts no longer count: the first attempt of the new session is attempt 1.
     assert store.record_attempt(_tid(), 1001.0, WINDOW) == 1
@@ -59,7 +60,7 @@ def test_upheld_changes_neither_the_generation_nor_the_attempts(store: FileStore
     for _ in range(4):
         store.record_attempt(_tid(), 1000.0, WINDOW)
     did = _file(store)
-    resolve_dispute(store, did, upheld=True, actor="alice")
+    resolve_dispute(store, did, upheld=True, actor="alice", presence=Approving())
     assert store.session_generation(_tid()) == 0
     assert store.record_attempt(_tid(), 1001.0, WINDOW) == 5
     assert store.session_disputed(_tid())
@@ -69,7 +70,7 @@ def test_the_rejection_is_audited_with_who_when_and_the_new_budget(
     store: FileStore, tmp_path: Path
 ):
     did = _file(store)
-    resolve_dispute(store, did, upheld=False, actor="alice")
+    resolve_dispute(store, did, upheld=False, actor="alice", presence=Approving())
     reopen = [e for e in _events(store, tmp_path) if e["kind"] == "dispute-reopen"]
     assert len(reopen) == 1
     event = reopen[0]
@@ -83,15 +84,15 @@ def test_the_rejection_is_audited_with_who_when_and_the_new_budget(
 
 def test_a_rejection_cannot_be_applied_twice(store: FileStore):
     did = _file(store)
-    resolve_dispute(store, did, upheld=False, actor="alice")
+    resolve_dispute(store, did, upheld=False, actor="alice", presence=Approving())
     with pytest.raises(Exception, match="already resolved"):
-        resolve_dispute(store, did, upheld=False, actor="alice")
+        resolve_dispute(store, did, upheld=False, actor="alice", presence=Approving())
     assert store.session_generation(_tid()) == 1
 
 
 def test_the_lineage_cap_still_counts_a_rejected_dispute(store: FileStore):
     configure_disputes(store, enabled=True, cap=1)
-    resolve_dispute(store, _file(store), upheld=False, actor="alice")
+    resolve_dispute(store, _file(store), upheld=False, actor="alice", presence=Approving())
     refused = gate_dispute(
         store, task_id=_tid(), criterion_id="normalize", code="untestable", note="n"
     )
@@ -105,5 +106,5 @@ def test_the_lineage_run_budget_is_not_reset(store: FileStore):
     lineage = frozen_task().task.lineage_id
     store.reserve_run(lineage, Pool.LOCAL)
     before = store.budget(lineage, Pool.LOCAL)
-    resolve_dispute(store, _file(store), upheld=False, actor="alice")
+    resolve_dispute(store, _file(store), upheld=False, actor="alice", presence=Approving())
     assert store.budget(lineage, Pool.LOCAL) == before

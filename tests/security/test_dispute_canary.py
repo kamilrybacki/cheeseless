@@ -16,6 +16,7 @@ from cheeseless.app.promote import promote
 from cheeseless.domain.dispute import ACK_TEXT
 from cheeseless.domain.errors import ErrorCode, GateError
 from tests.factories import frozen_task
+from tests.presence_fakes import Approving
 from tests.support import bind_session
 
 SEED = bytes(range(32))
@@ -167,7 +168,7 @@ def test_disputed_session_cannot_run_publish_or_promote(store):
     assert verdict.outcome.code is ErrorCode.SESSION_DISPUTED
     assert store.latest_result(_tid()) is None
     with pytest.raises(ValueError, match="dispute"):
-        promote(Boom(), store, task_id=_tid(), worktree=".")
+        promote(Boom(), store, task_id=_tid(), worktree=".", presence=Approving())
 
 
 def test_cap_is_enforced_and_refusal_records_nothing(store):

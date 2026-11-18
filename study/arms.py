@@ -277,7 +277,9 @@ def _decide(case: CheeselessCase) -> tuple[str | None, str | None, str | None]:
     if gate is not None:
         return REJECT, gate, None
     try:
-        outcome = promote(case.repo, case.store, task_id=case.task_id, worktree=case.projection)
+        outcome = promote(
+            case.repo, case.store, task_id=case.task_id, worktree=case.projection, presence=None
+        )
     except PromoteRejected:
         return REJECT, "promote_rejected", None
     except (ValueError, OSError):

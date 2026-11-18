@@ -37,6 +37,7 @@ from cheeseless.domain.budget import Pool
 from cheeseless.domain.egress_policy import EgressPolicy, PolicyError
 from cheeseless.session_files import copy_evidence, write_projection_list
 from cheeseless.session_options import SessionOptionError, load_egress_policy
+from tests.presence_fakes import Approving
 from tests.toy import CANARY, FIXED_MAIN, SENTINEL, make_repo
 
 COMMAND_ENV = "CHEESELESS_E2E_AGENT_CMD"
@@ -435,7 +436,9 @@ def verify_evidence(case: Case) -> None:
 def promote_and_judge(case: Case) -> CiVerdict:
     """Promote the evaluated projection and re-run the real CI judge on that commit."""
     frozen, _seed = case.store.load_task(case.task_id)
-    outcome = promote(case.repo, case.store, task_id=case.task_id, worktree=case.projection)
+    outcome = promote(
+        case.repo, case.store, task_id=case.task_id, worktree=case.projection, presence=Approving()
+    )
     return judge(
         case.repo,
         PytestRunner(),

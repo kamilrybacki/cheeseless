@@ -15,6 +15,7 @@ from cheeseless.app.dispute import configure_disputes
 from cheeseless.domain.dispute import ACK_TEXT, DisputeCode
 from cheeseless.domain.errors import ErrorCode, GateError, gate_error
 from tests.factories import frozen_task
+from tests.presence_fakes import Approving
 from tests.support import bind_session
 
 SEED = bytes(range(32))
@@ -150,7 +151,13 @@ def test_uds_has_no_list_or_resolve_route(store: FileStore) -> None:
 
 def _cli(store: FileStore, argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
-    ctx = Context(repo=None, runner=None, sandbox=None, store=store)  # type: ignore[arg-type]
+    ctx = Context(
+        repo=None,  # type: ignore[arg-type]
+        runner=None,  # type: ignore[arg-type]
+        sandbox=None,  # type: ignore[arg-type]
+        store=store,
+        presence=Approving(),
+    )
     return dispatch(args, ctx)
 
 
