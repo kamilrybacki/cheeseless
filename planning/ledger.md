@@ -1323,3 +1323,24 @@ tests and the sandbox and found them sound — they are. Astra read the *wiring*
 feature did not run. Sol, reading the same code, found the fourth independent wiring defect.
 Sonnet, mutating rather than reading, found that the security tests would not have noticed.
 The tests were checking the right properties in the wrong place.
+
+### Open decision: is auto-freeze allowed outside dev mode?
+
+ADR 0013's consequences say auto-freeze exists **only** in dev mode and that a security test
+must prove it. ADR 0015 never carried that over, and the code shows the gap: `--auto` is an
+option on the ordinary `freeze --approve` command, available in any repository, with no
+`dev_mode()` check and no security test for the restriction.
+
+Three reviews pointed at it from different sides (sol S4-7's neighbourhood, the ADR-fidelity
+round's BLOCKER 1, sonnet's M5-5 "make auto-freeze opt-in per project"). It is a genuine fork:
+
+- **A. Dev-only, as ADR 0013 says.** Auto-freeze refuses unless a dev session is open for the
+  lineage; `tests/security/test_auto_freeze_dev_only.py` proves it by attempting the call
+  outside dev mode. Smallest change, restores the documented invariant.
+- **B. Anywhere, but opt-in per project.** A setting in the trusted store, default off,
+  replacing the dev-mode test with a config test. More useful, but it is a new decision that
+  ADR 0013 already settled against.
+- **C. Anywhere, as today.** Then ADR 0013's consequence is wrong and should be superseded.
+
+Left undecided on purpose: this changes what the project promises, and guessing either way
+would settle a product question in a comment.
