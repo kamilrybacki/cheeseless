@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from cheeseless.bootstrap import main
-from tests.toy import FIXED_MAIN
+from tests.toy import FIXED_MAIN, freeze_without_approval
 
 
 def test_cli_freeze_run_status_promote(
@@ -17,7 +17,7 @@ def test_cli_freeze_run_status_promote(
     old = _os.getcwd()
     _os.chdir(cwd)
     try:
-        rc = main(["--state-dir", str(state), "freeze", "--yes"])
+        rc = freeze_without_approval(str(state))
         assert rc == 0
         # projection
         from cheeseless.adapters.outbound.git.repository import GitRepository

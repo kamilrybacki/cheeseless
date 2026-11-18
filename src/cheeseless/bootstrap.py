@@ -122,21 +122,27 @@ def build_context(state_dir: Path | None = None, cwd: Path | None = None) -> Con
 
 def _reviewer_launch_for(
     state_dir: Path | None,
-) -> Callable[[Sequence[str], str], Callable[[str], bool | None]]:
+) -> Callable[[Sequence[str], str, str], Callable[[str], tuple[bool | None, str]]]:
     """The launch seam `strength-review --run` uses (ADR 0015).
 
     The reviewer's model session is started by the host, not by the CLI: an inbound adapter
     cannot import the bootstrap, and the sandbox setup belongs here anyway.
+
+    The returned launch reports the model it launched as well as the verdict, because the
+    reviewer's vendor has to come from the launch and not from a flag someone typed.
     """
 
-    def make(command: Sequence[str], task_id: str) -> Callable[[str], bool | None]:
-        def launch(brief: str) -> bool | None:
+    def make(
+        command: Sequence[str], task_id: str, reviewer_model: str
+    ) -> Callable[[str], tuple[bool | None, str]]:
+        def launch(brief: str) -> tuple[bool | None, str]:
             with host_session(
                 state_dir=state_dir,
                 agent_command=list(command),
                 role=SessionRole.REVIEWER,
                 brief_file=brief,
                 task_id=task_id,
+                agent_model=reviewer_model,
             ) as info:
                 # Teardown removes HOME, so the verdict has to be read while the session is
                 # still open - and only once the agent has finished, or a fast reviewer's file
@@ -147,10 +153,12 @@ def _reviewer_launch_for(
                 except KeyboardInterrupt:
                     code = 1
                 verdict = read_review_verdict(Path(info["home_dir"]))
+                # Read from the binding the host wrote at launch, not from the caller's flag.
+                launched = info["binding"].model
             if code != 0:
                 # A reviewer that crashed recorded nothing; a refusal would hide the crash.
-                return None
-            return verdict
+                return None, launched
+            return verdict, launched
 
         return launch
 
@@ -962,6 +970,7 @@ def host_session(
     on_reference_stop: Callable[[str], None] | None = None,
     agent_pty: tuple[int, int] | None = None,
     log_file: Path | None = None,
+    agent_model: str = "",
 ) -> Iterator[dict[str, Any]]:
     """Run one isolated agent session with authenticated verifier and DLP egress.
 
@@ -1165,7 +1174,9 @@ def host_session(
             if strays:
                 raise RuntimeError(f"stray hidden material in the projection: {strays}")
 
-        session_id, binding = ctx.store.register_session(task_id, bound.value)
+        # The model is part of what the host launched, so it is recorded with the session
+        # rather than being re-declared later by whoever records a verdict.
+        session_id, binding = ctx.store.register_session(task_id, bound.value, agent_model)
         session = SessionConfig(
             task_id=task_id,
             worktree=projection_dir,
@@ -1385,6 +1396,8 @@ def host_session(
             "protected_roots": protected,
             "relay": relay,
             "reference_attempt": reference_attempt,
+            # What the host recorded for this session, including the model it launched.
+            "binding": binding,
         }
     finally:
         for path in (ready_path, egress_ready):

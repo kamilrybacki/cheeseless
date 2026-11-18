@@ -303,8 +303,13 @@ class AuthoringStoreMixin:
         return enabled
 
     def set_auto_freeze(self, lineage_id: str, enabled: bool) -> None:
+        # The approval reads this setting while it owns the lineage, so writing it takes the
+        # same ownership. A change made while an approval is running is refused rather than
+        # queued: a withdrawal that "landed" after the freeze began would claim to have
+        # stopped something it did not.
         lineage = _lineage(lineage_id)
-        self._write_authoring(f"auto-freeze-{lineage}.json", {"enabled": bool(enabled)})
+        with self.approval_ownership(lineage_id):
+            self._write_authoring(f"auto-freeze-{lineage}.json", {"enabled": bool(enabled)})
 
     def load_strength_review(self, proposal_id: str) -> StrengthReview | None:
         pid = _digest(proposal_id, "proposal id")
@@ -312,17 +317,26 @@ class AuthoringStoreMixin:
         if data is None:
             return None
         try:
+            # `green` and `observed` are verdicts, so they are read as booleans and not
+            # coerced: `bool("false")` is `True`, which would let a malformed or hand-edited
+            # record claim a passing review the host never ran.
+            green = data["green"]
+            if not isinstance(green, bool):
+                raise ValueError("green is not a boolean")
+            observed = data.get("observed", False)
+            if not isinstance(observed, bool):
+                raise ValueError("observed is not a boolean")
             return StrengthReview(
                 proposal_id=proposal_id,
                 acceptance_tree=str(data["acceptance_tree"]),
                 spec_digest=str(data["spec_digest"]),
                 baseline_commit=str(data["baseline_commit"]),
-                green=bool(data["green"]),
+                green=green,
                 author_vendor=str(data["author_vendor"]),
                 reviewer_vendor=str(data["reviewer_vendor"]),
                 # Absent means an older, unobserved record: defaulting to False is the
                 # direction that cannot overstate what the host saw.
-                observed=bool(data.get("observed", False)),
+                observed=observed,
             )
         except (KeyError, ValueError, TypeError) as exc:
             raise StoreError(f"corrupt strength review {pid}: {exc}") from exc

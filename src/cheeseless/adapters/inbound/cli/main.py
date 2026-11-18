@@ -17,6 +17,7 @@ from cheeseless.app.authoring import (
     AuthorStore,
     approve_freeze,
     auto_approve_freeze,
+    proposal_id_for,
     record_reference,
     record_strength_review,
     recover_approval,
@@ -26,7 +27,7 @@ from cheeseless.app.authoring import (
 )
 from cheeseless.app.dispute import configure_disputes, list_disputes, resolve_dispute
 from cheeseless.app.dlp import scanner_for
-from cheeseless.app.freeze import FreezeError, commit, prepare, read_contract
+from cheeseless.app.freeze import FreezeError, read_contract
 from cheeseless.app.gate_run import gate_run
 from cheeseless.app.promote import PromoteRejected, promote, promote_author
 from cheeseless.app.status import status
@@ -50,7 +51,9 @@ class Context:
     author_sandbox: AuthorSandbox | None = None
     # Wired by the bootstrap: runs a reviewer session for `strength-review --run`. The CLI
     # cannot import the bootstrap, so the launch seam arrives as a callable.
-    reviewer_launch: Callable[[Sequence[str], str], Callable[[str], bool | None]] | None = None
+    reviewer_launch: (
+        Callable[[Sequence[str], str, str], Callable[[str], tuple[bool | None, str]]] | None
+    ) = None
 
 
 def split_agent_argv(argv: Sequence[str]) -> tuple[list[str], list[str] | None]:
@@ -107,9 +110,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     freeze = sub.add_parser("freeze", help="Freeze acceptance tests for the current repo.")
     freeze.add_argument("--baseline", default=None)
-    freeze.add_argument("--timeout", type=float, default=300.0)
-    freeze.add_argument("--yes", action="store_true", help="Skip the approval prompt.")
-    freeze.add_argument("--tool-version", default="0.1.0")
+    freeze.add_argument(
+        "--yes",
+        action="store_true",
+        help="Answer the prompt without waiting for input. The freeze still goes through "
+        "the unattended gate (`--approve <id> --auto`): opt-in, observed review, crosscheck.",
+    )
     freeze.add_argument(
         "--approve",
         metavar="PROPOSAL_ID",
@@ -161,7 +167,11 @@ def build_parser() -> argparse.ArgumentParser:
     verdict.add_argument("--passed", action="store_true", help="The review found the tests sound.")
     verdict.add_argument("--failed", action="store_true", help="The review did not.")
     review.add_argument(
-        "--author-model", required=True, help="The model that wrote the tests (as launched)."
+        "--author-model",
+        required=False,
+        default=None,
+        help="The model that wrote the tests. Checked against the host's launch record, "
+        "which is what the vendor is taken from; omit it and the record alone decides.",
     )
     review.add_argument(
         "--reviewer-model", required=True, help="The model that reviewed them (as launched)."
@@ -441,7 +451,17 @@ def _cmd_strength_review(args: argparse.Namespace, ctx: Context) -> int:
             return 2
         # The task id goes with the launch: `host_session` would otherwise pick the active
         # task, and the reviewer could judge a different proposal than the record names.
-        launch = ctx.reviewer_launch(reviewer_command, args.task)
+        # The declared reviewer model goes into the launch so the binding records it there;
+        # `run_strength_review` then reads the vendor back from that launch record. It is a
+        # label for the launcher, not the evidence: a label that disagrees with the record
+        # is refused.
+        if not args.reviewer_model:
+            print(
+                "--run needs --reviewer-model: the vendor must be declared up front",
+                file=sys.stderr,
+            )
+            return 2
+        launch = ctx.reviewer_launch(reviewer_command, args.task, args.reviewer_model)
     try:
         if launch is not None:
             review = run_strength_review(
@@ -449,7 +469,6 @@ def _cmd_strength_review(args: argparse.Namespace, ctx: Context) -> int:
                 args.task,
                 launch=launch,
                 author_model=args.author_model,
-                reviewer_model=args.reviewer_model,
             )
         else:
             review = record_strength_review(
@@ -634,7 +653,13 @@ def _cmd_auto_freeze_optin(args: argparse.Namespace, ctx: Context) -> int:
         )
         return 1
     enabled = not args.no_allow_auto
-    _author_store(ctx).set_auto_freeze(contract.lineage_id, enabled)
+    try:
+        _author_store(ctx).set_auto_freeze(contract.lineage_id, enabled)
+    except (AuthoringError, StoreError) as exc:
+        # Most likely an approval of this lineage is running right now. Say so plainly: the
+        # setting did not change, and the running approval was decided on the old one.
+        _emit(args, {"ok": False, "error": "store", "message": str(exc)}, f"refused: {exc}")
+        return 1
     _emit(
         args,
         {"lineage_id": contract.lineage_id, "auto_freeze": enabled},
@@ -649,31 +674,37 @@ def _cmd_auto_freeze_optin(args: argparse.Namespace, ctx: Context) -> int:
 
 
 def _cmd_freeze(args: argparse.Namespace, ctx: Context) -> int:
+    """Approve and commit one frozen suite.
+
+    Every route here goes through :func:`approve_freeze`. A bare `freeze` names the proposal
+    that the current head would freeze and approves it exactly like `--approve <id> --auto`:
+    the project's opt-in, a host-observed review by another vendor, the merged-on-default
+    check, the crosscheck and the approval ownership all apply. `--yes` answers the prompt;
+    it does not skip what the prompt is about (ADR 0016). Nothing of the author's runs here
+    before the gate: the proposal id is a digest of trees, not the result of a test run.
+    """
     if args.allow_auto or args.no_allow_auto:
         return _cmd_auto_freeze_optin(args, ctx)
     if args.approve:
         return _cmd_approve(args, ctx)
+    if args.actor or args.no_reference:
+        print("--as and --no-reference need --approve <id>", file=sys.stderr)
+        return 2
     try:
-        prepared = prepare(
-            ctx.repo,
-            ctx.runner,
-            ctx.sandbox,
-            baseline_commit=args.baseline,
-            timeout=args.timeout,
-            tool_version=args.tool_version,
-        )
+        proposal_id = proposal_id_for(ctx.repo, ctx.repo.head_commit(), args.baseline)
     except FreezeError as exc:
         print(f"freeze failed: {'; '.join(exc.problems)}", file=sys.stderr)
         return 1
-    print(f"prepared freeze: {len(prepared.tests)} tests")
+    if not args.json:
+        print(f"proposal: {proposal_id}")
     if not args.yes:
-        answer = input("Approve freeze? [y/N] ").strip().lower()
+        answer = input("Approve this freeze unattended? [y/N] ").strip().lower()
         if answer not in ("y", "yes"):
             print("aborted", file=sys.stderr)
             return 1
-    result = commit(prepared, ctx.store)
-    print(f"frozen task: {result.task_id}")
-    return 0
+    return _cmd_approve(
+        argparse.Namespace(**{**vars(args), "approve": proposal_id, "auto": True}), ctx
+    )
 
 
 def _cmd_run(args: argparse.Namespace, ctx: Context) -> int:

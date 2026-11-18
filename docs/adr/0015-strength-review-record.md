@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; Decision's substitute and trusted-config claims superseded by ADR-0016
 date: 2026-11-24
 reviewers: [gpt-6.2-sol, gpt-6.2-astra, gemini-flash]
 ---

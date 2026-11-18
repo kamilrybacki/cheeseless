@@ -28,7 +28,7 @@ from cheeseless.domain.budget_ledger import (
 from cheeseless.domain.evaluation import SuiteRun, TestOutcome
 from cheeseless.ports.runner import RunnerOutput
 from cheeseless.ports.sandbox import StepOutcome
-from tests.toy import commit_all, git, write_files
+from tests.toy import commit_all, freeze_without_approval, git, write_files
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ def prepare_world(toy: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     """Freeze the toy, seed a fake ledger with the store key and export a bundle pinning it."""
     state = tmp_path / "state"
     monkeypatch.chdir(toy)
-    assert main(["--state-dir", str(state), "freeze", "--yes"]) == 0
+    assert freeze_without_approval(str(state)) == 0
     secrets_dir = tmp_path / "secrets"
     secrets_dir.mkdir(mode=0o700)
     # The seed MAC needs the store key, which only the exported bundle reveals.

@@ -29,6 +29,9 @@ class SessionBinding:
     task_id: str
     role: SessionRole
     generation: int
+    # The model the host told the agent to use. Recorded by the host, not reported by the
+    # agent, so a verdict can name the vendor that actually ran (ledger: vendor identity).
+    model: str = ""
 
 
 # The only files of acceptance/ a reference session may see (ADR 0009: the spec and the criteria

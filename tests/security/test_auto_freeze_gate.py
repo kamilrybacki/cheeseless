@@ -44,6 +44,24 @@ class _Store:
     def load_strength_review(self, proposal_id: str) -> StrengthReview | None:
         return self._review
 
+    # The gate reads consent and the review only once it owns the approval, so the stub has
+    # to provide the ownership it would hold in a real store. Nothing here blocks: these
+    # tests are about the refusals that happen while the lock is held.
+    def authoring_state(self, lineage_id: str, spec_digest: str) -> object:
+        from cheeseless.domain.authoring import AuthoringState, TaskPhase  # noqa: PLC0415
+
+        return AuthoringState(
+            lineage_id=lineage_id,
+            spec_digest=spec_digest,
+            phase=TaskPhase.PROPOSED,
+            version=3,
+        )
+
+    def approval_ownership(self, lineage_id: str) -> object:
+        import contextlib  # noqa: PLC0415
+
+        return contextlib.nullcontext()
+
 
 def _proposal() -> Proposal:
     return Proposal(
@@ -72,8 +90,14 @@ def _review(**kw: object) -> StrengthReview:
 
 
 def _auto(store: _Store) -> object:
-    # repo/sandbox are never reached: every refusal happens before the freeze is attempted.
-    return auto_approve_freeze(None, None, None, store, PID)  # type: ignore[arg-type]
+    # The gate lives in `approve_freeze`'s unattended branch, so that `--approve --auto` and
+    # `freeze --yes` are held to the same rules. Only the reads before the freeze are
+    # reached: the refusal always fires first, so this dummy repo is never dereferenced.
+    class _Repo:
+        def default_branch_commit(self) -> str:
+            raise AssertionError("a refusal must happen before the repository is read")
+
+    return auto_approve_freeze(_Repo(), None, None, store, PID)  # type: ignore[arg-type]
 
 
 def test_auto_freeze_refuses_a_review_an_operator_merely_recorded() -> None:
@@ -166,11 +190,17 @@ def test_a_green_review_from_the_author_vendor_cannot_even_be_stored() -> None:
 
 
 def test_the_refusal_never_reaches_the_freeze() -> None:
-    """The refusals happen before approval, so a refused auto-freeze leaves no task behind."""
-    source = inspect.getsource(authoring_app.auto_approve_freeze)
-    problem_check = source.index("_strength_review_problem")
-    approve_call = source.index("return approve_freeze")
-    assert problem_check < approve_call
+    """The refusals happen before the freeze, so a refused auto-freeze leaves no task behind.
+
+    The checks sit in ``approve_freeze``'s unattended branch so both unattended entry points
+    share them; what matters
+    is still that they run before anything is prepared or committed.
+    """
+    source = inspect.getsource(authoring_app.approve_freeze)
+    assert source.index("_unattended_problem") < source.index("_approve_owned")
+    unattended = inspect.getsource(authoring_app._unattended_problem)  # noqa: SLF001
+    assert "auto_freeze_enabled" in unattended
+    assert "_strength_review_problem" in unattended
 
 
 # -- writing the record (ADR 0015 decision 4) --------------------------------
@@ -276,7 +306,61 @@ def test_the_optin_is_written_by_the_host_and_withdrawable() -> None:
     assert args.no_allow_auto is True
 
     # The use case reads the setting before it looks at any review, and the store is asked
-    # for the proposal's own lineage rather than a caller-supplied one.
-    source = inspect.getsource(authoring_app.auto_approve_freeze)
+    # for the proposal's own lineage rather than a caller-supplied one. The check sits in
+    # ``approve_freeze``'s unattended branch so it covers `--approve --auto` and `freeze --yes`.
+    source = inspect.getsource(authoring_app._unattended_problem)  # noqa: SLF001
     assert "auto_freeze_enabled" in source
+    assert source.index("auto_freeze_enabled") < source.index("_strength_review_problem")
     assert "auto_freeze_not_enabled" in source
+
+
+def test_a_present_operator_is_not_held_to_the_unattended_gates() -> None:
+    """ADR 0016 replaces human approval only when no human approves.
+
+    An operator approving with ``--as`` keeps exactly ADR 0009's checks: a project that never
+    opted in and holds no review must still reach the crosscheck, which reads the repository.
+    The stub repository marks that point, so reaching it proves both unattended gates were
+    skipped rather than failed.
+    """
+
+    class _Reached(Exception):
+        pass
+
+    class _Repo:
+        def default_branch_commit(self) -> str:
+            raise _Reached
+
+    with pytest.raises(_Reached):
+        authoring_app.approve_freeze(
+            _Repo(),  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
+            _Store(_proposal(), None, opted_in=False),  # type: ignore[arg-type]
+            PID,
+            actor="operator",
+        )
+
+
+def test_canary_the_same_store_is_refused_when_unattended() -> None:
+    with pytest.raises(AuthorError) as exc:
+        _auto(_Store(_proposal(), None, opted_in=False))
+    assert exc.value.kind == "auto_freeze_not_enabled"
+
+
+def test_a_caller_of_record_strength_review_cannot_assert_observation() -> None:
+    """ADR 0016: `observed` is the host's finding, not a parameter anyone may set."""
+    assert "observed" not in inspect.signature(record_strength_review).parameters
+    review = record_strength_review(
+        _WritingStore(_proposal()),
+        PID,
+        green=True,
+        author_model="gpt-6.2-sol",
+        reviewer_model="claude-opus-5",
+    )
+    assert review.observed is False
+
+
+def test_canary_only_the_observed_run_stores_an_observed_review() -> None:
+    source = inspect.getsource(authoring_app.run_strength_review)
+    assert "_store_strength_review" in source
+    assert "observed=True" in source

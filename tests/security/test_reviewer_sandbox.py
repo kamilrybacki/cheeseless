@@ -298,3 +298,20 @@ def test_a_reviewer_session_gets_the_reviewer_profile() -> None:
     assert not any("verifier.sock" in a for a in argv), "a reviewer gets no verifier socket"
     assert not any("egress.sock" in a for a in argv), "a reviewer gets no egress socket"
     assert "true" in argv, "the command reaches the sandbox unwrapped"
+
+
+def test_the_rpc_dispatcher_refuses_a_reviewer_role() -> None:
+    """Defence in depth: the reviewer has no socket, and would be refused if it had one.
+
+    The sandbox not mounting a socket is the real protection; this proves the guarantee does
+    not depend on the mount staying correct, so a future change that hands a reviewer an
+    endpoint does not silently give it RPC.
+    """
+    from types import SimpleNamespace
+
+    from cheeseless.adapters.inbound.uds.server import UdsVerifierServer
+
+    server = UdsVerifierServer.__new__(UdsVerifierServer)
+    server.session = SimpleNamespace(role="reviewer", task_id="t", generation=0)
+    for kind in ("submit", "result", "dispute", "reference_done"):
+        assert server._role_ok("reviewer", kind) is False, f"a reviewer must not reach {kind}"

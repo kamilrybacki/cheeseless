@@ -46,7 +46,7 @@ from tests.ci_support import (
     prepare_world,
     set_judge_event,
 )
-from tests.toy import git
+from tests.toy import freeze_without_approval, git
 
 OTHER_CLAIM = "c" * 32
 WRONG_KEY = derive_key(b"\x11" * 32)  # obviously fake
@@ -349,7 +349,7 @@ def test_a_refreeze_of_the_same_lineage_keeps_counting(world, tmp_path, capsys):
     assert _judge(world, head, capsys)[0] == 1
     lineage = _bundle(world)["lineage"]
     git(world.toy, "checkout", "-q", "main")
-    assert main(["--state-dir", str(world.state), "freeze", "--yes"]) == 0
+    assert freeze_without_approval(str(world.state)) == 0
     again = tmp_path / "secrets" / "refrozen.json"
     assert main(export_argv(world.state, again, world.root)) == 0
     assert json.loads(again.read_bytes())["lineage"] == lineage

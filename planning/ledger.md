@@ -1355,3 +1355,106 @@ Two details of the implementation worth keeping:
   one of the two guesses opens the gate on garbage.
 - **The use case keeps its own check, not the CLI's.** `auto_approve_freeze` asks the store for
   the proposal's lineage, so nothing a caller supplies can widen the scope of an opt-in.
+
+### ADR 0016 — the bounds were in the only place that did not matter (2026-11-18)
+
+**M5-4 is answered by ADR 0016.** It supersedes the reading, not just the wording: the review
+replaces the *human* strength review, and ADR 0005's executable checks still run in full.
+
+What the ADR review found, and what changed because of it:
+
+- **Bound (c) was the fatal one.** `--author-model` and `--reviewer-model` were caller labels:
+  "passing two labels to a comparison proves only that the labels differ". Both vendors now
+  come from `sessions.json`, which `register_session` writes at launch and an agent cannot
+  write, via the new `Store.launched_model`. A label that contradicts the record is refused
+  (`author_model_mismatch`); a task with no author launch record is refused before a reviewer
+  runs at all (`author_unknown_launch`); a verdict from a process the host did not record is
+  refused (`strength_review_unattributed`).
+- **Launch provenance outlives the session.** `end_session` removes the live entry, and reviews
+  are recorded *after* the session ends, so `register_session` now also appends to
+  `launched-sessions.json`. Without it the vendor would vanish exactly when it is needed.
+- **`observed` and `green` were coerced with `bool()`.** A stored `"false"` read as `True`. The
+  loader now requires real JSON booleans and raises on anything else: a malformed record is a
+  refusal, not a guess in the direction that opens the gate.
+- **`freeze --yes` was the bypass.** It reached `prepare`/`commit` with no proposal, opt-in,
+  review or crosscheck. The checks moved out of `auto_approve_freeze` and into `approve_freeze`,
+  behind `unattended=True`, which only `auto_approve_freeze` passes; bare `freeze` routes
+  through it, so it and `--approve --auto` are held to the same gates. `--yes` now only
+  answers the prompt. An operator's `--approve --as` is *not* held to them: the opt-in and the
+  review replace a present human, so binding one would make a project that never opted in
+  unfreezable. It keeps ADR 0009's checks. The split is a keyword argument, not a test on the
+  actor string, so naming yourself `cheeseless-dev` does not change the mode. Tests that need a
+  frozen task as a *given* call `tests/toy.freeze_without_approval`, which calls the app layer's
+  `prepare`/`commit` directly. A first version used a hidden `--internal-test-freeze` CLI flag;
+  hidden is not unreachable (any agent can pass it), so it was removed and
+  `tests/security/test_freeze_no_ungated_route.py` proves the CLI has no such route.
+- **The opt-in could be withdrawn mid-flight.** Consent was read before the approval ownership
+  was taken, so a concurrent `--no-allow-auto` could land between the check and the reservation.
+  Consent is now read *inside* ownership, and `_ready` moved after it, so a project that never
+  opted in is refused before its repository is touched. `set_auto_freeze` takes the same
+  ownership, so a withdrawal during an approval is refused rather than silently ineffective.
+- **Open: `--as` is reachable by an agent.** Any process that can run the CLI can pass
+  `--approve <id> --as <name>` and get the attended path. This predates ADR 0016 (ADR 0009
+  trusts the host to be a human) and is not widened by it; closing it needs a host-side proof
+  of presence (a TTY or a signed operator token), tracked as follow-up.
+
+Rejected: making the reviewer's toolchain, rather than its launch record, the source of vendor.
+The launcher that selects the executable is the same thing that records the launch; deriving
+the vendor separately would be a second source of truth with no way to reconcile them.
+
+### ADR 0016 review — gpt-6.1-sol (high, read-only): REJECT, findings 1–8
+
+The review read a snapshot taken before the unattended split, so several findings describe code
+that no longer exists.
+- **1 (bare `freeze` bypasses review and ownership) — fixed before the review landed.**
+  `_direct_freeze_problem` and the direct `commit` are gone; bare `freeze` routes through
+  `approve_freeze(unattended=True)`.
+- **2 (reviewer provenance is a caller flag) — accepted, recorded as open.** The launch record
+  holds the `--reviewer-model` the launcher was told; nothing checks that the command runs it.
+  The ADR text now says so instead of "never a caller flag". Closing it is the trusted-launcher
+  config slice: the host config maps a launcher to its model and the CLI only selects a
+  launcher by name. The "Rejected" note above still holds (one source of truth), but that
+  source has to be host config, not argv.
+- **3 (opt-in withdrawal outside ownership) — fixed before the review landed.**
+  `set_auto_freeze` takes `approval_ownership`.
+- **4 (direct freeze runs unapproved tests on the host runner) — fixed before the review landed.**
+  Bare `freeze` computes `proposal_id_for` (a digest, no test run) and goes through the gate.
+- **5 (author launches record no model) — accepted, recorded as open.** No production path
+  passes `agent_model` for an author session, so `author_unknown_launch` refuses every real
+  unattended freeze. This fails closed, so it is not a hole, but the feature cannot be used
+  until the trusted-launcher slice lands. The ADR now states it.
+- **6 (overstates ADR 0009 as human-only) — accepted.** ADR 0009 lets the operator be a human
+  or an orchestrator agent. The ADR now names what is removed as the operator's strength
+  decision (ADR 0009's "the control"), not a human. The operator fallback in ADR 0015 is
+  intact: `--approve --as` is not held to the unattended gates.
+- **7 (supersede ADR 0015 wholesale) — rejected.** Only 0015's Context reading and M5-4 are
+  wrong; its record format, binding and opt-in stand and are what the code implements.
+  Following the 0013 pattern, 0015 stays accepted with a note that its Context reading is
+  superseded by 0016.
+- **8 (route coverage) — fixed.** `test_freeze_no_ungated_route.py` now covers bare `freeze`
+  with a proposal and an opt-in but no review (`no_strength_review`), with an observed review
+  (moves to `no_crosscheck`), and the operator path. `test_reviewer_run.py` covers launch
+  label mismatch (`author_model_mismatch`). A withdrawal during a live approval is refused:
+  `test_file_store_authoring.py` holds the ownership and shows `set_auto_freeze` fails, with a
+  canary that it succeeds once released.
+
+### ADR 0016 re-review — gpt-6.1-sol (high, read-only): ACCEPT WITH CHANGES
+
+No unattended freeze route was found that skips the gate. Bare `freeze` and `--approve --auto` both
+reach `approve_freeze(unattended=True)` inside the approval ownership. Recovery can finish a task
+that was already published, but it cannot create a new frozen suite. The four focused test files pass
+(88 tests).
+
+1. **Medium, fixed.** The superseded claims sit in ADR 0015's *Decision*, not its Context: "never a
+   substitute", "does not reintroduce the LLM judge" and "both from trusted config".
+   - ADR 0016 now quotes those three claims.
+   - ADR 0015's status line and its index row record a partial supersession, which corrects the
+     wording of finding 7 above. The rest of ADR 0015's Decision still stands.
+2. **Low, fixed.** The Consequences overstated the evidence. The code records one reviewer verdict
+   and compares two vendors that the launcher declared, not two separate strength judgements. The
+   text now reads "one declared reviewer passing tests attributed to an author of another declared
+   vendor".
+
+**Reviewers and status.** `reviewers: [gpt-6.1-sol]`, and the status is accepted. The author,
+claude-opus-5-5, does not review its own ADR. Findings 2 and 5 from the first review are still open,
+for the trusted-launcher-config slice.

@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -160,3 +161,27 @@ def make_repo(root: Path, files: Mapping[str, str] = TOY_FILES) -> Path:
     write_files(root, files)
     commit_all(root, "toy baseline")
     return root
+
+
+def freeze_without_approval(state: str) -> int:
+    """Freeze the toy for a test that is not about the approval gate.
+
+    `cheeseless freeze --yes` no longer exists: every route to a frozen suite goes through
+    approval, because that is the gate ADR 0016 exists to protect. Tests that need a frozen
+    task as a *given* - the CI bundle, the budget ledger, the sentinel redaction - call this
+    instead, so the shortcut they depend on is named, local to the tests, and impossible to
+    reach from a production command line: it calls the app layer directly, and the CLI has
+    no flag, hidden or not, that commits without the gate.
+    """
+    from cheeseless.app.freeze import FreezeError, commit, prepare  # noqa: PLC0415
+    from cheeseless.bootstrap import build_context  # noqa: PLC0415 - keeps collection light
+
+    ctx = build_context(Path(state))
+    try:
+        prepared = prepare(ctx.repo, ctx.runner, ctx.sandbox)
+    except FreezeError as exc:
+        print(f"freeze failed: {'; '.join(exc.problems)}", file=sys.stderr)
+        return 1
+    result = commit(prepared, ctx.store)
+    print(f"frozen task: {result.task_id}")
+    return 0

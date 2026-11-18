@@ -82,10 +82,14 @@ class Store(Protocol):
         """Return the fingerprint set, or ``None`` when freeze did not create one."""
         ...
 
-    def register_session(self, task_id: str, role: str) -> tuple[str, SessionBinding]:
+    def register_session(
+        self, task_id: str, role: str, model: str = ""
+    ) -> tuple[str, SessionBinding]:
         """Record a launched session; returns its random id and the binding written.
 
-        The binding carries the task's current generation, read under the same lock.
+        The binding carries the task's current generation, read under the same lock, and the
+        ``model`` the host launched with, so anything recorded afterwards can name the vendor
+        from the launch rather than from a caller's label.
         """
         ...
 
@@ -95,6 +99,16 @@ class Store(Protocol):
 
     def end_session(self, session_id: str) -> None:
         """Forget a session; ending an unknown session is a no-op."""
+        ...
+
+    def launched_model(self, task_id: str, role: str) -> str | None:
+        """The model the host launched for ``role`` on ``task_id``, or ``None``.
+
+        Provenance for anything that has to name a vendor: the CLI's ``--author-model`` is a
+        label a caller typed, while this is what the host recorded when it started the
+        session. When several sessions exist for the same role the most recent one wins,
+        because that is the one whose work the record is about.
+        """
         ...
 
     def session_generation(self, task_id: str) -> int:

@@ -46,6 +46,7 @@ from cheeseless.domain.dlp import redact_sentinels, sentinel_problems
 from cheeseless.domain.evaluation import SuiteRun, TestOutcome, freeze_problems
 from cheeseless.domain.freeze import FrozenTask, freeze_digest
 from cheeseless.domain.holdout import split as holdout_split
+from cheeseless.domain.session_role import SessionRole
 from cheeseless.ports.authoring import AuthoringStore
 from cheeseless.ports.repository import Repository, RepositoryError
 from cheeseless.ports.sandbox import AuthorSandbox, Sandbox
@@ -330,10 +331,13 @@ def approve_freeze(
     actor: str,
     no_reference: bool = False,
     reason: str = "",
+    unattended: bool = False,
 ) -> object:
     """Host-only: freeze a proposed, merged, crosschecked and RED task.
 
-    The author's acceptance code runs only inside ``author_sandbox``."""
+    The author's acceptance code runs only inside ``author_sandbox``. ``unattended`` is set
+    only by :func:`auto_approve_freeze`: it adds the project's opt-in and a host-observed
+    strength review (ADR 0016) on top of the checks a present operator gets (ADR 0009)."""
     reason = reason.strip()
     if no_reference and not reason:
         raise AuthorError("reason_required", "--no-reference needs a --reason")
@@ -346,11 +350,13 @@ def approve_freeze(
     resuming = state.phase is TaskPhase.APPROVING and store.has_task(proposal.proposal_id)
     if state.phase is not TaskPhase.PROPOSED and not resuming:
         raise AuthorError("not_proposed", f"the task is {state.phase.value}")
-    _ready(repo, store, proposal, no_reference)
     try:
         # Ownership spans reservation to finish: a live approver is what tells recovery
         # apart from a dead one. A second approver is refused, not queued.
         with store.approval_ownership(proposal.lineage_id):
+            if unattended:
+                _unattended_problem(store, proposal)
+            _ready(repo, store, proposal, no_reference)
             return _approve_owned(
                 repo,
                 sandbox,
@@ -365,6 +371,26 @@ def approve_freeze(
             )
     except AuthoringError as exc:
         raise AuthorError("approval_conflict", f"another approval is in progress: {exc}") from exc
+
+
+def _unattended_problem(store: AuthorStore, proposal: Proposal) -> None:
+    """Refuse an unattended freeze without consent and an observed review (ADR 0016).
+
+    Called *inside* the approval ownership: `freeze --no-allow-auto` takes the same
+    ownership, so a withdrawal either lands before this check (and the approval is
+    refused) or is itself refused while the approval runs. It also runs before the
+    repository is touched.
+    """
+    if not store.auto_freeze_enabled(proposal.lineage_id):
+        # Decision B (ledger): an absent setting is not consent.
+        raise AuthorError(
+            "auto_freeze_not_enabled",
+            "this project has not opted in to unattended freeze; "
+            "run `cheeseless freeze --allow-auto` first",
+        )
+    problem = _strength_review_problem(store, proposal)
+    if problem is not None:
+        raise problem
 
 
 def _approve_owned(
@@ -583,14 +609,34 @@ def record_strength_review(
     green: bool,
     author_model: str,
     reviewer_model: str,
-    observed: bool = False,
 ) -> StrengthReview:
     """Host-only: store another vendor's review of a proposal's tests (ADR 0015).
 
     Called after the reviewer session ends, never before: the record says a review happened.
     Both vendors come from the model ids the *host* launched, not from anything the reviewer
-    reported about itself (Decision 4).
+    reported about itself (Decision 4). The record is never ``observed``: only
+    :func:`run_strength_review`, which reads the verdict from the session it launched, may
+    store one that is, so no caller of this function can assert it (ADR 0016).
     """
+    return _store_strength_review(
+        store,
+        proposal_id,
+        green=green,
+        author_model=author_model,
+        reviewer_model=reviewer_model,
+        observed=False,
+    )
+
+
+def _store_strength_review(
+    store: AuthorStore,
+    proposal_id: str,
+    *,
+    green: bool,
+    author_model: str,
+    reviewer_model: str,
+    observed: bool,
+) -> StrengthReview:
     proposal = store.load_proposal(proposal_id)
     if proposal is None:
         raise AuthorError("unknown_proposal", "no such proposal")
@@ -680,24 +726,9 @@ def auto_approve_freeze(
     caller-supplied label, and the ``--no-reference`` waiver is refused: an automatic approval
     cannot waive the crosscheck that the operator would have to waive in person.
 
-    Requires the project's own opt-in (``store.auto_freeze_enabled``): the default is that a
-    human approves, so a repository that never asked for unattended freeze cannot get one.
+    The opt-in and the review are checked inside :func:`approve_freeze`, under the approval
+    ownership, so neither can be withdrawn between the check and the freeze.
     """
-    proposal = store.load_proposal(proposal_id)
-    if proposal is None:
-        raise AuthorError("unknown_proposal", "no such proposal")
-    if not store.auto_freeze_enabled(proposal.lineage_id):
-        # Decision B (ledger): unattended freeze is possible anywhere but on nowhere until the
-        # project says so. An absent setting is not consent, and an operator who wants the
-        # gate to open without them present has to write that down first.
-        raise AuthorError(
-            "auto_freeze_not_enabled",
-            "this project has not opted in to unattended freeze; "
-            "run `cheeseless freeze --allow-auto` first",
-        )
-    problem = _strength_review_problem(store, proposal)
-    if problem is not None:
-        raise problem
     return approve_freeze(
         repo,
         sandbox,
@@ -705,6 +736,7 @@ def auto_approve_freeze(
         store,
         proposal_id,
         actor=DEV_ACTOR,
+        unattended=True,
     )
 
 
@@ -819,32 +851,77 @@ def run_strength_review(
     store: AuthorStore,
     proposal_id: str,
     *,
-    launch: Callable[[str], bool | None],
-    author_model: str,
-    reviewer_model: str,
+    launch: Callable[[str], tuple[bool | None, str]],
+    author_model: str | None = None,
 ) -> StrengthReview:
     """Run a reviewer session, then record what it actually said (ADR 0015).
 
-    ``launch`` runs the session and returns the verdict read from its HOME, or ``None`` when
-    it produced no structured line. A reviewer that said nothing is not a failed review, and
+    ``launch`` runs the session and returns the verdict read from its HOME plus the model the
+    host actually launched, or ``(None, model)`` when it produced no structured line. The
+    reviewer's vendor comes from that second value, never from a caller's ``--reviewer-model``
+    label: the label says what someone hoped would run, the return value says what did.
+
+    ``author_model`` is the *fallback*: the author's vendor is read from the session the host
+    launched for the author on this task, because a caller-supplied ``--author-model`` decides
+    which half of the independence check it is compared against. Passing two labels to a
+    comparison proves only that the labels differ (ADR 0016 review, bound c).
+
+    A reviewer that said nothing is not a failed review, and
     :func:`record_strength_review` validates vendors independently of this call, so a refusal
     here and a refusal there mean the same thing.
     """
     proposal = store.load_proposal(proposal_id)
     if proposal is None:
         raise AuthorError("unknown_proposal", "no such proposal")
-    verdict = launch(review_brief())
+    # Provenance first: a launch that cannot be attributed to a model the *host* started
+    # records nothing, so it is not worth running the reviewer for it either.
+    recorded_author = store.launched_model(proposal_id, SessionRole.AUTHOR.value)
+    if recorded_author is None:
+        raise AuthorError(
+            "author_unknown_launch",
+            "the host has no launch record for this task's author session, so the reviewer's "
+            "independence cannot be established",
+        )
+    if author_model is not None:
+        claimed = vendor_of_model(author_model)
+        recorded = vendor_of_model(recorded_author)
+        if claimed is None or recorded != claimed:
+            # Not a warning: a label that disagrees with the launch record is either a typo or
+            # an attempt to pick the vendor the reviewer gets compared against.
+            raise AuthorError(
+                "author_model_mismatch",
+                f"--author-model {author_model!r} disagrees with the launched author "
+                f"{recorded_author!r}",
+            )
+    verdict, launched_model = launch(review_brief())
+    if not launched_model:
+        # Without a launch identity there is no vendor to check independence against, and
+        # guessing one is how a single-vendor review gets recorded as cross-vendor.
+        raise AuthorError(
+            "strength_review_unknown_launch",
+            "the reviewer session did not report which model it ran",
+        )
+    recorded_reviewer = store.launched_model(proposal_id, SessionRole.REVIEWER.value)
+    if recorded_reviewer != launched_model:
+        # The verdict has to come from the session the host recorded, not from a command whose
+        # metadata merely matches: otherwise any process that writes the right line and exits
+        # zero produces authoritative evidence (ADR 0016 review, bound b).
+        raise AuthorError(
+            "strength_review_unattributed",
+            "the verdict does not come from a reviewer session the host launched and recorded",
+        )
     if verdict is None:
         raise AuthorError(
             "strength_review_no_verdict",
             f"the reviewer wrote no `{_VERDICT_LINE}` line, so it reviewed nothing",
         )
-    return record_strength_review(
+    return _store_strength_review(
         store,
         proposal_id,
         green=verdict,
-        author_model=author_model,
-        reviewer_model=reviewer_model,
+        # Both vendors come from the launch records, not from the command line.
+        author_model=recorded_author,
+        reviewer_model=launched_model,
         # The difference from a manual record: this one comes from a session the host ran and
         # whose output it read, not from an operator's assertion about one.
         observed=True,

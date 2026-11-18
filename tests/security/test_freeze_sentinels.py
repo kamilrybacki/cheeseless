@@ -28,7 +28,7 @@ from cheeseless.domain.dlp import (
     digest,
 )
 from tests.requirements import needs
-from tests.toy import CANARY, TOY_FILES, commit_all, make_repo, write_files
+from tests.toy import CANARY, TOY_FILES, commit_all, freeze_without_approval, make_repo, write_files
 
 FAMILIES = ("SENTINEL", "CANARY")
 MARKER_FREE_TEST = "def test_stub(candidate):\n    pass\n"
@@ -211,7 +211,6 @@ def test_marked_two_criteria(candidate, case):
 def test_cli_freeze_redacts_markers_in_hidden_node_ids(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from cheeseless.bootstrap import main  # noqa: PLC0415 - keeps collection light
 
     files = dict(TOY_FILES)
     files["acceptance/hidden/test_score.py"] = HIDDEN_WITH_MARKED_NODE_IDS
@@ -219,7 +218,7 @@ def test_cli_freeze_redacts_markers_in_hidden_node_ids(
     state = tmp_path / "state"
     monkeypatch.chdir(root)
 
-    rc = main(["--state-dir", str(state), "freeze", "--yes"])
+    rc = freeze_without_approval(str(state))
 
     captured = capsys.readouterr()
     assert rc == 1

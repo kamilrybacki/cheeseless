@@ -91,6 +91,14 @@ class AuthoringStore(Protocol):
         deliberately, and an absent record must never read as consent."""
         ...
 
+    def launched_model(self, task_id: str, role: str) -> str | None:
+        """The model the host itself recorded for ``role`` on ``task_id``, or ``None``.
+
+        The only provenance a vendor may be derived from (ADR 0016, bound c): the launch
+        record the host wrote, never a ``--author-model``/``--reviewer-model`` label the
+        caller supplied. ``None`` means no such launch exists and the caller must refuse."""
+        ...
+
     def set_auto_freeze(self, lineage_id: str, enabled: bool) -> None:
         """Record the project's choice. The host writes this; a proposal cannot."""
         ...

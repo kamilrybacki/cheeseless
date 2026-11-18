@@ -199,16 +199,32 @@ class FileStore(AuthoringStoreMixin, DevStoreMixin, ReferenceStoreMixin):
     # -- disputes (ADR 0009, stage g) --------------------------------------------
     # Files are created lazily so the layout is unchanged while disputes are unused.
 
-    def register_session(self, task_id: str, role: str) -> tuple[str, SessionBinding]:
+    def register_session(
+        self, task_id: str, role: str, model: str = ""
+    ) -> tuple[str, SessionBinding]:
         task_id = _task_id(task_id)
         bound = parse_role(role)
         with _fs.locked(self._root / "store.lock"):
-            binding = SessionBinding(task_id, bound, self.session_generation(task_id))
+            binding = SessionBinding(task_id, bound, self.session_generation(task_id), str(model))
             session_id = secrets.token_hex(16)
             sessions = self._read_json("sessions.json")
-            entry = {"task": task_id, "role": bound.value, "generation": binding.generation}
+            entry = {
+                "task": task_id,
+                "role": bound.value,
+                "generation": binding.generation,
+                "model": binding.model,
+            }
             _fs.write_atomic(
                 self._root / "sessions.json", codec.dumps({**sessions, session_id: entry})
+            )
+            # Launch provenance has to outlive the session itself: `end_session` forgets the
+            # live entry when the agent exits, and a review recorded afterwards still has to
+            # name the model the host launched. This log is append-only and only ever grows.
+            launches = self._read_json("launched-sessions.json")
+            recorded = list(launches.get("sessions", []))
+            recorded.append({**entry, "session_id": session_id})
+            _fs.write_atomic(
+                self._root / "launched-sessions.json", codec.dumps({"sessions": recorded})
             )
         return session_id, binding
 
@@ -220,7 +236,12 @@ class FileStore(AuthoringStoreMixin, DevStoreMixin, ReferenceStoreMixin):
             generation = entry["generation"]
             if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
                 raise ValueError("generation")
-            return SessionBinding(_task_id(entry["task"]), parse_role(entry["role"]), generation)
+            model = entry.get("model", "")
+            if not isinstance(model, str):
+                raise ValueError("model")
+            return SessionBinding(
+                _task_id(entry["task"]), parse_role(entry["role"]), generation, model
+            )
         except (KeyError, TypeError, ValueError, StoreError) as exc:
             raise StoreError(f"session record is invalid: {exc}") from exc
 
@@ -236,6 +257,35 @@ class FileStore(AuthoringStoreMixin, DevStoreMixin, ReferenceStoreMixin):
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise StoreError("session generation is invalid")
         return value
+
+    def launched_model(self, task_id: str, role: str) -> str | None:
+        """The model the host itself recorded for ``role`` on ``task_id`` (ADR 0015).
+
+        Provenance lives in ``sessions.json``, which the host writes at launch and the agent
+        cannot write, so a vendor derived from this cannot be chosen by whoever runs the
+        command. ``None`` means no such session was ever launched: the caller must refuse
+        rather than fall back to a label.
+        """
+        task_id = _task_id(task_id)
+        bound = parse_role(role).value
+        # A session can be ended when it finishes, so the append-only launch log is what
+        # survives; fall back to the live table for stores written before it existed.
+        entries = list(self._read_json("launched-sessions.json").get("sessions", []))
+        entries += [
+            {**entry, "session_id": sid} for sid, entry in self._read_json("sessions.json").items()
+        ]
+        match: str | None = None
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("task") != task_id or entry.get("role") != bound:
+                continue
+            model = entry.get("model", "")
+            if not isinstance(model, str):
+                raise StoreError("launched session record is invalid")
+            if model:
+                match = model
+        return match
 
     def dispute_policy(self) -> DisputePolicy:
         raw = _fs.read_bytes(self._root / "dispute-policy.json")

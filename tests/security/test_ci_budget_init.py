@@ -31,7 +31,7 @@ from tests.ci_support import (
     judge_cli,
     make_head,
 )
-from tests.toy import git
+from tests.toy import freeze_without_approval, git
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ def frozen(toy_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     """A frozen toy repository; returns the state directory."""
     state = tmp_path / "state"
     monkeypatch.chdir(toy_repo)
-    assert main(["--state-dir", str(state), "freeze", "--yes"]) == 0
+    assert freeze_without_approval(str(state)) == 0
     return state
 
 

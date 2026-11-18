@@ -19,7 +19,7 @@ not a release-readiness claim.
 
 Usage:
 ```
-cheeseless freeze --yes
+cheeseless freeze [--yes] | --approve ID (--as ACTOR | --auto) | --allow-auto
 cheeseless run [--worktree PATH] [--json]
 cheeseless status [--json]
 cheeseless promote [--worktree PATH] [--approve PATH ...]

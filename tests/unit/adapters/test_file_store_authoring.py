@@ -319,3 +319,33 @@ def test_auto_freeze_optin_is_off_until_recorded_and_survives_a_corrupt_record(
         path.write_text('{"enabled": "yes"}')
     with pytest.raises(StoreError):
         store.auto_freeze_enabled(lineage)
+
+
+def test_a_session_binding_records_the_model_the_host_launched(store: FileStore) -> None:
+    """The vendor of a review is read back from here, so this has to survive a round trip."""
+    session_id, binding = store.register_session(PID, "reviewer", "gpt-6.2-sol")
+    assert binding.model == "gpt-6.2-sol"
+
+    stored = store.session_record(session_id)
+    assert stored is not None
+    assert stored.model == "gpt-6.2-sol"
+    assert stored.role.value == "reviewer"
+
+    # An older record without a model reads as empty, which the reviewer path refuses.
+    assert store.register_session(SPEC, "author")[1].model == ""
+
+
+def test_the_optin_cannot_change_while_an_approval_owns_the_lineage(store: FileStore) -> None:
+    """The approval reads consent under ownership; a concurrent write must not slip in.
+
+    A withdrawal that appeared to succeed while a freeze was already under way would tell
+    the operator they had stopped it. Refusing it is the honest answer.
+    """
+    store.set_auto_freeze("demo", True)
+    with store.approval_ownership("demo"):
+        with pytest.raises(AuthoringError):
+            store.set_auto_freeze("demo", False)
+        store.set_auto_freeze("other", False)  # another lineage is not blocked
+    assert store.auto_freeze_enabled("demo") is True, "the refused write changed nothing"
+    store.set_auto_freeze("demo", False)  # canary: without a live approver it does change
+    assert store.auto_freeze_enabled("demo") is False
