@@ -1121,3 +1121,14 @@ Round 3 — cross-vendor reviewer (**ACCEPT WITH CHANGES**), the finding that ma
   missing acceptance fd.
 - **NOT accepted — no change.** The claim that `acceptance_mount(REVIEWER) == "ro"` is wrong:
   the review itself agrees it is correct, and `open_acceptance` + `--ro-bind-fd` pins it.
+
+### Reviewer availability, 2026-10-30
+
+- `litellm-free/gemini/flash` (pi) **failed** with `litellm.Timeout: Connection timed out`
+  (90 s) on the #39 review. Not a code finding: the endpoint is unreachable today, so the
+  cross-vendor opinion for this change is taken from `claude-sonnet-5-5` (Anthropic) instead.
+  `opencode-go/deepseek-v4-pro` is also unavailable (provider limits exhausted). Recording
+  this because a review requirement that quietly degrades to "the only model that answered"
+  is not a cross-vendor review at all.
+- `gpt-6.2-sol` at `reasoningEffort: medium` is the review model of record for this change
+  (operator instruction).
