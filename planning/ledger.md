@@ -1480,3 +1480,42 @@ Branch `feat/trusted-launcher-config`. The model recorded for a launched session
 - **Remaining limit.** The config is operator-declared. cheeseless cannot verify what model a CLI
   actually talks to, and anyone who controls the operator's config controls the recorded vendor.
   The vendor-independence check is only as honest as that file.
+
+### Trusted launcher review — gpt-6.1-terra (medium, read-only): REJECT
+
+Cross-vendor review of the trusted-launcher-config slice (commit 9bc1f99). Three findings:
+1. **Critical, `XDG_CONFIG_HOME` picks the trust root — rejected.** The gated agent binds only
+   the projection (ADR 0003). It cannot set the host's environment or write the operator's config
+   directory. A same-UID process on the host is the residual risk ADR 0001 accepts, and that
+   process could just as easily edit the default file. Ignoring `XDG_CONFIG_HOME` would therefore
+   not raise the bar. The orchestrator that acts for the operator is trusted (ADR 0016).
+2. **High, TOCTOU on the config's ancestor directories — rejected** for the same reason. Swapping
+   an ancestor between the check and the open needs a writer on the host with the same UID.
+3. **Medium, the tests bypass the launch boundary — fixed.** `test_launcher_config.py` simulated
+   the host by calling `register_session` directly. `tests/security/test_launcher_cli_boundary.py`
+   now goes through `bootstrap.main` with a real operator config and a real sandboxed agent, and
+   reads the model from the host's own append-only launch log:
+   - `session`: `test_session_with_a_launcher_records_the_configured_model`,
+     `test_session_without_a_launcher_records_no_model`,
+     `test_session_refuses_a_command_that_contradicts_the_launcher` with its canary
+     `test_canary_session_accepts_the_launchers_own_command`;
+   - `dev`: `test_dev_with_a_launcher_records_the_configured_model`,
+     `test_dev_without_a_launcher_records_no_model`,
+     `test_dev_refuses_a_command_that_contradicts_the_launcher` with its canary
+     `test_canary_dev_accepts_the_launchers_own_command`;
+   - `dev-reference`: `test_reference_with_a_launcher_records_the_configured_model`,
+     `test_reference_without_a_launcher_records_no_model`,
+     `test_reference_refuses_a_command_that_contradicts_the_launcher` with its canary
+     `test_canary_reference_accepts_the_launchers_own_command`;
+   - `strength-review --run`: `test_review_with_a_launcher_records_the_configured_model`,
+     `test_review_without_a_launcher_records_no_model_despite_a_typed_one`,
+     `test_review_refuses_a_label_or_command_that_contradicts_the_launcher[label|command]` with
+     its canaries `test_canary_review_accepts_a_label_or_command_that_agrees[label|command]`.
+
+   Revert check, run on the CLI tests and then restored:
+   - `resolve_launch` records the typed label when no launcher is given: the no-launcher review
+     test fails.
+   - The contradiction checks are dropped and the caller's command runs under the launcher's model:
+     all five refusal tests fail.
+   - The configured model is replaced by the label: all ten tests that expect the configured model
+     fail.
