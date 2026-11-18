@@ -3,8 +3,8 @@
 State on 2026-11-14: phases 0–11 are implemented and merged. PR #1–#5 are merged and
 `main` is `924d953`; PR #1/#2 landed the core phases, PR #3 the cross-run CI budget
 counter, PR #4 `ci-budget-init`, and PR #5 the MCP identity and egress-audit follow-ups.
-Branch `feat/release-sanitizer` adds the phase 12 local release audit (tracked tree,
-local history including commit metadata, and built sdist/wheel) but is not merged yet.
+The phase 12 local release audit (tracked tree, local history including commit metadata,
+and built sdist/wheel) has since been merged, and the repository is public (2026-11-18).
 ADRs 0001/0003/0005/0006/0007 were reworded to close H1–H4 and M2 and are `accepted`
 after cross-vendor review (ledger "ADR re-review, round 3"). Release remains pending:
 a clean local audit is not a release-readiness claim. This file is the entry point for a
@@ -188,8 +188,8 @@ uv run --frozen cheeseless --version
 
 ## Constraints
 
-- The repository is **private** until the sanitizer passes, CI is green and the operator
-  explicitly confirms publication (Q34).
+- The repository is **public** since 2026-11-18: the sanitizer passed, CI was green and the
+  operator confirmed publication (Q34). Everything committed is world-readable.
 - No secrets, host names or personal infrastructure in this repo. Integration with a
   particular workstation or agent platform lives outside it.
 - Accepted ADRs are immutable; supersede them with a new ADR.
