@@ -1183,3 +1183,22 @@ Round 3 — cross-vendor reviewer (**ACCEPT WITH CHANGES**), the finding that ma
 - This is the third hole of the same shape in this feature, all found by asking "what happens
   when the input the guarantee depends on is missing" rather than "does the happy path work".
   Worth remembering as a review prompt, not just a fixed bug.
+
+### D15-13: the reviewer is now reachable from the host (`strength-review --run`)
+
+- The remaining work of D15-6 was never the sandbox — it was that nothing started a reviewer
+  and nothing read what one said. Both exist now:
+  - `honest brief`: the host writes `BRIEF.md` into the reviewer's own HOME (`brief_file=`),
+    not argv: argv is visible to the process it describes and can carry the author's text.
+  - `VERDICT: pass|fail` line in `verdict.txt`: `parse_review_verdict` / `read_review_verdict`,
+    bounded to 64 KiB, read as untrusted bytes.
+  - **No verdict is not a failed review.** `parse_review_verdict` returns `None`, and
+    `run_strength_review` refuses with `strength_review_no_verdict`. Recording `green=False`
+    would put words in the reviewer's mouth (ADR 0015 decision 3).
+  - The launch seam is injected through `Context.reviewer_launch`: an inbound adapter that
+    imported `bootstrap` would invert the layering, so the bootstrap hands the CLI a callable.
+- **Fixed an uncaught `StoreError`** in `strength-review`: an unreadable record produced a
+  traceback at a host entry point, which a caller could mistake for a retryable crash.
+- The reviewer still has no network by design, so a model that needs a network API cannot run
+  inside it. The `--run` path is complete for models reachable without egress; for the others
+  the recorded-manual path remains.

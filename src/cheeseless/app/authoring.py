@@ -703,3 +703,98 @@ __all__ = [
     "spec_of",
     "start_reference",
 ]
+
+
+# The reviewer writes its verdict into this file inside its own HOME. A structured line is
+# required because an exit code says the process ended, not that a judgement happened
+# (ADR 0015 decision 3).
+VERDICT_FILE = "verdict.txt"
+_VERDICT_LINE = "VERDICT:"
+
+
+def parse_review_verdict(text: str) -> bool | None:
+    """The verdict from a reviewer's output, or ``None`` when it did not say one.
+
+    ``None`` is not "failed": a reviewer that produced no structured line has not reviewed
+    anything, and recording ``green=False`` would put words in its mouth.
+    """
+    verdict: bool | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.upper().startswith(_VERDICT_LINE):
+            continue
+        answer = stripped[len(_VERDICT_LINE) :].strip().lower()
+        if answer in ("pass", "passed", "green"):
+            verdict = True
+        elif answer in ("fail", "failed", "red"):
+            verdict = False
+        # The last usable line wins: a reviewer that changed its mind said so last.
+    return verdict
+
+
+def read_review_verdict(evidence_home: Path) -> bool | None:
+    """The verdict from the reviewer session's HOME, or ``None`` if it wrote none."""
+    verdict_path = evidence_home / VERDICT_FILE
+    try:
+        # A file the reviewer wrote, so it is bounded and read as bytes: it is untrusted.
+        with verdict_path.open("rb") as handle:
+            data = handle.read(64 * 1024)
+    except OSError:
+        return None
+    return parse_review_verdict(data.decode("utf-8", errors="replace"))
+
+
+_REVIEW_BRIEF = """You are reviewing the acceptance tests of a proposal, not the code.
+
+Everything under `acceptance/` is what you must judge. There is no implementation here to
+read, deliberately: the question is whether these tests would catch a wrong implementation,
+not whether some implementation is right.
+
+State your verdict as the last line of `{verdict}`, exactly one of:
+
+    VERDICT: pass
+    VERDICT: fail
+
+Write nothing else into that file. `pass` means the tests are strong enough to freeze: they
+bind the behaviour the spec names, they would fail on a plausible wrong implementation, and
+they are not trivially satisfiable. `fail` means they are not, and you must say why in your
+output.
+"""
+
+
+def review_brief(passed_when: str | None = None) -> str:
+    """The instruction the reviewer session receives, with the verdict file path named."""
+    return _REVIEW_BRIEF.format(verdict=VERDICT_FILE)
+
+
+def run_strength_review(
+    store: AuthorStore,
+    proposal_id: str,
+    *,
+    launch: Callable[[str], bool | None],
+    author_model: str,
+    reviewer_model: str,
+) -> StrengthReview:
+    """Run a reviewer session, then record what it actually said (ADR 0015).
+
+    ``launch`` runs the session and returns the verdict read from its HOME, or ``None`` when
+    it produced no structured line. A reviewer that said nothing is not a failed review, and
+    :func:`record_strength_review` validates vendors independently of this call, so a refusal
+    here and a refusal there mean the same thing.
+    """
+    proposal = store.load_proposal(proposal_id)
+    if proposal is None:
+        raise AuthorError("unknown_proposal", "no such proposal")
+    verdict = launch(review_brief())
+    if verdict is None:
+        raise AuthorError(
+            "strength_review_no_verdict",
+            f"the reviewer wrote no `{_VERDICT_LINE}` line, so it reviewed nothing",
+        )
+    return record_strength_review(
+        store,
+        proposal_id,
+        green=verdict,
+        author_model=author_model,
+        reviewer_model=reviewer_model,
+    )

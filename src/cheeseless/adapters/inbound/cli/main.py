@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,6 +21,7 @@ from cheeseless.app.authoring import (
     record_strength_review,
     recover_approval,
     reference_failed,
+    run_strength_review,
     start_reference,
 )
 from cheeseless.app.dispute import configure_disputes, list_disputes, resolve_dispute
@@ -47,6 +48,9 @@ class Context:
     store: Store
     # The contained author runner; approval runs author-proposed tests only through it.
     author_sandbox: AuthorSandbox | None = None
+    # Wired by the bootstrap: runs a reviewer session for `strength-review --run`. The CLI
+    # cannot import the bootstrap, so the launch seam arrives as a callable.
+    reviewer_launch: Callable[[Sequence[str]], Callable[[str], bool | None]] | None = None
 
 
 def split_agent_argv(argv: Sequence[str]) -> tuple[list[str], list[str] | None]:
@@ -143,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
         "strength-review", help="Host only: record another vendor's review of a proposal."
     )
     review.add_argument("--task", required=True, help="The proposal (task) id.")
-    verdict = review.add_mutually_exclusive_group(required=True)
+    verdict = review.add_mutually_exclusive_group(required=False)
     verdict.add_argument("--passed", action="store_true", help="The review found the tests sound.")
     verdict.add_argument("--failed", action="store_true", help="The review did not.")
     review.add_argument(
@@ -151,6 +155,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     review.add_argument(
         "--reviewer-model", required=True, help="The model that reviewed them (as launched)."
+    )
+    review.add_argument(
+        "--run",
+        action="store_true",
+        help="Run the reviewer session first and record the verdict it writes.",
+    )
+    review.add_argument(
+        "reviewer_command",
+        nargs=argparse.REMAINDER,
+        help="The reviewer agent, after --, e.g. `--run -- claude -p`.",
     )
     review.add_argument("--json", action="store_true")
 
@@ -407,16 +421,39 @@ def _emit(args: argparse.Namespace, payload: dict[str, object], text: str) -> No
 def _cmd_strength_review(args: argparse.Namespace, ctx: Context) -> int:
     """Record a review the host ran. This stores evidence; it never approves anything."""
     store = _author_store(ctx)
+    launch = None
+    if args.run:
+        # Launching a session is the bootstrap's job, so it is injected rather than imported:
+        # an inbound adapter that reached for the bootstrap would invert the layering.
+        reviewer_command = [a for a in (args.reviewer_command or []) if a != "--"]
+        if not reviewer_command or ctx.reviewer_launch is None:
+            print("--run needs the reviewer command after --", file=sys.stderr)
+            return 2
+        launch = ctx.reviewer_launch(reviewer_command)
     try:
-        review = record_strength_review(
-            store,
-            args.task,
-            green=bool(args.passed),
-            author_model=args.author_model,
-            reviewer_model=args.reviewer_model,
-        )
+        if launch is not None:
+            review = run_strength_review(
+                store,
+                args.task,
+                launch=launch,
+                author_model=args.author_model,
+                reviewer_model=args.reviewer_model,
+            )
+        else:
+            review = record_strength_review(
+                store,
+                args.task,
+                green=bool(args.passed),
+                author_model=args.author_model,
+                reviewer_model=args.reviewer_model,
+            )
     except AuthorError as exc:
         _emit(args, {"recorded": False, "error": exc.kind, "message": str(exc)}, f"refused: {exc}")
+        return 1
+    except StoreError as exc:
+        # A store that cannot be read is a refusal, not a traceback: the CLI is a host entry
+        # point and an unreadable record must never look like a crash it might retry past.
+        _emit(args, {"recorded": False, "error": "store", "message": str(exc)}, f"refused: {exc}")
         return 1
     _emit(
         args,

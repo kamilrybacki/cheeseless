@@ -48,6 +48,7 @@ from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
 from cheeseless.adapters.outbound.sandbox.launch import force_remove
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.audit import StoreAuditSink
+from cheeseless.app.authoring import read_review_verdict
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.egress_supervisor import EgressBlock, EgressSupervisor
 from cheeseless.app.reference_view import reference_tree, reviewer_tree_of
@@ -114,7 +115,34 @@ def build_context(state_dir: Path | None = None, cwd: Path | None = None) -> Con
         sandbox=sandbox,
         store=store,
         author_sandbox=sandbox,
+        reviewer_launch=_reviewer_launch_for(state_dir),
     )
+
+
+def _reviewer_launch_for(
+    state_dir: Path | None,
+) -> Callable[[Sequence[str]], Callable[[str], bool | None]]:
+    """The launch seam `strength-review --run` uses (ADR 0015).
+
+    The reviewer's model session is started by the host, not by the CLI: an inbound adapter
+    cannot import the bootstrap, and the sandbox setup belongs here anyway.
+    """
+
+    def make(command: Sequence[str]) -> Callable[[str], bool | None]:
+        def launch(brief: str) -> bool | None:
+            with host_session(
+                state_dir=state_dir,
+                agent_command=list(command),
+                role=SessionRole.REVIEWER,
+                brief_file=brief,
+            ) as info:
+                # The session runs to completion inside the context, as every phase does.
+                pass
+            return read_review_verdict(Path(info["home_dir"]))
+
+        return launch
+
+    return make
 
 
 def _pool(profile: str) -> Pool:
@@ -832,6 +860,7 @@ def host_session(
     tool_version: str = "0.1.0",
     agent_command: list[str] | None = None,
     agent_stdio: bool = False,
+    brief_file: str | None = None,
     egress_policy: EgressPolicy | None = None,
     egress_upstream_trusted_ca: Path | None = None,
     egress_insecure_upstream: bool = False,
@@ -996,6 +1025,13 @@ def host_session(
             # candidate content into the reviewer's view. Refusing is the only honest answer;
             # filtering would leave the question of what was missed.
             raise SessionOptionError("a reviewer session accepts no home seeds or extra mounts")
+        if brief_file is not None:
+            # The reviewer's instruction comes from the host, and it is written into the
+            # reviewer's own HOME rather than passed in argv: argv is visible to the process
+            # it describes and can carry the author's text.
+            if bound is not SessionRole.REVIEWER:
+                raise SessionOptionError("only a reviewer session takes a brief")
+            (home_dir / "BRIEF.md").write_text(brief_file)
         if bound is SessionRole.REVIEWER and agent_stdio:
             # Inherited stdio is a stream of content that is not in the snapshot the verdict
             # binds. A review whose evidence came from outside its tree is not evidence.

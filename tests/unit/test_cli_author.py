@@ -341,19 +341,39 @@ def test_parser_accepts_strength_review() -> None:
     assert (a.task, a.passed, a.failed) == ("p1", True, False)
 
 
-def test_strength_review_needs_a_verdict() -> None:
-    with pytest.raises(SystemExit):
-        cli.build_parser().parse_args(
-            [
-                "strength-review",
-                "--task",
-                "p1",
-                "--author-model",
-                "a",
-                "--reviewer-model",
-                "b",
-            ]
-        )
+def test_strength_review_needs_a_verdict_or_a_run(capsys) -> None:
+    """A record may not be written from nothing: either say the verdict or run a reviewer.
+
+    The parser cannot express this any more (`--run` supplies the verdict), so the refusal
+    lives where the record would be written.
+    """
+
+    class _Proposal:
+        """A proposal exists, and the operator says neither --passed nor --run."""
+
+        def load_proposal(self, proposal_id):  # noqa: ANN001, ANN202
+            return SimpleNamespace(
+                proposal_id=proposal_id,
+                lineage_id="b" * 64,
+                baseline_commit="c" * 40,
+                acceptance_tree="d" * 40,
+                spec_digest="e" * 64,
+                state="proposed",
+            )
+
+    ctx = cli.Context(
+        repo=SimpleNamespace(head_commit=lambda: "a" * 40),
+        runner=object(),
+        sandbox=object(),
+        store=_Proposal(),
+        author_sandbox=object(),
+    )
+    args = cli.build_parser().parse_args(
+        ["strength-review", "--task", "p1", "--author-model", "a", "--reviewer-model", "b"]
+    )
+    code = cli._cmd_strength_review(args, ctx)
+    assert code == 1
+    assert "refused" in capsys.readouterr().out
 
 
 def test_strength_review_records_and_reports(monkeypatch, capsys) -> None:

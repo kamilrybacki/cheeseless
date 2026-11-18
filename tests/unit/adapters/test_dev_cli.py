@@ -177,3 +177,46 @@ def test_the_implement_report_names_the_re_freeze() -> None:
     report = _implement_report(_Store(), "demo")
     assert "re-freeze" in report
     assert str(MAX_HOLDOUT_FAILURES) in report
+
+
+def test_strength_review_accepts_a_run_with_a_command() -> None:
+    """The `--run` form parses, and the command survives the `--` split."""
+    from cheeseless.adapters.inbound.cli.main import build_parser, split_agent_argv
+
+    argv, agent = split_agent_argv(
+        [
+            "strength-review",
+            "--task",
+            "a" * 64,
+            "--author-model",
+            "claude-sonnet-5-5",
+            "--reviewer-model",
+            "gpt-6.2-sol",
+            "--run",
+            "--",
+            "claude",
+            "-p",
+        ]
+    )
+    args = build_parser().parse_args(argv)
+    assert args.run is True
+    assert agent == ["claude", "-p"]
+
+
+def test_strength_review_without_run_still_parses_a_verdict() -> None:
+    from cheeseless.adapters.inbound.cli.main import build_parser
+
+    args = build_parser().parse_args(
+        [
+            "strength-review",
+            "--task",
+            "a" * 64,
+            "--author-model",
+            "claude-sonnet-5-5",
+            "--reviewer-model",
+            "gpt-6.2-sol",
+            "--passed",
+        ]
+    )
+    assert args.run is False
+    assert args.passed is True
