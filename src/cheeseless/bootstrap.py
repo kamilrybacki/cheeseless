@@ -44,6 +44,7 @@ from cheeseless.adapters.outbound.egress.bridge import (
 from cheeseless.adapters.outbound.egress.proxy import EgressProxy, ProxyConfig
 from cheeseless.adapters.outbound.git.repository import GitRepository
 from cheeseless.adapters.outbound.pane.relay import PaneRelay
+from cheeseless.adapters.outbound.presence.tty import TtyPresence
 from cheeseless.adapters.outbound.runner.pytest_runner import PytestRunner
 from cheeseless.adapters.outbound.sandbox import profiles, pty_launch, seccomp
 from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
@@ -120,6 +121,7 @@ def build_context(state_dir: Path | None = None, cwd: Path | None = None) -> Con
         author_sandbox=sandbox,
         reviewer_launch=_reviewer_launch_for(state_dir),
         launchers=_launcher_catalog(repo),
+        presence=TtyPresence(),
     )
 
 
