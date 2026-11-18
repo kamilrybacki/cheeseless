@@ -95,5 +95,10 @@ The faulty test is there on purpose. It shows that cheeseless has two separate c
 the crosscheck checks the author's tests against the spec (through the reference), and the
 implementer gate catches an implementer gaming the tests. One does not replace the other.
 
+The host's `freeze --approve` and `dispute resolve` are operator decisions, so they need a code
+retyped on the terminal (ADR 0017). The demo runs them on a pty it owns, reads the code the
+CLI shows and types it back; the recording shows that prompt. A piped or headless run is
+refused.
+
 Every hex id (commits, tasks, proposals, lineages) is replaced with a stable label such
 as `<proposal-2>`, and absolute paths are scrubbed before anything is written.

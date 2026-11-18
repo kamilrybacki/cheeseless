@@ -11,13 +11,22 @@ stable label before anything is written.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import html
 import json
+import os
+import pty
 import re
+import select
+import signal
 import subprocess  # noqa: S404 - the demo drives the real cheeseless CLI and git
 import sys
 import tempfile
-from collections.abc import Sequence
+import termios
+import time
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from demo.run_demo import Recorder, scrub
@@ -92,6 +101,86 @@ FILES = {
 _HEX = re.compile(r"(?<![0-9a-f])(?:[0-9a-f]{64}|[0-9a-f]{40})(?![0-9a-f])")
 
 
+_CHALLENGE = re.compile(r"type this code to confirm: ([A-Z2-9]{8})\r?\n")
+
+
+def find_challenge_code(text: str) -> str | None:
+    """The code from a finished ``type this code to confirm:`` line, or None."""
+    found = _CHALLENGE.search(text)
+    return found.group(1) if found else None
+
+
+@dataclass(frozen=True)
+class PtyResult:
+    returncode: int
+    output: str
+    typed: str | None
+
+
+def run_on_pty(
+    argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout: float
+) -> PtyResult:
+    """Run ``argv`` with a controlling terminal this process owns and answer the challenge.
+
+    The child's own stdio and its ``/dev/tty`` are the same pty. The code is read off the
+    terminal and typed back, the way an operator would (ADR 0017). Nothing is piped."""
+    master, slave = pty.openpty()
+
+    def adopt_terminal() -> None:  # runs in the child, after setsid
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+    try:
+        proc = subprocess.Popen(  # noqa: S603 - the venv's own cheeseless entry point
+            list(argv),
+            cwd=cwd,
+            env=dict(env),
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            start_new_session=True,
+            preexec_fn=adopt_terminal,  # noqa: PLW1509 - needed to take the controlling terminal
+        )
+    except BaseException:
+        os.close(master)
+        raise
+    finally:
+        os.close(slave)
+    seen = b""
+    typed: str | None = None
+    deadline = time.monotonic() + timeout
+    try:
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.2)
+            if ready:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError:  # EIO: every slave end is closed
+                    break
+                if not chunk:
+                    break
+                seen += chunk
+                code = find_challenge_code(seen.decode("utf-8", errors="replace"))
+                if code and typed is None:
+                    typed = code
+                    os.write(master, code.encode("ascii") + b"\n")
+            elif proc.poll() is not None:
+                break
+        else:
+            raise TimeoutError(f"pty command exceeded {timeout}s")
+        returncode = proc.wait(timeout=30)
+    finally:
+        os.close(master)
+        _reap_group(proc)
+    return PtyResult(returncode, seen.decode("utf-8", errors="replace"), typed)
+
+
+def _reap_group(proc: subprocess.Popen[bytes]) -> None:
+    """Kill the child's whole session (it leads its own group) and wait for the child."""
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    proc.wait(timeout=30)
+
+
 class Masker:
     """Replace each distinct hex id with a stable, human-readable label."""
 
@@ -162,6 +251,25 @@ class Demo:
         self.show(f"cheeseless {display}", output)
         if expect is not None and done.returncode != expect:
             raise RuntimeError(f"{display}: exit {done.returncode}\n{self.mask(output)}")
+        return output
+
+    def cli_tty(self, display: str, *args: str, expect: int | None = 0) -> str:
+        """Run a gated decision on a pty the demo owns, answering the typed challenge."""
+        result = run_on_pty(
+            [str(CHEESELESS), "--state-dir", str(self.state), *args],
+            cwd=self.repo,
+            env=self.env,
+            timeout=600,
+        )
+        output = result.output.replace("\r\n", "\n")
+        if result.typed:
+            output = output.replace(
+                f"type this code to confirm: {result.typed}\n",
+                f"type this code to confirm: {result.typed}\n(typed back: {result.typed})\n",
+            )
+        self.show(f"cheeseless {display}", output)
+        if expect is not None and result.returncode != expect:
+            raise RuntimeError(f"{display}: exit {result.returncode}\n{self.mask(output)}")
         return output
 
     def session(self, role: str, step: str, projection: Path, *, placeholder: bool) -> str:
@@ -271,7 +379,7 @@ class Demo:
         self.merge_spec()
         pid = self.proposal(out)
         self.caption("   The host tries to approve anyway; the red crosscheck blocks it.")
-        self.cli(
+        self.cli_tty(
             f"freeze --approve {self.mask(pid)} --as host",
             "freeze",
             "--approve",
@@ -297,7 +405,11 @@ class Demo:
         )
         self.merge_spec()
         pid = self.proposal(out)
-        self.cli(
+        self.caption(
+            "   Operator decisions need a code retyped on the terminal (ADR 0017).",
+            "   The demo plays the operator on a pty it owns: it reads the code and types it back.",
+        )
+        self.cli_tty(
             f"freeze --approve {self.mask(pid)} --as host",
             "freeze",
             "--approve",
@@ -318,7 +430,7 @@ class Demo:
         listing = self.cli("disputes --show-note --json", "disputes", "--show-note", "--json")
         dispute_id = json.loads(listing)["disputes"][0]["id"]
         self.caption("   The host reads the note, checks the spec and rejects the dispute.")
-        self.cli(
+        self.cli_tty(
             f"dispute resolve {self.mask(dispute_id)} --rejected --as host",
             "dispute",
             "resolve",
