@@ -27,7 +27,7 @@ from cheeseless.domain.presence import PresenceOperation, PresenceRefused
 from cheeseless.ports.store import StoreError
 from tests.factories import frozen_task
 from tests.presence_fakes import Approving, Refusing
-from tests.toy import FIXED_MAIN
+from tests.toy import FIXED_MAIN, commit_all
 from tests.unit.app.test_authoring import _green, _HookedStore, _record, _red_sandbox, _source
 from tests.unit.app.test_freeze import _FakeSandbox
 
@@ -266,6 +266,24 @@ def test_enabling_auto_freeze_asks_and_records_presence(world):
     assert asked.operation is PresenceOperation.AUTO_FREEZE_ENABLE
     assert (asked.lineage_id, asked.outcome) == (lineage, "allow")
     assert any(e["kind"] == "auto-freeze-enable" and NOTE in e["cause"] for e in _events(store))
+
+
+def test_a_contract_changed_while_the_operator_answers_does_not_enable_auto_freeze(world, toy_repo):
+    repo, store, _ = world
+    lineage = _state(repo, store).lineage_id
+    criteria = toy_repo / "acceptance/contract/criteria.yaml"
+
+    def retarget() -> None:
+        criteria.write_text(criteria.read_text().replace("task: toy", "task: other"))
+        commit_all(toy_repo, "retarget the contract")
+
+    with pytest.raises(AuthorError) as caught:
+        uc.configure_auto_freeze(repo, store, enabled=True, presence=Approving(retarget))
+    assert caught.value.kind == "lineage_changed"
+    new_lineage = uc.read_contract(repo, repo.head_commit()).lineage_id
+    assert new_lineage != lineage
+    assert not store.auto_freeze_enabled(lineage)
+    assert not store.auto_freeze_enabled(new_lineage)
 
 
 def test_withdrawing_auto_freeze_needs_no_presence(world):

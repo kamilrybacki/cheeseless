@@ -1596,3 +1596,7 @@ Deviations from the ADR text, all fail-closed:
   terminal never prompts; child processes use the real wiring and a test asserts that it does.
 - Approve and recover-finish have no pty CLI success test, because a real sandbox cross-check
   runs after presence; their success path is covered in-process.
+- Follow-up: `test_a_contract_changed_while_the_operator_answers_does_not_enable_auto_freeze`
+  commits a retargeted contract while the operator answers and expects `lineage_changed` with
+  auto-freeze off for both lineages. With the post-answer lineage check removed it fails
+  (`DID NOT RAISE AuthorError`).
