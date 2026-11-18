@@ -1082,3 +1082,42 @@ Round 3 — cross-vendor reviewer (**ACCEPT WITH CHANGES**), the finding that ma
   `cheeseless strength-review`. That is deliberate: `test_the_reviewer_gets_no_tools_at_all`
   guarantees the reviewer cannot report its own verdict, so whoever parses its output is the
   host, and that parser is the next piece.
+
+### Review of #39 (gpt-6.2-sol, medium) — REJECT, all four blockers verified in code
+
+- **FINDING 1 (BLOCKER) — accepted.** The reviewer was launched through `_bridge_command`
+  and `host_session` waited on `_wait_for_bridge(egress_ready)`. An isolated reviewer can never
+  write that marker, so the session hung until timeout: the role could not run at all. Fixed
+  by branching before the wrapper and guarding the handshake. Test:
+  `test_a_reviewer_session_waits_for_no_egress_bridge`.
+- **FINDING 2 (BLOCKER) — accepted.** `_projection_tree` fed the reviewer `HEAD` (not the tree
+  a verdict names) before a freeze, and `projection_tree` after one — which has the hidden
+  tests removed. It would have judged a suite that is not the frozen one. Fixed: the reviewer
+  is shown `frozen.acceptance_tree` through the new `Repository.tree_from_acceptance`. Test:
+  `test_the_reviewer_is_shown_the_frozen_acceptance_tree_not_the_public_projection`.
+- **FINDING 3 (BLOCKER) — accepted.** Operator home seeds, extra read-only mounts, extra env
+  and extra command arguments were an unfiltered route for candidate content into the
+  reviewer. Fixed by refusing seeds and extra mounts outright for this role (`SessionOptionError`)
+  — filtering would leave "what did we miss?" unanswerable.
+- **FINDING 4 (BLOCKER) — accepted, and my comment was wrong.** `profiles.reviewer` said
+  "callers keep them disjoint" while nothing enforced it: a writable HOME above the projection
+  would shadow the read-only bind below it. Fixed with `_refuse_overlap` in `bootstrap`, where
+  both paths are chosen. The comment now describes what the code does. Test:
+  `test_the_home_overlap_is_refused_rather_than_commented_about`.
+- **FINDING 5 (SHOULD-FIX) — accepted.** `_reviewer_env` was a denylist of constant *names*,
+  so anything added later passed silently. Replaced with a two-entry allowlist
+  (`CHEESELESS_RUNTIME`, `CHEESELESS_MCP`). Test:
+  `test_the_environment_whitelist_admits_only_what_a_model_session_needs`.
+- **FINDING 6 (SHOULD-FIX) — accepted as residual risk, recorded not fixed.** `sockets` is
+  ignored, the tool list is empty and verdict recording is host-side; but the UDS dispatcher
+  would admit a bound reviewer to implementer routes if it ever gained socket access. Not
+  reachable from this role today. Recorded here rather than carried silently.
+- **FINDING 7 (SHOULD-FIX) — accepted.** `tree_keeping` on a tree with no `acceptance/` returns
+  an empty tree, which would let a reviewer judge a suite it was never shown. Now refused
+  (`reviewer_tree`, `reviewer_tree_of`). A prefix that is a file raises `RepositoryError`
+  already, which is the fail-closed answer.
+- **FINDING 8 (SHOULD-FIX) — accepted.** Added the positive control the review asked for (the
+  reviewer must mount something, or its silence proves nothing) and the fail-closed test for a
+  missing acceptance fd.
+- **NOT accepted — no change.** The claim that `acceptance_mount(REVIEWER) == "ro"` is wrong:
+  the review itself agrees it is correct, and `open_acceptance` + `--ro-bind-fd` pins it.

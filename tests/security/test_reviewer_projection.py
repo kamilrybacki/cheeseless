@@ -9,6 +9,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from cheeseless import bootstrap
 from cheeseless.adapters.outbound.git.repository import GitRepository
 from cheeseless.adapters.outbound.sandbox import profiles
@@ -136,3 +138,44 @@ def test_the_reviewer_projection_is_built_from_the_reviewer_tree(tmp_path: Path)
     implementer = bootstrap._projection_tree(repo, None, SessionRole.IMPLEMENTER)
     assert reference != reviewer, "a reviewer must see more than a reference"
     assert reviewer != implementer, "a reviewer must see less than an implementer"
+
+
+def test_the_reviewer_is_shown_the_frozen_acceptance_tree_not_the_public_projection(
+    tmp_path: Path,
+) -> None:
+    """Found in review: after a freeze `projection_tree` has the hidden tests removed."""
+    import types
+
+    root = make_repo(tmp_path / "r3", FILES)
+    repo = GitRepository.discover(root)
+    head = repo.head_commit()
+    acceptance = repo.tree_of(head, "acceptance")
+    # A frozen task, minimally shaped: the reviewer must key off `acceptance_tree`.
+    frozen = types.SimpleNamespace(
+        acceptance_tree=acceptance,
+        projection_tree=repo.tree_without(
+            repo.tree_of(head), "acceptance", ("acceptance/contract/spec.md",)
+        ),
+    )
+    reviewer = bootstrap._projection_tree(repo, frozen, SessionRole.REVIEWER)
+    implementer = bootstrap._projection_tree(repo, frozen, SessionRole.IMPLEMENTER)
+    assert reviewer != implementer
+    proj = tmp_path / "proj"
+    repo.create_projection(reviewer, proj)
+    text = "".join(p.read_text() for p in proj.rglob("*") if p.is_file() and ".git" not in p.parts)
+    assert HIDDEN in text, "the reviewer must see the hidden tests it is judging"
+    assert CODE_CANARY not in text
+
+
+def test_an_empty_acceptance_tree_is_refused(tmp_path: Path) -> None:
+    root = make_repo(tmp_path / "r4", {"src/a.py": "x\n"})
+    repo = GitRepository.discover(root)
+    with pytest.raises(ValueError, match="acceptance"):
+        reviewer_tree(repo, repo.tree_of(repo.head_commit()))
+    # A well-formed but empty acceptance tree: nothing to judge is a refusal, not a pass.
+    from cheeseless.app.reference_view import reviewer_tree_of
+
+    empty = repo.tree_keeping(repo.tree_of(repo.head_commit()), "src")
+    empty = repo.tree_without(empty, "src", ())
+    with pytest.raises(ValueError, match="empty"):
+        reviewer_tree_of(repo, empty)

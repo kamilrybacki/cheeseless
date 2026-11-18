@@ -32,6 +32,9 @@ def _scratch() -> Iterator[Path]:
         yield Path(tmp)
 
 
+_ACCEPTANCE = "acceptance"
+
+
 class GitRepository:
     """The trusted repository. Every git call goes through :class:`Git`."""
 
@@ -235,6 +238,12 @@ class GitRepository:
     def tree_keeping(self, tree: str, prefix: str) -> str:
         rel_path(prefix)
         return self._write_tree([(e.mode, e.oid, e.path) for e in self._entries(tree, prefix)])
+
+    def tree_from_acceptance(self, acceptance_tree: str) -> str:
+        entries = [
+            (e.mode, e.oid, f"{_ACCEPTANCE}/{e.path}") for e in self._entries(oid(acceptance_tree))
+        ]
+        return self._write_tree(entries)
 
     def replace_subtree(self, tree: str, prefix: str, source_tree: str, keep: str) -> str:
         rel_path(prefix)

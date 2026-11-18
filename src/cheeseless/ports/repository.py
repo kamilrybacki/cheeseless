@@ -61,6 +61,10 @@ class Repository(Protocol):
         """``tree`` reduced to ``prefix`` and what is under it; nothing else survives."""
         ...
 
+    def tree_from_acceptance(self, acceptance_tree: str) -> str:
+        """A tree whose ``acceptance/`` is ``acceptance_tree`` and which holds nothing else."""
+        ...
+
     def replace_subtree(self, tree: str, prefix: str, source_tree: str, keep: str) -> str:
         """``tree`` minus everything under ``prefix``, plus ``source_tree``'s ``keep`` entries."""
         ...

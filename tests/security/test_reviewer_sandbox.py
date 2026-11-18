@@ -184,3 +184,76 @@ def test_the_reviewer_argv_is_built_without_sockets() -> None:
     source = inspect.getsource(p.reviewer)
     assert "sockets" in source  # accepted, so callers can share plumbing
     assert '--bind", str(s' not in source
+
+
+# -- the protections must fail when removed -----------------------------------
+
+
+def test_an_acceptance_read_is_a_positive_control(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """A reviewer that cannot even read the tests would 'pass' every write-denial test."""
+    args, fd = _common(tmp_path)
+    try:
+        argv = profiles.reviewer(**dict(args, command=["/bin/sh", "-c", "cat acceptance/x"]))
+    finally:
+        os.close(fd)
+    mounts = [a for a in argv if a in ("--ro-bind", "--bind", "--ro-bind-fd")]
+    assert mounts, "the reviewer must mount something, or its silence proves nothing"
+
+
+def test_the_reviewer_mount_refuses_to_lie_about_a_missing_projection(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    args, fd = _common(tmp_path)
+    os.close(fd)
+    args["acceptance_fd"] = None
+    with pytest.raises(ValueError):
+        profiles.reviewer(**args)
+
+
+def test_the_home_overlap_is_refused_rather_than_commented_about(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Found in review: a writable HOME above the projection would shadow it."""
+    from cheeseless import bootstrap
+    from cheeseless.session_options import SessionOptionError
+
+    outer = tmp_path / "outer"
+    inner = outer / "proj"
+    inner.mkdir(parents=True)
+    with pytest.raises(SessionOptionError):
+        bootstrap._refuse_overlap(outer, inner)
+    with pytest.raises(SessionOptionError):
+        bootstrap._refuse_overlap(inner, outer)
+    sibling = tmp_path / "other"
+    sibling.mkdir()
+    bootstrap._refuse_overlap(inner, sibling)  # disjoint: no error
+
+
+def test_the_environment_whitelist_admits_only_what_a_model_session_needs() -> None:
+    from cheeseless import bootstrap
+
+    env = [
+        ("CHEESELESS_RUNTIME", "/rt"),
+        ("CHEESELESS_MCP", "/mcp"),
+        ("CHEESELESS_SOCKET", "/s.sock"),
+        ("CHEESELESS_EGRESS_READY", "/ready"),
+        ("CHEESELESS_EGRESS_PORT", "18080"),
+        ("HTTPS_PROXY", "http://p:1"),
+        ("GIT_CONFIG_GLOBAL", "/candidate/.gitconfig"),
+        ("SOMETHING_NEW_ADDED_LATER", "leak"),
+    ]
+    assert bootstrap._reviewer_env(env) == [
+        ("CHEESELESS_RUNTIME", "/rt"),
+        ("CHEESELESS_MCP", "/mcp"),
+    ]
+
+
+def test_a_reviewer_session_waits_for_no_egress_bridge() -> None:
+    """Found in review: the reviewer was launched behind the bridge wrapper and hung."""
+    import inspect
+
+    from cheeseless import bootstrap
+
+    source = inspect.getsource(bootstrap.host_session)
+    # The readiness handshake is guarded, not unconditional: an isolated reviewer can never
+    # produce the marker, so waiting for it would block the session until the timeout.
+    assert "if bound is not SessionRole.REVIEWER:" in source
+    assert "_wait_for_bridge(egress_ready, proc)" in source
+    # And it is not wrapped by the bridge command either.
+    assert "if bound is SessionRole.REVIEWER:" in source

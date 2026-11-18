@@ -50,7 +50,7 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.audit import StoreAuditSink
 from cheeseless.app.dlp import scanner_for
 from cheeseless.app.egress_supervisor import EgressBlock, EgressSupervisor
-from cheeseless.app.reference_view import reference_tree, reviewer_tree
+from cheeseless.app.reference_view import reference_tree, reviewer_tree, reviewer_tree_of
 from cheeseless.domain import ids
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.dlp import Fingerprints
@@ -129,6 +129,12 @@ def _private_dir(prefix: str) -> Path:
 
 def _forbidden_roots(repo: Any) -> tuple[Path, ...]:
     return (Path(repo.root), Path(repo.common_dir()))
+
+
+def _refuse_overlap(a: Path, b: Path) -> None:
+    """Refuse two mounts where one contains the other: the second bind shadows the first."""
+    if _within(a, b) or _within(b, a):
+        raise SessionOptionError(f"{a} and {b} overlap; one bind would shadow the other")
 
 
 def _ensure_outside(path: Path, repo: Any, what: str) -> None:
@@ -407,35 +413,20 @@ def _disputes_enabled(store: Store) -> bool:
         return False
 
 
-# Environment a reviewer must not inherit: every one of these is a route off the tests.
-_REVIEWER_STRIPPED = frozenset(
-    {
-        "CHEESELESS_SOCKET",
-        "CHEESELESS_TASK",
-        "EGRESS_SOCKET_ENV",
-        "EGRESS_PORT_ENV",
-        "HTTPS_PROXY",
-        "HTTP_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "https_proxy",
-        "http_proxy",
-        "all_proxy",
-        "no_proxy",
-        "CODEX_CA_CERTIFICATE",
-        "NODE_EXTRA_CA_CERTS",
-        "SSL_CERT_FILE",
-    }
-)
+# The only host variables a reviewer may see. A denylist answers "what did we think of?"
+# and silently passes whatever is added later; the reviewer reads untrusted text and its
+# verdict decides the freeze, so the list of things it may inherit should be explicit and
+# short. Everything else is dropped; ``BASE_ENV`` is supplied by the sandbox builder itself.
+_REVIEWER_ENV_ALLOWED = frozenset({"CHEESELESS_RUNTIME", "CHEESELESS_MCP"})
 
 
 def _reviewer_env(env: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
-    """``env`` without any channel to the host or the network (ADR 0015).
+    """``env`` reduced to the variables a reviewer needs to start its model session.
 
-    The reviewer keeps the interpreter and runtime variables it needs to start a model
-    session; it loses the verifier socket, the egress bridge and every proxy variable.
+    It keeps no socket path, no bridge port, no readiness marker, no proxy variable and no
+    CA path: every one of those is a route off the tests it was launched to judge (ADR 0015).
     """
-    return [(k, v) for k, v in env if k not in _REVIEWER_STRIPPED]
+    return [(k, v) for k, v in env if k in _REVIEWER_ENV_ALLOWED]
 
 
 def _mcp_shim_source(
@@ -761,6 +752,14 @@ def _projection_tree(repo: Any, frozen: Any, role: SessionRole) -> str:
     if role is SessionRole.REFERENCE:
         return reference_tree(repo, tree)
     if role is SessionRole.REVIEWER:
+        # ADR 0015 decision 2: the verdict names an acceptance tree, so the reviewer must be
+        # shown *that* tree. `projection_tree` is the wrong one on both sides of a freeze:
+        # before it, otherwise; after it, it is the public projection with the hidden tests
+        # taken out, so the reviewer would judge a suite that is not the frozen one.
+        if frozen is not None:
+            return reviewer_tree_of(repo, frozen.acceptance_tree)
+        # Before a freeze there is no record to point at, so the whole repository tree is the
+        # only honest source and it is cut down to `acceptance/` like any other.
         return reviewer_tree(repo, tree)
     return tree
 
@@ -939,6 +938,16 @@ def host_session(
         _ensure_outside(projection_dir, ctx.repo, "projection")
 
         home_dir = _private_dir("cheeseless-home-")
+        if bound is SessionRole.REVIEWER and (extras.seeds or extras.read_only):
+            # ADR 0015: a home seed or an extra read-only mount is an unfiltered route for
+            # candidate content into the reviewer's view. Refusing is the only honest answer;
+            # filtering would leave the question of what was missed.
+            raise SessionOptionError("a reviewer session accepts no home seeds or extra mounts")
+        if bound is SessionRole.REVIEWER:
+            # A writable bind laid over a read-only one shadows it. The builder cannot see
+            # whether HOME is an ancestor of the projection, so the caller that picks both
+            # paths is the place to refuse the overlap rather than a comment in the builder.
+            _refuse_overlap(home_dir, projection_dir)
         seed_home(home_dir, dev_home_entries(bound, dev=dev))
         seed_home(home_dir, extras.seeds)  # an operator seed can never replace a dev entry
         if socket_dir is None:
@@ -1083,7 +1092,13 @@ def host_session(
         if any(_within(python_root, root) for root in _forbidden_roots(ctx.repo)):
             raise RuntimeError("the client interpreter must live outside the repository")
         agent_args = list(agent_command) if agent_command is not None else list(_DEFAULT_AGENT)
-        command = _bridge_command(python, ready_path, egress_ready, agent_args)
+        if bound is SessionRole.REVIEWER:
+            # ADR 0015: no egress bridge, so no wrapper and no readiness handshake. The
+            # reviewer is launched exactly as given; waiting for a bridge that was never
+            # created would hang the session until the timeout.
+            command = agent_args
+        else:
+            command = _bridge_command(python, ready_path, egress_ready, agent_args)
         launch_command = command
         if new_reference is not None and new_reference.mode is ReferenceMode.TUI:
             # --new-session leaves the child with no controlling tty, so a resize on the
@@ -1170,8 +1185,9 @@ def host_session(
             acceptance_fd = None
         _close_pins(contract_pins)
         session.expected_pidns_fd = ns_fd
-        _wait_for_bridge(egress_ready, proc)
-        ready_path.write_text("ready\n", encoding="ascii")
+        if bound is not SessionRole.REVIEWER:
+            _wait_for_bridge(egress_ready, proc)
+            ready_path.write_text("ready\n", encoding="ascii")
         if pty_master is not None:
             relay = PaneRelay(pty_master, on_attach=on_attach)
             relay.start()
