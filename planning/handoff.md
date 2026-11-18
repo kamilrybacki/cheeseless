@@ -3,8 +3,8 @@
 State on 2026-11-14: phases 0–11 are implemented and merged. PR #1–#5 are merged and
 `main` is `924d953`; PR #1/#2 landed the core phases, PR #3 the cross-run CI budget
 counter, PR #4 `ci-budget-init`, and PR #5 the MCP identity and egress-audit follow-ups.
-Branch `feat/release-sanitizer` adds the phase 12 local release audit (tracked tree,
-local history including commit metadata, and built sdist/wheel) but is not merged yet.
+The phase 12 local release audit (tracked tree, local history including commit metadata,
+and built sdist/wheel) has since been merged, and the repository is public (2026-11-18).
 ADRs 0001/0003/0005/0006/0007 were reworded to close H1–H4 and M2 and are `accepted`
 after cross-vendor review (ledger "ADR re-review, round 3"). Release remains pending:
 a clean local audit is not a release-readiness claim. This file is the entry point for a
@@ -107,17 +107,16 @@ source of truth; changes land through `promote`, not hooks.
   live checks in section 6 of [`research/ci-budget-counter.md`](research/ci-budget-counter.md)
   (P10-7); checks 12 and 13 cover `cheeseless ci-budget-init`, which seeds the ledger root
   (P10-29, P10-30). The `ci.yml` bwrap step is verified (P10-8).
-- GitHub `refs/pull/1` and `refs/pull/2` still hold commits with the old author email;
-  removing them needs GitHub Support or a fresh repository (operator decision).
+- The repository is public since 2026-11-18 (operator decision). GitHub `refs/pull/1` and
+  `refs/pull/2` still hold commits with the old author email; the operator accepted this at
+  publication. Removing them needs GitHub Support.
 - The real-agent E2E ran and PASSED on 2026-11-15 with Claude Code (ledger P14-2). It stays
   opt-in; run it with the manual command in
   [`docs/agent-prompting.md`](../docs/agent-prompting.md); it needs an operator-owned
   wrapper, credentials and an egress policy outside this repository.
-- Phase 12 sanitizer is implemented and the local audit is clean, but publication is
-  still blocked by the live GitHub P10-6 gate, the server-side `refs/pull/1`/`refs/pull/2`
-  history, and explicit operator publication approval (Q34). The live gate (P13-10) and the
-  real-agent E2E (P14-2) have both passed. The local audit cannot see server-side refs and
-  does not prove history is sanitized.
+- Phase 12 sanitizer: before publication on 2026-11-18 every branch and tag on GitHub was
+  re-checked and carries only noreply author addresses; the only residue is the pull refs
+  above. Public runners made CI free, so the release gate runs on every push again.
 - Residual phase 8 limits (P8-12): freeze requires two private sentinel markers per
   artifact class, but markers split across files or hidden behind other reversible
   encodings are not detected; 64-bit rolling-hash collisions are theoretical; bytes clean before a mid-stream
@@ -189,8 +188,8 @@ uv run --frozen cheeseless --version
 
 ## Constraints
 
-- The repository is **private** until the sanitizer passes, CI is green and the operator
-  explicitly confirms publication (Q34).
+- The repository is **public** since 2026-11-18: the sanitizer passed, CI was green and the
+  operator confirmed publication (Q34). Everything committed is world-readable.
 - No secrets, host names or personal infrastructure in this repo. Integration with a
   particular workstation or agent platform lives outside it.
 - Accepted ADRs are immutable; supersede them with a new ADR.
