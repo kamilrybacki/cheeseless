@@ -1551,3 +1551,48 @@ Every finding was checked against the code and accepted:
 8. LOW, predecessor wording. Accepted: the ADR quotes ADR 0009's "a human or an orchestrator
    agent", says it revises that operator only for the five decisions, and calls the remainder a
    trusted-host residual instead of attributing it to ADR 0001 (which accepts a sandbox escape).
+
+## ADR 0017 implementation — tests and revert check (2026-11-18)
+
+Implemented in `a3347e0` (domain and port), `82f3ef7` (app requirement), `dd3c436` (`TtyPresence`
+adapter) and `94a5912` (CLI wiring in `bootstrap.build_context`).
+
+New tests:
+
+- `tests/unit/app/test_presence_wiring.py`: each of the five decisions asks once with the exact
+  request, records `presence: tty-challenge` in the event cause, leaves state unchanged on refusal
+  or with no port, and refuses when state moved while the operator was answering.
+- `tests/unit/adapters/test_tty_presence.py` (22 tests, real pty pair): correct code, fresh nonce,
+  no echo, escaped fields, wrong, empty, overlong and second answer, timeout, EOF, hangup, interrupt,
+  read error, typed-ahead flush, failed restore, no controlling terminal, background job, `/dev/tty`
+  only.
+- `tests/security/test_presence_challenge.py` (20 tests): the real CLI in a new session with
+  piped stdin and no terminal refuses all five decisions and leaves state unchanged; the canary
+  positive control on a test-owned pty lets auto-freeze, dispute and sensitive promote through and
+  refuses a wrong code; an app-level refusing port; production wiring is `TtyPresence`; no CLI
+  option, environment variable or extra `presence=` call site bypasses it.
+
+Revert check: each `require_presence` call was replaced by a stand-in that confirms without
+asking, then restored. Failures in the two files above (security + wiring):
+
+| Call site | Tests that fail |
+|---|---|
+| `app/dispute.py` resolve | 6 (no-tty CLI, pty success, refusing port, wiring ×3) |
+| `app/authoring.py` approve | 7 (no-tty CLI, refusing port, wiring ×5) |
+| `app/authoring.py` recover finish | 5 (no-tty CLI, refusing port, wiring ×3) |
+| `app/authoring.py` auto-freeze enable | 6 (no-tty CLI, pty success, pty wrong code, refusing port, wiring ×2) |
+| `app/promote.py` sensitive approvals | 7 (no-tty CLI, pty success, refusing port, wiring ×4) |
+
+Deviations from the ADR text, all fail-closed:
+
+- Enabling auto-freeze asks outside approval ownership (there is no proposal to own); the lineage
+  is revalidated after the answer and a change refuses with `lineage_changed`.
+- Dispute resolve and promote have no ownership lock either; they revalidate state after the
+  answer and commit with compare-and-set, so a concurrent change is not applied twice.
+- The actor in the auto-freeze and promote prompts is `operator`; neither command names one.
+- A refusal is `AuthorError(kind="presence_refused")` for approve, recover, auto-freeze and
+  promote; dispute resolve propagates `PresenceRefused` and the CLI prints `dispute failed: ...`.
+- `tests/conftest.py` swaps `bootstrap.TtyPresence` for a refusing fake so a suite run from a
+  terminal never prompts; child processes use the real wiring and a test asserts that it does.
+- Approve and recover-finish have no pty CLI success test, because a real sandbox cross-check
+  runs after presence; their success path is covered in-process.
