@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cheeseless.dev/schemas/dev-event-v1.json",
+  "title": "cheeseless dev-events v1",
+  "description": "One NDJSON line of `cheeseless dev-events`. Closed enums only; no free text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "kind", "observed_at", "lineage"],
+  "properties": {
+    "v": {"const": 1},
+    "kind": {"enum": ["snapshot", "change", "heartbeat", "end", "error"]},
+    "observed_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"},
+    "lineage": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+    "stage": {"enum": ["spec", "tests", "reference", "lock", "code", "dispute", "blocked", "done", "aborted"]},
+    "actor": {"enum": ["test_writer", "reference_coder", "coder", "operator", "host", "none"]},
+    "awaiting": {"enum": ["none", "spec_done", "reference_done", "lock_approval", "dispute_resolution", "run_grant", "refreeze_or_abort"]},
+    "reference": {"enum": ["none", "running_tui", "running_headless", "done", "failed", "cancelled"]},
+    "holdout_failures": {"type": "integer", "minimum": 0, "maximum": 3},
+    "open_disputes": {"type": "integer", "minimum": 0},
+    "state_version": {"type": "integer", "minimum": 0},
+    "hint": {"enum": ["none", "run_dev_resume", "run_freeze_approve", "run_dispute_resolve", "grant_runs_or_abort", "refreeze_or_abort"]}
+  },
+  "oneOf": [
+    {
+      "description": "A state line: every view field is present.",
+      "properties": {
+        "kind": {"enum": ["snapshot", "change", "heartbeat", "end"]}
+      },
+      "required": ["stage", "actor", "awaiting", "reference", "holdout_failures", "open_disputes", "state_version", "hint"]
+    },
+    {
+      "description": "A fixed error line: time and lineage only, no state.",
+      "properties": {
+        "kind": {"const": "error"}
+      },
+      "not": {
+        "anyOf": [
+          {"required": ["stage"]},
+          {"required": ["actor"]},
+          {"required": ["awaiting"]},
+          {"required": ["reference"]},
+          {"required": ["holdout_failures"]},
+          {"required": ["open_disputes"]},
+          {"required": ["state_version"]},
+          {"required": ["hint"]}
+        ]
+      }
+    }
+  ]
+}
