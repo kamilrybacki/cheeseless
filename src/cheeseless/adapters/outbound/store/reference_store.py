@@ -65,7 +65,9 @@ def _decode(attempt_id: str, data: dict[str, Any]) -> ReferenceAttempt:
     )
 
 
-class ReferenceStoreMixin:
+class ReferenceReadMixin:
+    """The read paths only; the observer builds on this and never sees a write."""
+
     _root: Path
 
     def _reference_path(self, attempt_id: str) -> Path:
@@ -95,6 +97,8 @@ class ReferenceStoreMixin:
                 found.append(attempt)
         return tuple(found)
 
+
+class ReferenceStoreMixin(ReferenceReadMixin):
     def save_reference_attempt(self, attempt: ReferenceAttempt) -> ReferenceAttempt:
         attempt_id = _attempt_id(attempt.attempt_id)
         with _fs.locked(self._root / "store.lock"):

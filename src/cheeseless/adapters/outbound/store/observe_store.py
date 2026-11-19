@@ -1,7 +1,7 @@
 """Read-only view of the trusted store for the dev-events observer.
 
 It never creates, locks, repairs or writes anything: a missing store reads as empty and
-a corrupt one raises ``StoreError``. It reuses the mixins' read paths only.
+a corrupt one raises ``StoreError``. It builds on the read-only mixins, so no write method exists on it at runtime.
 """
 
 from __future__ import annotations
@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from cheeseless.adapters.outbound.store import _fs, codec
-from cheeseless.adapters.outbound.store.dev_store import DevStoreMixin
-from cheeseless.adapters.outbound.store.reference_store import ReferenceStoreMixin
+from cheeseless.adapters.outbound.store.dev_store import DevReadMixin
+from cheeseless.adapters.outbound.store.reference_store import ReferenceReadMixin
 from cheeseless.domain.dispute import DisputeCode, DisputeRecord, DisputeStatus
 from cheeseless.ports.store import StoreError
 
 
-class ObserveStore(DevStoreMixin, ReferenceStoreMixin):
+class ObserveStore(DevReadMixin, ReferenceReadMixin):
     """Satisfies the ``DevObservation`` port. Constructing it touches nothing on disk."""
 
     def __init__(self, root: Path) -> None:

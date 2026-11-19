@@ -50,7 +50,7 @@ def _attempt() -> ReferenceAttempt:
 
 def _seed(root: Path) -> None:
     """A realistic store: a dev state, a reference attempt and one open dispute."""
-    store = FileStore(root)
+    store = FileStore(root)  # seed through the real write store, never the observer
     store.save_dev_state(DevState(lineage_id=LINEAGE, phase=DevPhase.TESTS, spec_digest=DIGEST))
     store.save_reference_attempt(_attempt())
     record = {
