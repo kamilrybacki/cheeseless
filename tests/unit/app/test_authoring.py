@@ -7,7 +7,12 @@ from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app import authoring as uc
 from cheeseless.app.authoring import AuthorError
 from cheeseless.app.freeze import CONTRACT_PATH, FreezeError
-from cheeseless.domain.authoring import MAX_REFERENCE_RETRIES, AuthoringError, TaskPhase
+from cheeseless.domain.authoring import (
+    MAX_REFERENCE_RETRIES,
+    AuthoringError,
+    AuthorStatus,
+    TaskPhase,
+)
 from cheeseless.domain.evaluation import TestOutcome
 from cheeseless.ports.sandbox import AuthorOutcome
 from tests.presence_fakes import Approving
@@ -94,6 +99,87 @@ def test_author_check_refuses_a_tree_that_leaks_a_sentinel_publicly(tmp_path):
     repo = GitRepository.discover(make_repo(tmp_path / "toy", files))
     result = uc.author_check(repo, FakeAuthorSandbox(_line()), _source(repo))
     assert not result.ok and any("sentinel" in p for p in result.problems)
+
+
+def _leaky_repo(tmp_path):
+    files = dict(TOY_FILES)
+    files["acceptance/hidden/test_normalize.py"] = "def test_x(candidate):\n    pass\n"
+    files["acceptance/hidden/test_score.py"] = "def test_y(candidate):\n    pass\n"
+    return GitRepository.discover(make_repo(tmp_path / "toy", files))
+
+
+def test_a_clean_check_has_status_pass(world):
+    repo, _, _ = world
+    result = uc.author_check(repo, FakeAuthorSandbox(_line()), _source(repo))
+    assert result.status is AuthorStatus.PASS
+
+
+def test_collection_errors_and_criterion_mapping_problems_are_fail(world):
+    repo, _, _ = world
+    bad = [{"node_id": "t::a", "criteria": ["nope"]}, {"node_id": "t::b", "criteria": []}]
+    result = uc.author_check(
+        repo, FakeAuthorSandbox(_line(bad, errors=["hidden/x.py"], status=2)), _source(repo)
+    )
+    assert result.status is AuthorStatus.FAIL and not result.ok
+
+
+def test_a_sentinel_leak_is_fail(tmp_path):
+    repo = _leaky_repo(tmp_path)
+    result = uc.author_check(repo, FakeAuthorSandbox(_line()), _source(repo))
+    assert result.status is AuthorStatus.FAIL
+
+
+def test_an_unreadable_contract_is_fail(tmp_path):
+    files = {k: v for k, v in TOY_FILES.items() if not k.endswith("contract/criteria.yaml")}
+    repo = GitRepository.discover(make_repo(tmp_path / "toy", files))
+    result = uc.author_check(repo, FakeAuthorSandbox(_line()), _source(repo), contain_failures=True)
+    assert result.status is AuthorStatus.FAIL and not result.ok
+
+
+@pytest.mark.parametrize(
+    "sandbox",
+    [
+        FakeAuthorSandbox("garbage"),
+        FakeAuthorSandbox(_line(), timed_out=True),
+        FakeAuthorSandbox("CHEESELESS-AUTHOR {not json"),
+    ],
+    ids=["no-result-line", "timeout", "unparseable"],
+)
+def test_no_usable_driver_result_is_unavailable_not_fail(world, sandbox):
+    repo, _, _ = world
+    result = uc.author_check(repo, sandbox, _source(repo))
+    assert result.status is AuthorStatus.UNAVAILABLE and not result.ok
+
+
+class _Exploding:
+    def author_run(self, *args, **kwargs):
+        raise OSError("bwrap could not start")
+
+
+def test_a_runner_launch_failure_is_unavailable_when_contained(world):
+    repo, _, _ = world
+    result = uc.author_check(repo, _Exploding(), _source(repo), contain_failures=True)
+    assert result.status is AuthorStatus.UNAVAILABLE and not result.ok
+
+
+def test_a_runner_launch_failure_still_propagates_locally_by_default(world):
+    repo, _, _ = world
+    with pytest.raises(OSError):
+        uc.author_check(repo, _Exploding(), _source(repo))
+
+
+def test_a_host_side_leak_outranks_a_dead_runner(tmp_path):
+    repo = _leaky_repo(tmp_path)
+    for sandbox in (FakeAuthorSandbox("garbage"), FakeAuthorSandbox(_line(), timed_out=True)):
+        result = uc.author_check(repo, sandbox, _source(repo))
+        assert result.status is AuthorStatus.FAIL
+    contained = uc.author_check(repo, _Exploding(), _source(repo), contain_failures=True)
+    assert contained.status is AuthorStatus.FAIL
+
+
+def test_a_result_cannot_be_both_ok_and_unavailable():
+    with pytest.raises(ValueError):
+        uc.AuthorCheckResult(True, (), 1, unavailable=True)
 
 
 def _record(repo, store):

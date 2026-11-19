@@ -1,8 +1,9 @@
 """Author-side use cases (ADR 0009, stages d and f).
 
 ``author_check`` and ``author_crosscheck`` run the author's unapproved acceptance tree in the
-author-runner sandbox (no trusted store, no repo write, reference read-only). Their output is
-advisory: approval re-runs the baseline itself and only trusts host-side records.
+author-runner sandbox (no trusted store, no repo write, reference read-only). Locally their
+output is advice: approval re-runs the baseline itself and only trusts host-side records. In CI
+``author_check`` carries a typed ``AuthorStatus`` that can block a spec PR (ADR 0018).
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from cheeseless.domain import ids
 from cheeseless.domain.authoring import (
     AuthoringError,
     AuthoringState,
+    AuthorStatus,
     CrosscheckRecord,
     Proposal,
     StrengthReview,
@@ -75,9 +77,23 @@ DEV_ACTOR = "cheeseless-dev"
 
 @dataclass(frozen=True, slots=True)
 class AuthorCheckResult:
+    """The author check outcome. ``unavailable`` marks "could not tell": the runner gave no
+    usable result and nothing host-side was wrong. It is never ``ok``."""
+
     ok: bool
     problems: tuple[str, ...]
     tests: int
+    unavailable: bool = False
+
+    def __post_init__(self) -> None:
+        if self.ok and self.unavailable:
+            raise ValueError("an author check cannot be both ok and unavailable")
+
+    @property
+    def status(self) -> AuthorStatus:
+        if self.ok:
+            return AuthorStatus.PASS
+        return AuthorStatus.UNAVAILABLE if self.unavailable else AuthorStatus.FAIL
 
 
 def spec_of(contract: Contract) -> str:
@@ -156,19 +172,43 @@ def author_check(
     source: str,
     *,
     store: AuthoringStore | None = None,
+    contain_failures: bool = False,
 ) -> AuthorCheckResult:
-    """Collect the author's tree and check it against the contract (stage d, advisory)."""
+    """Collect the author's tree and check it against the contract (stage d).
+
+    The result carries a typed status (ADR 0018). Host-side problems (an unreadable contract, a
+    sentinel leak) and problems found in a usable driver result are ``fail``; no usable driver
+    result with nothing host-side wrong is ``unavailable``. A host-side problem outranks a dead
+    runner. A runner that raises propagates, as it always did for local callers, unless
+    ``contain_failures`` asks for it to be reported as ``unavailable`` (the CI path), and a
+    contract the repository cannot even read then counts as an unreadable contract (``fail``)."""
+    unreadable: tuple[type[Exception], ...] = (FreezeError, ValueError, OSError)
+    if contain_failures:
+        # CI: a spec PR that deletes or breaks the contract is a finding about the tree, not
+        # an infrastructure error; local callers keep seeing the repository error as before.
+        unreadable += (RepositoryError,)
     try:
         contract = read_contract(repo, source)
-    except (FreezeError, ValueError, OSError) as exc:
+    except unreadable as exc:
         return AuthorCheckResult(False, (redact_sentinels(f"contract: {exc}"),), 0)
     state = _require_open(store, contract) if store is not None else None
     hidden, public = _hidden_and_public(repo, source)
     problems = list(sentinel_problems(hidden, public))
-    suite = _run_driver(repo, sandbox, source, "collect", None, ())
+    host_side = bool(problems)
+    try:
+        suite = _run_driver(repo, sandbox, source, "collect", None, ())
+    except Exception:  # noqa: BLE001 - contained only when the caller asks, else re-raised
+        if not contain_failures:
+            raise
+        suite = None
+        problems.append("the author runner failed to run")
+    else:
+        if suite is None:
+            problems.append("the author runner returned no usable result")
     if suite is None:
-        problems.append("the author runner returned no usable result")
-        return AuthorCheckResult(False, tuple(redact_sentinels(p) for p in problems), 0)
+        return AuthorCheckResult(
+            False, tuple(redact_sentinels(p) for p in problems), 0, unavailable=not host_side
+        )
     problems += freeze_problems([c.id for c in contract.criteria], suite)
     # The RED-on-baseline and flakiness checks belong to approval; collection is all we run.
     problems = [p for p in problems if "not RED" not in p]

@@ -5,6 +5,11 @@ cover every PR class. This module folds the validated branch-policy payload and 
 result into class-aware check bodies. Conclusions are only ever ``success`` or ``failure``:
 GitHub counts ``neutral`` and ``skipped`` as satisfying a required check, so they are never
 used to mean "not applicable".
+
+The author check (ADR 0018) adds one guard, for spec/ only: a ``fail`` makes the gate fail. The
+value comes from a job a pull request's own test code can influence, so it is only ever believed
+in its exact closed form and can only *add* a failure: it never clears another guard, and
+``unavailable`` is a fixed-text warning, not a block.
 """
 
 from __future__ import annotations
@@ -13,11 +18,33 @@ import json
 from typing import Any
 
 from cheeseless.app.ci_branch import BRANCH_POLICY_CHECK
+from cheeseless.domain.authoring import AuthorStatus, parse_author_status
 
 GATE_CHECK = "cheeseless gate"
 JUDGE_CHECK = "cheeseless judge"
 
 _KEYS = {"name", "head_sha", "status", "conclusion", "output"}
+
+# Fixed texts: nothing a pull request wrote is ever rendered into the gate.
+_AUTHOR_FAIL_TEXT = " Author check: fail, see the evaluate job log."
+_AUTHOR_UNAVAILABLE_TEXT = (
+    " Warning: the author check could not run (no verdict from it); see the evaluate job log."
+)
+_AUTHOR_PASS_TEXT = " Author check: pass."  # noqa: S105 - status text, not a credential
+_AUTHOR_TEXT = {
+    AuthorStatus.FAIL: _AUTHOR_FAIL_TEXT,
+    AuthorStatus.UNAVAILABLE: _AUTHOR_UNAVAILABLE_TEXT,
+    AuthorStatus.PASS: _AUTHOR_PASS_TEXT,
+}
+
+
+def resolve_author(raw: object, evaluate_result: object) -> AuthorStatus:
+    """The author status to act on: ``unavailable`` unless the evaluate job succeeded and its
+    output is exactly one of the three wire values. Everything else (a skipped, cancelled or
+    failed job, an empty, multi-line, oversized or oddly cased value) means "could not tell"."""
+    if evaluate_result != "success":
+        return AuthorStatus.UNAVAILABLE
+    return parse_author_status(raw)
 
 
 def _body(name: str, head_sha: str, ok: bool, title: str, summary: str) -> dict[str, Any]:
@@ -79,11 +106,14 @@ def build_checks(
     *,
     current_base: str = "",
     guards_ok: bool,
+    author: AuthorStatus = AuthorStatus.UNAVAILABLE,
 ) -> list[dict[str, Any]]:
     """The check bodies to publish: gate (required), policy and, for gate/, judge.
 
     ``current_base`` is the default-branch tip now; a gate/ pass counts only if the verdict was
-    judged against it. ``guards_ok`` is False when an upstream job did not end as expected."""
+    judged against it. ``guards_ok`` is False when an upstream job did not end as expected.
+    ``author`` only matters for spec/: ``fail`` adds a failing guard on the gate check, and
+    can never turn a failing gate into a passing one."""
     policy_ok = _policy_ok(policy, head_sha, branch_class)
     policy_check = _body(
         BRANCH_POLICY_CHECK,
@@ -104,10 +134,10 @@ def build_checks(
         summary += "pass" if judge_ok else "not a pass"
         summary += f"; base: {'current' if fresh else 'stale or unknown, re-run the judge'}"
     elif branch_class == "spec":
-        ok = policy_ok
+        ok = policy_ok and author is not AuthorStatus.FAIL
         summary = (
             "Spec PR: path confinement only. This is NOT an implementation verdict; "
-            f"branch policy: {'pass' if policy_ok else 'fail'}."
+            f"branch policy: {'pass' if policy_ok else 'fail'}." + _AUTHOR_TEXT[author]
         )
     else:
         ok = False

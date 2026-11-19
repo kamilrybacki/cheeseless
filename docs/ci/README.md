@@ -98,15 +98,22 @@ posts a check run with the aggregate status and visible-criterion statuses only.
     (`cheeseless ci-branch --check-payload --no-author-check`) by tree comparison only. It
     fetches PR objects but executes none of their content. Its payload reaches `post` as a
     job output, which a sandboxed job cannot write.
-  - `evaluate` runs for every validated PR, unprivileged and **advisory**: it runs the
-    sandboxed author check, which executes PR acceptance content. Nothing it produces is
-    consumed by `post`, and its result is only shown in the `post` log, never a guard.
+  - `evaluate` runs for every validated PR and is unprivileged: it runs the sandboxed author
+    check, which executes PR acceptance content, so everything it emits is forgeable. For a
+    `spec/` PR `ci-branch` writes one job output, `author=pass|fail|unavailable` (ADR 0018),
+    from a fixed enum. `post` receives it through an environment variable, never inlined in
+    `run:`. A crash or a missing result is `unavailable`, never `fail`.
   - `post` is the only job that can publish checks. It has the environment and the checks App key
     but checks out only the default branch and never fetches or runs PR code. It runs
     `cheeseless ci-gate`, which validates the policy payload (exact schema, head SHA, class),
     requires `judged_base` to equal the tip `route` captured, and that tip to still be the default-branch tip (otherwise a stale verdict fails),
     requires every upstream result to be as the class needs (`policy` success;
-    `judge` success for `gate/`, skipped otherwise) and builds the check bodies, re-checks that `pulls/N` still has the same head SHA, mints the
+    `judge` success for `gate/`, skipped otherwise) and builds the check bodies. It believes
+    the author status only if `evaluate` succeeded and the value is exactly `pass`, `fail` or
+    `unavailable` (anything else is `unavailable`). Only a `spec/` PR with `fail` adds a failing
+    guard on the required check, and it never clears a policy or judge guard; `unavailable`
+    adds a fixed-text warning. The check body is fixed text pointing at the `evaluate` log and
+    renders nothing PR-controlled. It re-checks that `pulls/N` still has the same head SHA, mints the
     checks token and posts `cheeseless gate` (required) plus the informational
     `cheeseless judge` (`gate/` only) and `cheeseless branch policy` checks.
   An author PR can never earn an implementation PASS. A PR that cannot be verified (not

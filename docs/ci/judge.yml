@@ -1,5 +1,5 @@
 # cheeseless CI: the single trusted workflow template.
-#   route -> policy (no PR code) + judge (gate/ only) + evaluate (advisory) -> post (the only
+#   route -> policy (no PR code) + judge (gate/ only) + evaluate (author check) -> post (the only
 #   job that can publish checks). See docs/ci/README.md.
 # Copy to .github/workflows/judge.yml in the protected repository. It is a `workflow_run`
 # workflow, so GitHub always runs the copy on the DEFAULT branch, never the PR's version.
@@ -223,12 +223,16 @@ jobs:
           # One compact line (control characters are escaped), safe for $GITHUB_OUTPUT.
           echo "payload=$(jq -c . payload.json)" >> "$GITHUB_OUTPUT"
 
-  # Advisory only, unprivileged: no environment, no secrets, no App credential. It runs the
-  # sandboxed author check, which executes PR acceptance content, so NOTHING it produces is
-  # consumed by `post`: it cannot turn the gate green, only inform a human reading the log.
+  # Unprivileged: no environment, no secrets, no App credential. It runs the sandboxed author
+  # check, which executes PR acceptance content, so everything it emits is forgeable. The ONLY
+  # thing `post` takes from it is the `author` output, written by ci-branch from a closed enum
+  # (pass|fail|unavailable, ADR 0018) and re-validated by `ci-gate`. A forged value can only
+  # block the forger's own spec/ PR: it can never turn the gate green or clear another guard.
   evaluate:
     needs: route
     runs-on: ubuntu-latest
+    outputs:
+      author: ${{ steps.author.outputs.author }}
     permissions:
       contents: read
       pull-requests: read
@@ -255,10 +259,12 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/cheeseless/pr-head"
           [ "$(git rev-parse refs/cheeseless/pr-head)" = "$HEAD_SHA" ] || { echo "head moved"; exit 1; }
-      - name: Advisory author check
+      - name: Author check (blocking for spec/ PRs only on a fail)
+        id: author
         run: |
           uv run cheeseless ci-branch --branch "$BRANCH" --head "$HEAD_SHA" \
-            --base "$(git rev-parse "origin/${DEFAULT_BRANCH}")" --json || true
+            --base "$(git rev-parse "origin/${DEFAULT_BRANCH}")" --json \
+            --author-output "$GITHUB_OUTPUT"
 
   # The only job that can publish checks. It has the environment and the checks App key, and
   # checks out only the default branch: it never fetches or executes pull request code. `ci-gate`
@@ -282,6 +288,7 @@ jobs:
       POLICY_RESULT: ${{ needs.policy.result }}
       JUDGE_RESULT: ${{ needs.judge.result }}
       EVALUATE_RESULT: ${{ needs.evaluate.result }}
+      AUTHOR_STATUS: ${{ needs.evaluate.outputs.author }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -305,8 +312,10 @@ jobs:
           # runs only for gate/; elsewhere it must have been skipped.
           guards=true
           [ "$POLICY_RESULT" = success ] || guards=false
-          # evaluate is advisory: shown, never a guard, so an install flake cannot fail the gate.
-          echo "evaluate (advisory): $EVALUATE_RESULT" | tee -a "$GITHUB_STEP_SUMMARY"
+          # evaluate is not a guard: an install flake there cannot fail the gate. Its author
+          # status is passed through the environment (never inlined) and ci-gate believes only
+          # an exact pass|fail|unavailable from a successful job; the summary is fixed text.
+          echo "evaluate: $EVALUATE_RESULT" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$BRANCH_CLASS" = gate ]; then
             [ "$JUDGE_RESULT" = success ] || guards=false
           else
@@ -318,7 +327,8 @@ jobs:
           [ "$(git rev-parse HEAD)" = "$BASE_TIP" ] && CURRENT_BASE="$BASE_TIP"
           uv run cheeseless ci-gate --head "$HEAD_SHA" --branch-class "$BRANCH_CLASS" \
             --policy in/payload.json --judge-code "$JUDGE_CODE" --verdict in/verdict.json \
-            --current-base "$CURRENT_BASE" --guards-ok "$guards" > checks.json
+            --current-base "$CURRENT_BASE" --guards-ok "$guards" \
+            --author="$AUTHOR_STATUS" --evaluate-result "$EVALUATE_RESULT" > checks.json
       - name: Mint the checks App token
         id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0

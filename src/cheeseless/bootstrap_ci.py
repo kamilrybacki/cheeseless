@@ -33,7 +33,7 @@ from cheeseless.adapters.outbound.sandbox.bwrap import BwrapSandbox
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.app.authoring import author_check
 from cheeseless.app.ci_branch import BranchOutcome, check_branch, check_payload
-from cheeseless.app.ci_gate import build_checks
+from cheeseless.app.ci_gate import build_checks, resolve_author
 from cheeseless.app.ci_judge import CiVerdict, FreezeDrift, JudgeReason, judge
 from cheeseless.app.ci_route import resolve_route
 from cheeseless.bootstrap import _ensure_outside, _state_home
@@ -45,6 +45,7 @@ from cheeseless.ci_bundle import (
     decode_bundle_b64,
     encode_bundle,
 )
+from cheeseless.domain.authoring import author_output_line
 from cheeseless.domain.budget import Pool
 from cheeseless.domain.budget_ledger import (
     LedgerIdentity,
@@ -309,6 +310,21 @@ def ci_budget_init(args: argparse.Namespace) -> int:
         del token
 
 
+def _write_author_output(path: str, outcome: BranchOutcome) -> None:
+    """Append ``author=<status>`` to the job-output file, only when the author check ran.
+
+    The line is built from a fixed enum table (``author_output_line``), so no problem text and
+    nothing from the pull request can reach the output. A missing line is read as
+    ``unavailable`` by ``ci-gate``."""
+    if not path or outcome.author is None:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as out:
+            out.write(author_output_line(outcome.author))
+    except OSError as exc:
+        _err(f"ci-branch: could not write the author status: {type(exc).__name__}")
+
+
 def ci_branch(args: argparse.Namespace) -> int:
     """Branch-class and changed-path check; no secrets, no budget, no implementation verdict."""
     for name, value in (("--base", args.base), ("--head", args.head)):
@@ -320,7 +336,9 @@ def ci_branch(args: argparse.Namespace) -> int:
         author = None
         if not args.no_author_check:
             sandbox = BwrapSandbox()
-            author = lambda head: author_check(repo, sandbox, head)  # noqa: E731
+            author = lambda head: author_check(  # noqa: E731
+                repo, sandbox, head, contain_failures=True
+            )
         outcome = check_branch(repo, args.branch, args.base, args.head, author_check=author)
     except Exception as exc:  # noqa: BLE001 - fail closed, never a trace
         if args.check_payload:
@@ -329,6 +347,7 @@ def ci_branch(args: argparse.Namespace) -> int:
             return EXIT_PASS
         _err(f"ci-branch failed: {type(exc).__name__}")
         return EXIT_USAGE
+    _write_author_output(args.author_output, outcome)
     if args.check_payload:
         print(json.dumps(check_payload(outcome, args.head), sort_keys=True))
         return EXIT_PASS
@@ -382,6 +401,7 @@ def ci_gate(args: argparse.Namespace) -> int:
         _read_json(args.verdict),
         current_base=args.current_base,
         guards_ok=args.guards_ok == "true",
+        author=resolve_author(args.author, args.evaluate_result),
     )
     print(json.dumps(checks, sort_keys=True))
     return EXIT_PASS

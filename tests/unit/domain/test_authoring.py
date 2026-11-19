@@ -6,10 +6,13 @@ from cheeseless.domain.authoring import (
     MAX_REFERENCE_RETRIES,
     AuthoringError,
     AuthoringState,
+    AuthorStatus,
     CrosscheckRecord,
     Proposal,
     TaskPhase,
+    author_output_line,
     crosscheck_binds,
+    parse_author_status,
     spec_digest,
 )
 
@@ -155,3 +158,46 @@ def test_approving_is_a_sealed_reservation_between_proposed_and_frozen() -> None
         approving.spec_edited("2" * 64)
     with pytest.raises(AuthoringError):
         approving.proposed()
+
+
+def test_author_status_has_exactly_three_wire_values() -> None:
+    assert {s.value for s in AuthorStatus} == {"pass", "fail", "unavailable"}
+
+
+@pytest.mark.parametrize("status", list(AuthorStatus))
+def test_author_status_round_trips_through_the_parser_and_the_output_line(
+    status: AuthorStatus,
+) -> None:
+    assert parse_author_status(status.value) is status
+    assert author_output_line(status) == f"author={status.value}\n"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "PASS",
+        "Pass",
+        "FAIL",
+        " pass",
+        "pass ",
+        "pass\n",
+        "pass\nfail",
+        "fail\npass",
+        "pass\r\n",
+        "passfail",
+        "pass,fail",
+        "p" * 10_000,
+        "pass" + " " * 10_000,
+        "::set-output name=author::pass",
+        "author=pass",
+        "pass\x00",
+        "\u0440ass",
+        None,
+        0,
+        b"pass",
+        ["pass"],
+    ],
+)
+def test_anything_but_an_exact_status_is_unavailable(raw: object) -> None:
+    assert parse_author_status(raw) is AuthorStatus.UNAVAILABLE

@@ -278,3 +278,118 @@ def test_ci_gate_requires_an_explicit_guards_flag(tmp_path, capsys):
     with pytest.raises(SystemExit) as err:
         main(args)
     assert err.value.code != 0
+
+
+def _spy_author(monkeypatch, result=None, exc=None):
+    """Replace the sandbox and the author check in bootstrap_ci; records the kwargs it saw."""
+    from cheeseless.app.authoring import AuthorCheckResult
+
+    seen: dict[str, object] = {}
+
+    def fake(repo, sandbox, source, **kwargs):
+        seen.update(kwargs)
+        if exc is not None:
+            raise exc
+        return result or AuthorCheckResult(True, (), 1)
+
+    monkeypatch.setattr("cheeseless.bootstrap_ci.BwrapSandbox", lambda: object())
+    monkeypatch.setattr("cheeseless.bootstrap_ci.author_check", fake)
+    return seen
+
+
+def _author_run(repo, monkeypatch, capsys, tmp_path, branch, base, head, *extra):
+    out = tmp_path / "out"
+    monkeypatch.chdir(repo)
+    code = main(
+        ["ci-branch", "--branch", branch, "--base", base, "--head", head, "--check-payload"]
+        + ["--author-output", str(out), *extra]
+    )
+    stdout = capsys.readouterr().out
+    return code, stdout, out.read_text() if out.exists() else ""
+
+
+@pytest.mark.parametrize(
+    ("result", "line"),
+    [
+        (("ok", ()), "author=pass\n"),
+        (("fail", ("C1 has no test",)), "author=fail\n"),
+        (("unavailable", ("no result",)), "author=unavailable\n"),
+    ],
+)
+def test_spec_pr_writes_the_typed_author_status_and_no_problem_text(
+    toy_repo, base, monkeypatch, capsys, tmp_path, result, line
+):
+    from cheeseless.app.authoring import AuthorCheckResult
+
+    kind, problems = result
+    res = {
+        "ok": AuthorCheckResult(True, (), 1),
+        "fail": AuthorCheckResult(False, problems, 1),
+        "unavailable": AuthorCheckResult(False, problems, 0, unavailable=True),
+    }[kind]
+    seen = _spy_author(monkeypatch, res)
+    head = _commit(toy_repo, {"acceptance/a.txt": "x"})
+    code, stdout, written = _author_run(
+        toy_repo, monkeypatch, capsys, tmp_path, "spec/L1", base, head
+    )
+    assert code == 0 and written == line
+    assert seen == {"contain_failures": True}
+    assert "no test" not in stdout and "no result" not in stdout
+
+
+def test_a_crashing_author_check_writes_unavailable(toy_repo, base, monkeypatch, capsys, tmp_path):
+    _spy_author(monkeypatch, exc=RuntimeError("::error::boom"))
+    head = _commit(toy_repo, {"acceptance/a.txt": "x"})
+    _, stdout, written = _author_run(toy_repo, monkeypatch, capsys, tmp_path, "spec/L1", base, head)
+    assert written == "author=unavailable\n" and "boom" not in stdout
+
+
+def test_gate_pr_and_skipped_check_write_no_author_line(
+    toy_repo, base, monkeypatch, capsys, tmp_path
+):
+    _spy_author(monkeypatch)
+    head = _commit(toy_repo, {"src/toy/n.txt": "x"})
+    assert _author_run(toy_repo, monkeypatch, capsys, tmp_path, "gate/t1", base, head)[2] == ""
+    spec = _commit(toy_repo, {"acceptance/a.txt": "x"})
+    skipped = _author_run(
+        toy_repo, monkeypatch, capsys, tmp_path, "spec/L1", base, spec, "--no-author-check"
+    )
+    assert skipped[2] == ""
+
+
+def test_a_refused_spec_pr_writes_no_author_line(toy_repo, base, monkeypatch, capsys, tmp_path):
+    _spy_author(monkeypatch)
+    head = _commit(toy_repo, {"acceptance/a.txt": "x", ".github/w.yml": "x"})
+    assert _author_run(toy_repo, monkeypatch, capsys, tmp_path, "spec/L1", base, head)[2] == ""
+
+
+def _spec_policy(tmp_path):
+    from cheeseless.app.ci_branch import BranchOutcome, check_payload
+
+    (tmp_path / "policy.json").write_text(
+        json.dumps(check_payload(BranchOutcome(True, "ok", "spec"), "a" * 40))
+    )
+
+
+@pytest.mark.parametrize(
+    ("author", "result", "conclusion"),
+    [
+        ("pass", "success", "success"),
+        ("fail", "success", "failure"),
+        ("unavailable", "success", "success"),
+        ("", "success", "success"),
+        ("fail", "failure", "success"),
+        ("-x", "success", "success"),
+    ],
+)
+def test_ci_gate_reads_the_author_status(tmp_path, capsys, author, result, conclusion):
+    _spec_policy(tmp_path)
+    code, checks = _gate(tmp_path, capsys, f"--author={author}", "--evaluate-result", result)
+    assert code == 0 and checks["cheeseless gate"]["conclusion"] == conclusion
+
+
+def test_ci_gate_without_author_arguments_warns_but_does_not_block(tmp_path, capsys):
+    _spec_policy(tmp_path)
+    _, checks = _gate(tmp_path, capsys)
+    gate = checks["cheeseless gate"]
+    assert gate["conclusion"] == "success" and "Warning" in gate["output"]["summary"]

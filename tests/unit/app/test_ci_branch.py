@@ -1,9 +1,10 @@
-"""The CI branch check: classify, confine changed paths, advisory author check (R8)."""
+"""The CI branch check: classify, confine changed paths, typed author status (R8, ADR 0018)."""
 
 from collections.abc import Mapping
 
 from cheeseless.app.authoring import AuthorCheckResult
-from cheeseless.app.ci_branch import BranchOutcome, check_branch
+from cheeseless.app.ci_branch import BranchOutcome, check_branch, check_payload
+from cheeseless.domain.authoring import AuthorStatus
 
 
 class StubRepo:
@@ -53,7 +54,7 @@ def test_spec_pr_outside_acceptance_fails_without_running_the_check():
     assert not out.ok and out.reason == "outside_author_paths"
 
 
-def test_spec_pr_runs_the_advisory_check_and_reports_problems_without_failing():
+def test_spec_pr_runs_the_author_check_and_a_finding_does_not_fail_path_confinement():
     seen = []
 
     def check(head):
@@ -64,6 +65,7 @@ def test_spec_pr_runs_the_advisory_check_and_reports_problems_without_failing():
     assert seen == [HEAD]
     assert out.ok and out.reason == "ok"
     assert out.advisory == ("C1 has no test",)
+    assert out.author is AuthorStatus.FAIL
 
 
 def test_spec_pr_with_clean_check_has_no_advisory():
@@ -72,17 +74,46 @@ def test_spec_pr_with_clean_check_has_no_advisory():
         {"acceptance/a": "100644"},
         lambda h: AuthorCheckResult(True, (), 3),
     )
-    assert out.ok and out.advisory == ()
+    assert out.ok and out.advisory == () and out.author is AuthorStatus.PASS
 
 
-def test_a_crashing_author_check_is_advisory_not_a_verdict():
+def test_a_crashing_author_check_is_unavailable_not_fail():
     def crash(_h):
         raise RuntimeError("sandbox missing")
 
     out = _check("spec/l1", {"acceptance/a": "100644"}, crash)
     assert out.ok and out.advisory == ("author check unavailable: RuntimeError",)
+    assert out.author is AuthorStatus.UNAVAILABLE
+
+
+def test_an_unavailable_result_carries_the_unavailable_status():
+    out = _check(
+        "spec/l1",
+        {"acceptance/a": "100644"},
+        lambda h: AuthorCheckResult(False, ("no result",), 0, unavailable=True),
+    )
+    assert out.author is AuthorStatus.UNAVAILABLE
+
+
+def test_gate_pr_and_skipped_check_have_no_author_status():
+    assert _check("gate/t1", {"src/a.py": "100644"}, lambda h: None).author is None
+    assert _check("spec/l1", {"acceptance/a": "100644"}).author is None
+
+
+def test_check_payload_renders_no_author_text():
+    out = BranchOutcome(True, "ok", "spec", (), ("::error::pwn",), AuthorStatus.FAIL)
+    body = check_payload(out, HEAD)
+    assert "pwn" not in str(body)
+    assert "author" not in str(body).lower().replace("authorship", "")
 
 
 def test_outcome_public_form_has_no_implementation_verdict():
     out = BranchOutcome(True, "ok", "spec", (), ("x",))
-    assert set(out.public()) == {"ok", "reason", "branch_class", "rejected", "advisory"}
+    assert set(out.public()) == {
+        "ok",
+        "reason",
+        "branch_class",
+        "rejected",
+        "advisory",
+        "author",
+    }

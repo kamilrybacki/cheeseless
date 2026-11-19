@@ -7,8 +7,9 @@ from typing import Any
 import pytest
 
 from cheeseless.app.ci_branch import BranchOutcome, check_payload
-from cheeseless.app.ci_gate import GATE_CHECK, JUDGE_CHECK
+from cheeseless.app.ci_gate import GATE_CHECK, JUDGE_CHECK, resolve_author
 from cheeseless.app.ci_gate import build_checks as _build
+from cheeseless.domain.authoring import AuthorStatus
 
 SHA = "a" * 40
 BASE = "b" * 40
@@ -125,3 +126,72 @@ def test_an_unknown_current_base_fails_the_gate_class_closed() -> None:
 def test_a_failed_upstream_guard_fails_the_gate_whatever_the_payloads_say(cls: str) -> None:
     checks = _by_name(build_checks(SHA, cls, _policy(cls), "0", PASS, guards_ok=False))
     assert checks[GATE_CHECK]["conclusion"] == "failure"
+
+
+def _gate(cls: str, author: AuthorStatus, *, policy_ok: bool = True, guards_ok: bool = True):
+    checks = build_checks(
+        SHA, cls, _policy(cls, policy_ok), "0", PASS, author=author, guards_ok=guards_ok
+    )
+    return _by_name(checks)[GATE_CHECK]
+
+
+def test_spec_author_fail_blocks_the_gate_with_fixed_text() -> None:
+    gate = _gate("spec", AuthorStatus.FAIL)
+    assert gate["conclusion"] == "failure"
+    assert "evaluate job log" in gate["output"]["summary"]
+
+
+def test_spec_author_pass_keeps_the_gate_green() -> None:
+    gate = _gate("spec", AuthorStatus.PASS)
+    assert gate["conclusion"] == "success"
+
+
+def test_spec_author_unavailable_is_a_warning_not_a_block() -> None:
+    gate = _gate("spec", AuthorStatus.UNAVAILABLE)
+    assert gate["conclusion"] == "success"
+    assert "Warning" in gate["output"]["summary"]
+
+
+def test_author_status_defaults_to_unavailable_warning() -> None:
+    checks = _by_name(build_checks(SHA, "spec", _policy("spec"), "", None))
+    assert "Warning" in checks[GATE_CHECK]["output"]["summary"]
+
+
+@pytest.mark.parametrize("author", list(AuthorStatus))
+def test_author_never_clears_other_spec_guards(author) -> None:
+    assert _gate("spec", author, policy_ok=False)["conclusion"] == "failure"
+    assert _gate("spec", author, guards_ok=False)["conclusion"] == "failure"
+
+
+@pytest.mark.parametrize("author", list(AuthorStatus))
+@pytest.mark.parametrize("cls", ["gate", "other", "unknown"])
+def test_author_is_ignored_outside_spec(cls, author) -> None:
+    baseline = build_checks(SHA, cls, _policy(cls), "0", PASS, author=AuthorStatus.PASS)
+    assert build_checks(SHA, cls, _policy(cls), "0", PASS, author=author) == baseline
+
+
+@pytest.mark.parametrize("author", list(AuthorStatus))
+def test_author_state_does_not_change_policy_or_judge_checks(author) -> None:
+    base = _by_name(build_checks(SHA, "spec", _policy("spec"), "", None, author=AuthorStatus.PASS))
+    other = _by_name(build_checks(SHA, "spec", _policy("spec"), "", None, author=author))
+    assert base["cheeseless branch policy"] == other["cheeseless branch policy"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "result", "expected"),
+    [
+        ("pass", "success", AuthorStatus.PASS),
+        ("fail", "success", AuthorStatus.FAIL),
+        ("unavailable", "success", AuthorStatus.UNAVAILABLE),
+        ("pass", "failure", AuthorStatus.UNAVAILABLE),
+        ("fail", "skipped", AuthorStatus.UNAVAILABLE),
+        ("pass", "cancelled", AuthorStatus.UNAVAILABLE),
+        ("pass", "", AuthorStatus.UNAVAILABLE),
+        ("", "success", AuthorStatus.UNAVAILABLE),
+        ("PASS", "success", AuthorStatus.UNAVAILABLE),
+        ("pass\nfail", "success", AuthorStatus.UNAVAILABLE),
+        ("x" * 10_000, "success", AuthorStatus.UNAVAILABLE),
+    ],
+)
+def test_resolve_author(raw, result, expected) -> None:
+    assert resolve_author(raw, result) is expected

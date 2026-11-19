@@ -60,16 +60,20 @@ def test_only_a_gate_route_reaches_the_implementation_judge():
         assert "ci-judge" not in _runs(other)
 
 
-def test_evaluate_is_unprivileged_advisory_and_feeds_nothing_to_the_gate():
-    """S2/S18: evaluate runs PR content in bwrap, so nothing it writes can reach the gate."""
+def test_evaluate_is_unprivileged_and_feeds_only_the_closed_author_status():
+    """S2/S18, ADR 0018: evaluate runs PR content in bwrap; only `author` leaves it."""
     evaluate = _jobs()["evaluate"]
     assert "route" in evaluate["needs"] and "if" not in evaluate
-    assert "environment" not in evaluate and "outputs" not in evaluate
+    assert "environment" not in evaluate
+    assert set(evaluate["outputs"]) == {"author"}
     text = _dump("evaluate")
     for forbidden in ("secrets.", "vars.", "create-github-app-token", "check-runs"):
         assert forbidden not in text
     runs = _runs("evaluate")
     assert "cheeseless ci-branch" in runs and "--check-payload" not in runs
+    assert '--author-output "$GITHUB_OUTPUT"' in runs
+    author_step = next(st for st in evaluate["steps"] if st.get("id") == "author")
+    assert "|| true" not in author_step["run"]  # a crash must not be hidden as success
     assert not any("upload-artifact" in s.get("uses", "") for s in evaluate["steps"])
 
 
@@ -286,11 +290,25 @@ def test_two_judging_runs_on_the_same_sha_still_cancel_each_other():
     )
 
 
-def test_the_guards_do_not_depend_on_the_advisory_evaluate_job():
-    """S25: an install flake in the advisory job must not fail the gate; it is only shown."""
+def test_the_guards_do_not_depend_on_the_evaluate_job():
+    """S25: an install flake in evaluate must not fail the gate; ci-gate reads it as unavailable."""
     post = _jobs()["post"]
     runs = _runs("post")
     guard_lines = [ln for ln in runs.splitlines() if "guards=false" in ln]
     assert guard_lines and not any("EVALUATE" in ln for ln in guard_lines)
     assert post["env"]["EVALUATE_RESULT"] == "${{ needs.evaluate.result }}"
     assert "EVALUATE_RESULT" in runs  # still surfaced, informationally
+
+
+def test_the_author_status_reaches_ci_gate_only_through_the_environment():
+    """ADR 0018: a forgeable output is never inlined in `run:`, only passed as an env var."""
+    post = _jobs()["post"]
+    assert post["env"]["AUTHOR_STATUS"] == "${{ needs.evaluate.outputs.author }}"
+    for job in _jobs().values():
+        for step in job["steps"]:
+            assert "needs.evaluate.outputs" not in step.get("run", "")
+    runs = _runs("post")
+    assert '--author="$AUTHOR_STATUS"' in runs
+    assert '--evaluate-result "$EVALUATE_RESULT"' in runs
+    guard_lines = [ln for ln in runs.splitlines() if "guards=false" in ln]
+    assert not any("AUTHOR" in ln for ln in guard_lines)
