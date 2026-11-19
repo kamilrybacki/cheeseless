@@ -4,6 +4,7 @@ import fcntl
 import os
 import socket
 import struct
+import tempfile
 import termios
 import threading
 from pathlib import Path
@@ -222,3 +223,105 @@ def test_sigterm_restores_the_tty_of_a_running_client(term, tmp_path):
             proc.kill()
             proc.wait()
         relay.close()
+
+
+def test_a_view_client_sends_no_frame_at_all_and_leaves_the_tty_alone(term, tmp_path):
+    master, slave = term
+    before = termios.tcgetattr(slave)
+    relay = FakeRelay(tmp_path / "r.sock")
+    trigger_r, trigger_w = os.pipe()
+    result: list[int] = []
+    t = threading.Thread(
+        target=lambda: result.append(
+            run_pane_client(
+                relay.path, stdin_fd=slave, stdout_fd=slave, resize_fd=trigger_r, view_only=True
+            )
+        )
+    )
+    t.start()
+    relay.accept()
+    assert relay.conn is not None
+    relay.conn.settimeout(0.5)
+    os.write(master, b"typed-by-the-user")  # stdin must not be read
+    os.write(trigger_w, b"x")  # a resize must not be reported
+    with pytest.raises(TimeoutError):
+        relay.conn.recv(4096)  # nothing ever arrives from the client
+    assert termios.tcgetattr(slave) == before, "a viewer must not put the tty in raw mode"
+    relay.conn.sendall(encode_data(b"screen"))
+    relay.conn.close()
+    t.join(timeout=5)
+    assert result == [0]
+    relay.srv.close()
+    os.close(trigger_r)
+    os.close(trigger_w)
+
+
+def test_the_parser_accepts_a_role_and_lineage_instead_of_a_socket():
+    args = build_parser().parse_args(["pane-relay", "--role", "coder", "--lineage", "lin-1"])
+    assert args.role == "coder" and args.lineage == "lin-1" and args.socket is None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pane-relay"],  # a target is required
+        ["pane-relay", "--role", "root", "--lineage", "x"],  # closed role set
+        ["pane-relay", "--socket", "/x", "--role", "coder", "--lineage", "x"],  # exclusive
+    ],
+)
+def test_the_parser_refuses_a_bad_pane_selector(argv):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(argv)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pane-relay", "--role", "coder"],  # a role needs a lineage
+        ["pane-relay", "--socket", "/x", "--lineage", "x"],  # a lineage needs a role
+        ["pane-relay", "--role", "coder", "--lineage", "x", "--view"],  # mode is the role's
+        ["pane-relay", "--role", "coder", "--lineage", "../x"],  # lineage is validated
+    ],
+)
+def test_main_refuses_an_inconsistent_pane_selector(argv, tmp_path, capsys):
+    from cheeseless.bootstrap import main
+
+    with pytest.raises(SystemExit) as exc:
+        main([*argv, "--state-dir", str(tmp_path)])
+    assert exc.value.code == 2
+    assert capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("role", "view"),
+    [("test-writer", False), ("reference", True), ("coder", True)],
+)
+def test_main_resolves_the_socket_and_the_mode_from_the_role(role, view, monkeypatch):
+    import cheeseless.adapters.inbound.cli.pane_client as pane_client
+    from cheeseless.bootstrap import main
+
+    state = Path(tempfile.mkdtemp(prefix="cl-"))
+    seen: list[tuple[Path, bool]] = []
+    monkeypatch.setattr(
+        pane_client,
+        "run_pane_client",
+        lambda path, *, view_only=False, **_: seen.append((path, view_only)) or 0,
+    )
+    argv = ["pane-relay", "--role", role, "--lineage", "lin-1", "--state-dir", str(state)]
+    assert main(argv) == 0
+    assert seen == [(state / "cheeseless" / "panes" / "lin-1" / f"{role}.sock", view)]
+
+
+def test_main_passes_view_for_a_plain_socket(monkeypatch):
+    import cheeseless.adapters.inbound.cli.pane_client as pane_client
+    from cheeseless.bootstrap import main
+
+    seen: list[tuple[Path, bool]] = []
+    monkeypatch.setattr(
+        pane_client,
+        "run_pane_client",
+        lambda path, *, view_only=False, **_: seen.append((path, view_only)) or 0,
+    )
+    assert main(["pane-relay", "--socket", "/x/y.sock", "--view"]) == 0
+    assert main(["pane-relay", "--socket", "/x/y.sock"]) == 0
+    assert seen == [(Path("/x/y.sock"), True), (Path("/x/y.sock"), False)]

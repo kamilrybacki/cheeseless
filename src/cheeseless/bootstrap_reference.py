@@ -80,7 +80,16 @@ def _close_pane(panes: TmuxPanes, pane_id: str) -> None:
 
 
 def _open_pane(panes: TmuxPanes, socket_path: Path) -> str:
-    argv = [sys.executable, "-m", "cheeseless", "pane-relay", "--socket", str(socket_path)]
+    # The reference pane is a viewer (ADR 0019): it sends no frame and takes no input.
+    argv = [
+        sys.executable,
+        "-m",
+        "cheeseless",
+        "pane-relay",
+        "--socket",
+        str(socket_path),
+        "--view",
+    ]
     return panes.open(argv)
 
 
@@ -245,6 +254,7 @@ def run_reference_attempt(
             new_reference=NewReferenceAttempt(attempt, lineage_id, digest, mode),
             on_reference_stop=lambda _attempt: stop.set(),
             agent_pty=(rows, cols) if mode is ReferenceMode.TUI else None,
+            pane_lineage=lineage_id if mode is ReferenceMode.TUI else None,
             log_file=log_file,
             agent_model=agent_model,
         ) as info:

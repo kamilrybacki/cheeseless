@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import json
 import os
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import cheeseless
+from cheeseless import pane_layout
 from cheeseless.adapters.inbound.cli.main import (
     Context,
     build_parser,
@@ -823,6 +825,30 @@ def _run_session_command(args: Any, agent: list[str] | None) -> int:
         return 2
 
 
+def _run_pane_relay(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """`pane-relay`: attach to a relay by socket path, or by role and lineage (ADR 0019).
+
+    With ``--role`` the socket is resolved from the state dir and the mode comes from the
+    role, so a coder or reference pane is always a viewer.
+    """
+    from cheeseless.adapters.inbound.cli.pane_client import run_pane_client  # noqa: PLC0415
+
+    if args.role is None:
+        if args.lineage is not None:
+            parser.error("--lineage is only for --role")
+        return run_pane_client(args.socket, view_only=args.view)
+    if args.lineage is None:
+        parser.error("--role needs --lineage")
+    if args.view:
+        parser.error("--view is only for --socket; a role's mode comes from the role")
+    role = pane_layout.PaneRole(args.role)
+    try:
+        path = pane_layout.socket_path(_state_home(args.state_dir), args.lineage, role)
+    except ValueError as exc:  # PaneLayoutError, or a lineage id that is not one
+        parser.error(str(exc))
+    return run_pane_client(path, view_only=pane_layout.mode_of(role) is pane_layout.PaneMode.VIEW)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     head, agent = split_agent_argv(sys.argv[1:] if argv is None else argv)
@@ -836,9 +862,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
     if args.command == "pane-relay":
-        from cheeseless.adapters.inbound.cli.pane_client import run_pane_client  # noqa: PLC0415
-
-        return run_pane_client(args.socket)
+        return _run_pane_relay(parser, args)
     if args.command == "dev-reference":
         from cheeseless.bootstrap_reference import run_reference_command  # noqa: PLC0415
 
@@ -992,6 +1016,47 @@ def _session_argv(
     )
 
 
+_PANE_ROLES = {
+    SessionRole.AUTHOR: pane_layout.PaneRole.TEST_WRITER,
+    SessionRole.IMPLEMENTER: pane_layout.PaneRole.CODER,
+    SessionRole.REFERENCE: pane_layout.PaneRole.REFERENCE,
+}
+
+
+def _pane_role(role: SessionRole) -> pane_layout.PaneRole:
+    return _PANE_ROLES[role]
+
+
+def _check_pane_session(
+    role: SessionRole, dev_lineage: str | None, pane_lineage: str | None, agent_stdio: bool
+) -> None:
+    """Refuse a pty for any session that is not a role pane of a ``cheeseless dev`` run."""
+    if role not in (SessionRole.AUTHOR, SessionRole.IMPLEMENTER):
+        raise SessionOptionError("a pty is only for a dev author, an implementer or a reference")
+    if dev_lineage is None:
+        raise SessionOptionError("a role pane needs an open dev session for its lineage")
+    if agent_stdio:
+        raise SessionOptionError("a pty and stdio are exclusive")
+    if pane_lineage is None:
+        raise SessionOptionError("a role pane needs its lineage")
+    if ids.lineage_id(pane_lineage) != dev_lineage:
+        raise SessionOptionError("the pane lineage must be the dev session's lineage")
+
+
+def _pane_dev_lineage(
+    store: object, role: SessionRole, dev_lineage: str | None, pane_lineage: str | None
+) -> str | None:
+    """The dev lineage a pane session belongs to.
+
+    An author carries it. An implementer is started fresh and never inherits one, so it is
+    the lineage of the open dev session that ``pane_lineage`` names, if any.
+    """
+    if dev_lineage is not None or role is not SessionRole.IMPLEMENTER or pane_lineage is None:
+        return dev_lineage
+    lineage = ids.lineage_id(pane_lineage)
+    return lineage if cast(DevSessionStore, store).dev_state(lineage) is not None else None
+
+
 @contextmanager
 def host_session(
     *,
@@ -1018,6 +1083,7 @@ def host_session(
     new_reference: NewReferenceAttempt | None = None,
     on_reference_stop: Callable[[str], None] | None = None,
     agent_pty: tuple[int, int] | None = None,
+    pane_lineage: str | None = None,
     log_file: Path | None = None,
     agent_model: str = "",
 ) -> Iterator[dict[str, Any]]:
@@ -1047,6 +1113,12 @@ def host_session(
     ``log_file`` instead; the relay and the ``reference_done`` tool do not exist for it.
     ``on_reference_stop`` is the host seam the verifier calls once after ``running`` became
     ``stopping``.
+
+    ``agent_pty`` also serves the role panes of ADR 0019: a dev author (the test-writer,
+    interactive) and an implementer (the coder, view-only). ``pane_lineage`` names the
+    lineage, so the relay is bound at the deterministic path ``pane_layout.socket_path``
+    gives and a pane client finds it from the state dir alone. A reference relay is always
+    view-only; it keeps a private temporary socket unless ``pane_lineage`` is given.
     """
     bound = parse_role(role) if isinstance(role, str) else role
     ctx = build_context(state_dir, cwd)
@@ -1072,8 +1144,19 @@ def host_session(
             raise SessionOptionError("a TUI attempt writes no host log file")
         if agent_stdio:
             raise SessionOptionError("a reference attempt cannot use stdio")
-    elif agent_pty is not None or log_file is not None:
-        raise SessionOptionError("a pty or log file is only for a reference attempt")
+        if pane_lineage is not None and pane_lineage != new_reference.lineage_id:
+            raise SessionOptionError("the pane lineage must be the attempt's lineage")
+    elif log_file is not None:
+        raise SessionOptionError("a log file is only for a reference attempt")
+    elif agent_pty is not None:
+        _check_pane_session(
+            bound,
+            _pane_dev_lineage(ctx.store, bound, dev_lineage, pane_lineage),
+            pane_lineage,
+            agent_stdio,
+        )
+    elif pane_lineage is not None:
+        raise SessionOptionError("a pane lineage needs a pty")
     reference_tui = new_reference is not None and new_reference.mode is ReferenceMode.TUI
     dev = dev_lineage is not None or reference_tui
     if task_id is None:
@@ -1353,7 +1436,7 @@ def host_session(
         else:
             command = _bridge_command(python, ready_path, egress_ready, agent_args)
         launch_command = command
-        if new_reference is not None and new_reference.mode is ReferenceMode.TUI:
+        if agent_pty is not None:
             # --new-session leaves the child with no controlling tty, so a resize on the
             # master would not reach it (D14-3b-2). The trusted wrapper restores that.
             launch_command = pty_launch.with_controlling_tty(python, command)
@@ -1431,7 +1514,17 @@ def host_session(
             _wait_for_bridge(egress_ready, proc)
             ready_path.write_text("ready\n", encoding="ascii")
         if pty_master is not None:
-            relay = PaneRelay(pty_master, on_attach=on_attach)
+            relay = PaneRelay(
+                pty_master,
+                on_attach=on_attach,
+                view_only=pane_layout.mode_of(_pane_role(bound)) is pane_layout.PaneMode.VIEW,
+                state_root=_state_home(state_dir),
+                fixed_socket=None
+                if pane_lineage is None
+                else pane_layout.socket_path(
+                    _state_home(state_dir), pane_lineage, _pane_role(bound)
+                ),
+            )
             relay.start()
             pty_master = None  # the relay owns the master now
 
