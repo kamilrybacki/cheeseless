@@ -774,6 +774,20 @@ def serve_mcp(
     return 0
 
 
+PRE_FREEZE_TASK = "0" * 64
+"""Internal stand-in task id for an author or reference session before any freeze."""
+
+
+def _absolute_projection(path: Path | None) -> Path | None:
+    """Anchor a relative ``--projection`` at the cwd (S48).
+
+    Lexical only: symlinks are not resolved, so the host's own refusal of a symlinked
+    projection path still sees the link the operator named."""
+    if path is None or path.is_absolute():
+        return path
+    return Path.cwd() / path
+
+
 def _run_session_command(args: Any, agent: list[str] | None) -> int:
     """Map ``session`` options to a host session; usage and validation errors exit 2."""
     try:
@@ -795,7 +809,7 @@ def _run_session_command(args: Any, agent: list[str] | None) -> int:
             home_seed=seeds,
             extra_env=env,
             evidence_dir=args.evidence_dir,
-            projection_dir=args.projection,
+            projection_dir=_absolute_projection(args.projection),
             role=args.role,
             agent_model=agent_model,
         )
@@ -1060,6 +1074,10 @@ def host_session(
     dev = dev_lineage is not None or reference_tui
     if task_id is None:
         task_id = ctx.store.active_task_id()
+    if task_id is None and bound in (SessionRole.AUTHOR, SessionRole.REFERENCE):
+        # Pre-freeze roles work on HEAD and have no task yet (S49); the implementer and the
+        # reviewer still need a real one and fail closed below.
+        task_id = PRE_FREEZE_TASK
     if task_id is None:
         raise ValueError("no active task")
     if bound is SessionRole.IMPLEMENTER:

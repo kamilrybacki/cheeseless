@@ -228,6 +228,29 @@ def test_post_binds_the_verdict_to_the_current_default_branch_tip():
     assert "judged_base" in judge_runs
 
 
+def test_route_captures_the_default_branch_tip_once_and_judge_uses_it():
+    """S26: the judge is told the tip route captured; it never reads the tip itself."""
+    route = _jobs()["route"]
+    assert "base_tip" in route["outputs"]
+    assert "git rev-parse HEAD" in _runs("route")
+    assert "base_tip=" in _runs("route")
+    judge = _jobs()["judge"]
+    assert judge["env"]["BASE_TIP"] == "${{ needs.route.outputs.base_tip }}"
+    judge_runs = _runs("judge")
+    assert 'ci-judge --base "$BASE_TIP"' in judge_runs
+    assert 'rev-parse "origin/' not in judge_runs
+    assert '--arg b "$BASE_TIP"' in judge_runs
+
+
+def test_post_compares_route_value_and_fails_closed_when_the_tip_moved():
+    post = _jobs()["post"]
+    assert post["env"]["BASE_TIP"] == "${{ needs.route.outputs.base_tip }}"
+    runs = _runs("post")
+    assert 'CURRENT_BASE=""' in runs
+    assert '[ "$(git rev-parse HEAD)" = "$BASE_TIP" ] && CURRENT_BASE="$BASE_TIP"' in runs
+    assert "CURRENT_BASE=$(git rev-parse HEAD)" not in runs
+
+
 def test_post_rechecks_head_and_base_just_before_publishing():
     """A run started before a retarget must not publish once the PR targets another base."""
     runs = _runs("post")

@@ -58,6 +58,9 @@ jobs:
     outputs:
       number: ${{ steps.route.outputs.number }}
       base_sha: ${{ steps.route.outputs.base_sha }}
+      # The default-branch tip captured once here (S26); judge uses it as --base and post
+      # compares the verdict with it.
+      base_tip: ${{ steps.route.outputs.base_tip }}
       run_judge: ${{ steps.route.outputs.run_judge }}
       branch_class: ${{ steps.route.outputs.branch_class }}
       # Attacker-controlled: only ever consumed through an env var, never a `run:` body.
@@ -82,6 +85,7 @@ jobs:
             < prs.json > route.json
           jq -r '"number=\(.number)", "base_sha=\(.base_sha)", "run_judge=\(.run_judge)", "branch_class=\(.branch_class)", "branch=\(.branch)"' \
             route.json >> "$GITHUB_OUTPUT"
+          echo "base_tip=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   judge:
     needs: route
@@ -98,6 +102,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ needs.route.outputs.number }}
+      BASE_TIP: ${{ needs.route.outputs.base_tip }}
     outputs:
       code: ${{ steps.judge.outputs.code }}
     steps:
@@ -149,12 +154,11 @@ jobs:
           CHEESELESS_BUDGET_TOKEN: ${{ steps.budget.outputs.token }}
         run: |
           set +e
-          judged_base=$(git rev-parse "origin/${DEFAULT_BRANCH}")
-          uv run cheeseless ci-judge --base "$judged_base" --head "$HEAD_SHA" --json > verdict.json
+          uv run cheeseless ci-judge --base "$BASE_TIP" --head "$HEAD_SHA" --json > verdict.json
           code=$?
-          # Record the default-branch tip this verdict was judged against; post compares it with
-          # the tip at publish time so a stale pass cannot survive a moved base.
-          jq --arg b "$judged_base" '. + {judged_base: $b}' verdict.json > verdict.tmp \
+          # Record the default-branch tip route captured; post compares it with route's value,
+          # and only if the live tip still equals it, so a stale pass cannot survive a moved base.
+          jq --arg b "$BASE_TIP" '. + {judged_base: $b}' verdict.json > verdict.tmp \
             && mv verdict.tmp verdict.json
           echo "code=$code" >> "$GITHUB_OUTPUT"
           exit 0
@@ -271,6 +275,7 @@ jobs:
       pull-requests: read
     env:
       PR_NUMBER: ${{ needs.route.outputs.number }}
+      BASE_TIP: ${{ needs.route.outputs.base_tip }}
       BRANCH_CLASS: ${{ needs.route.outputs.branch_class }}
       JUDGE_CODE: ${{ needs.judge.outputs.code }}
       POLICY_PAYLOAD: ${{ needs.policy.outputs.payload }}
@@ -307,7 +312,10 @@ jobs:
           else
             [ "$JUDGE_RESULT" = skipped ] || guards=false
           fi
-          CURRENT_BASE=$(git rev-parse HEAD)
+          # Compare against the tip route captured. If the live tip has moved since, pass an
+          # empty base: ci-gate treats that as unknown and fails the gate (fail closed).
+          CURRENT_BASE=""
+          [ "$(git rev-parse HEAD)" = "$BASE_TIP" ] && CURRENT_BASE="$BASE_TIP"
           uv run cheeseless ci-gate --head "$HEAD_SHA" --branch-class "$BRANCH_CLASS" \
             --policy in/payload.json --judge-code "$JUDGE_CODE" --verdict in/verdict.json \
             --current-base "$CURRENT_BASE" --guards-ok "$guards" > checks.json

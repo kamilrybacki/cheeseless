@@ -45,7 +45,7 @@ def test_an_unknown_role_is_a_usage_error(tmp_path, capsys):
     assert exc.value.code == 2
 
 
-def _launch(toy_repo: Path, tmp_path: Path, role: str, task: str = "a" * 64) -> FileStore:
+def _launch(toy_repo: Path, tmp_path: Path, role: str, task: str | None = "a" * 64) -> FileStore:
     repo = GitRepository.discover(toy_repo)
     store = FileStore(store_root(repo.common_dir(), tmp_path / "state"))
     code = bootstrap.launch_host_session(
@@ -73,3 +73,14 @@ def test_a_pre_freeze_role_session_launches_and_clears_its_record(toy_repo, tmp_
 def test_an_implementer_session_still_needs_a_frozen_task(toy_repo, tmp_path):
     with pytest.raises(Exception):  # noqa: B017 - the exact refusal is the existing one
         _launch(toy_repo, tmp_path, "implementer")
+
+
+@pytest.mark.parametrize("role", ["author", "reference"])
+def test_a_pre_freeze_role_session_needs_no_task_id(toy_repo, tmp_path, role):
+    """S49: no placeholder task is needed before a freeze."""
+    _launch(toy_repo, tmp_path, role, task=None)
+
+
+def test_an_implementer_session_without_a_task_fails_closed(toy_repo, tmp_path):
+    with pytest.raises(ValueError, match="no active task"):
+        _launch(toy_repo, tmp_path, "implementer", task=None)
