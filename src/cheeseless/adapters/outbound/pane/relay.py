@@ -9,6 +9,12 @@ With no client attached the relay still reads the master and discards the bytes,
 child never blocks on a full pty buffer. Scrollback is not captured: a client sees output
 from the moment it attaches. A client disconnect stops nothing; the relay ends when the
 child side closes the pty or when the host calls :meth:`PaneRelay.close`.
+
+A relay can be *view-only* (ADR 0019). It then reads no client frame into the pty, neither
+``Data`` nor ``Resize``, on any connection: the first byte a client sends closes that
+connection and nothing else. The host alone sets the pty size, and the session keeps running.
+That is the whole mode, so it holds across reconnects by construction: the flag belongs to
+the relay, not to a connection.
 """
 
 import contextlib
@@ -19,6 +25,7 @@ import os
 import selectors
 import shutil
 import socket
+import stat
 import struct
 import tempfile
 import termios
@@ -56,6 +63,40 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
+class PaneSocketError(RuntimeError):
+    """A fixed relay socket path cannot be used safely."""
+
+
+def prepare_fixed_socket(path: Path) -> None:
+    """Make ``path`` bindable: a private parent dir, no live peer, no stale socket.
+
+    The parent is created 0700 if missing and must be owned by this uid and not group or
+    world accessible. A live relay on the path is refused; a dead socket file is removed;
+    anything that is not a socket (a symlink included) is refused rather than replaced.
+    """
+    parent = path.parent
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = parent.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise PaneSocketError("the pane socket directory must be a private directory of this user")
+    try:
+        existing = path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(existing.st_mode):
+        raise PaneSocketError("the pane socket path is occupied by something that is not a socket")
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(1.0)
+    try:
+        probe.connect(str(path))
+    except OSError:
+        path.unlink()  # nothing is listening: a stale socket from a dead session
+    else:
+        raise PaneSocketError("a pane relay is already live on this socket path")
+    finally:
+        probe.close()
+
+
 class PaneRelay:
     """Serve one pty master to one local client over a private unix socket."""
 
@@ -67,9 +108,13 @@ class PaneRelay:
         host_uid: int | None = None,
         peer_uid_of: Callable[[socket.socket], int] = peer_uid,
         on_attach: Callable[[], None] | None = None,
+        view_only: bool = False,
+        fixed_socket: Path | None = None,
     ) -> None:
         self._master = master_fd
         self._base_dir = base_dir
+        self._view_only = view_only
+        self._fixed_socket = fixed_socket
         self._host_uid = os.getuid() if host_uid is None else host_uid
         self._peer_uid_of = peer_uid_of
         self._on_attach = on_attach
@@ -87,9 +132,15 @@ class PaneRelay:
 
     @property
     def socket_path(self) -> Path:
+        if self._fixed_socket is not None:
+            return self._fixed_socket
         if self._dir is None:
             raise RuntimeError("relay not started")
         return self._dir / "relay.sock"
+
+    @property
+    def view_only(self) -> bool:
+        return self._view_only
 
     @property
     def running(self) -> bool:
@@ -100,9 +151,15 @@ class PaneRelay:
         """True once an admitted client has connected (evidence only, not a guarantee)."""
         return self._attached
 
-    def start(self) -> Path:
+    def _prepare_socket_path(self) -> None:
+        if self._fixed_socket is not None:
+            prepare_fixed_socket(self._fixed_socket)
+            return
         self._dir = Path(tempfile.mkdtemp(prefix="cheeseless-pane-", dir=self._base_dir))
         os.chmod(self._dir, 0o700)
+
+    def start(self) -> Path:
+        self._prepare_socket_path()
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(self.socket_path))
         os.chmod(self.socket_path, 0o600)
@@ -206,6 +263,12 @@ class PaneRelay:
             if not chunk:
                 self._drop_client()
                 return
+            if self._view_only:
+                # ADR 0019: not decoded, not written, not applied. Any client byte ends
+                # this connection; the pty and the session never see it.
+                _LOG.warning("pane relay dropped a client that sent input to a view-only pane")
+                self._drop_client()
+                return
             frames = self._decoder.feed(chunk)
         except FrameError:
             _LOG.warning("pane relay dropped a client that sent a malformed frame")
@@ -251,5 +314,8 @@ class PaneRelay:
         for fd in (self._master, self._wake_r, self._wake_w):
             with contextlib.suppress(OSError):
                 os.close(fd)
-        if self._dir is not None:
+        if self._fixed_socket is not None:
+            with contextlib.suppress(OSError):
+                self._fixed_socket.unlink()
+        elif self._dir is not None:
             shutil.rmtree(self._dir, ignore_errors=True)

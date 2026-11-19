@@ -14,7 +14,6 @@ from pathlib import Path
 from cheeseless.adapters.outbound.git.repository import GitRepository
 from cheeseless.adapters.outbound.store.file_store import FileStore, store_root
 from cheeseless.bootstrap import host_session
-from cheeseless.domain.pane_frames import encode_resize
 from cheeseless.domain.reference_attempt import (
     NewReferenceAttempt,
     ReferenceMode,
@@ -67,7 +66,7 @@ def test_the_host_relay_carries_the_sandbox_pty_to_one_client(tmp_path):
         client.settimeout(5)
         try:
             client.connect(str(relay.socket_path))
-            client.sendall(encode_resize(24, 80))
+            # ADR 0019: a reference pane is view-only, so the viewer sends no frame at all.
             got, deadline = b"", time.monotonic() + 10
             while CANARY.encode() not in got and time.monotonic() < deadline:
                 with contextlib.suppress(TimeoutError):

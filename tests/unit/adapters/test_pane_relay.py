@@ -2,9 +2,11 @@
 
 import fcntl
 import os
+import shutil
 import socket
 import stat
 import struct
+import tempfile
 import termios
 import time
 from collections.abc import Callable, Iterator
@@ -12,7 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from cheeseless.adapters.outbound.pane.relay import PaneRelay, peer_uid
+from cheeseless.adapters.outbound.pane.relay import (
+    PaneRelay,
+    PaneSocketError,
+    peer_uid,
+    prepare_fixed_socket,
+)
 from cheeseless.domain.pane_frames import (
     Data,
     FrameDecoder,
@@ -180,3 +187,104 @@ def test_close_removes_the_socket_dir_and_closes_the_master(tmp_path):
         os.fstat(master)
     os.close(slave)
     r.close()  # idempotent
+
+
+# --- fixed socket path (ADR 0019 role panes) ---------------------------------------------
+
+
+@pytest.fixture
+def short_dir():
+    # AF_UNIX paths are limited to ~107 bytes; pytest's tmp_path can exceed that.
+    path = Path(tempfile.mkdtemp(prefix="cl-"))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _bind_dead_socket(path: Path) -> None:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(str(path))
+    sock.close()  # the file stays, nothing listens
+
+
+def test_a_fixed_socket_is_created_private_and_removed_on_close_only_as_a_file(short_dir):
+    target = short_dir / "panes" / "lin" / "coder.sock"
+    master, slave = os.openpty()
+    relay = PaneRelay(master, fixed_socket=target, view_only=True)
+    relay.start()
+    try:
+        assert relay.socket_path == target
+        assert relay.view_only is True
+        assert target.parent.stat().st_mode & 0o777 == 0o700
+        assert stat.S_ISSOCK(target.lstat().st_mode)
+    finally:
+        relay.close()
+        os.close(slave)
+    assert not target.exists()
+    assert target.parent.is_dir(), "close removes the socket file, never its directory"
+
+
+def test_a_stale_socket_file_is_replaced(short_dir):
+    target = short_dir / "p" / "reference.sock"
+    target.parent.mkdir(mode=0o700)
+    _bind_dead_socket(target)
+    prepare_fixed_socket(target)
+    assert not target.exists()
+
+
+def test_a_live_relay_on_the_path_is_refused(short_dir):
+    target = short_dir / "p" / "coder.sock"
+    master, slave = os.openpty()
+    first = PaneRelay(master, fixed_socket=target)
+    first.start()
+    master2, slave2 = os.openpty()
+    try:
+        with pytest.raises(PaneSocketError, match="already live"):
+            PaneRelay(master2, fixed_socket=target).start()
+        assert target.exists(), "the live relay's socket must survive the refusal"
+    finally:
+        first.close()
+        os.close(slave)
+        os.close(slave2)
+        os.close(master2)
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink"])
+def test_something_that_is_not_a_socket_is_refused_not_replaced(short_dir, kind):
+    parent = short_dir / "p"
+    parent.mkdir(mode=0o700)
+    target = parent / "coder.sock"
+    victim = short_dir / "victim"
+    victim.write_text("keep")
+    if kind == "file":
+        target.write_text("x")
+    else:
+        target.symlink_to(victim)
+    with pytest.raises(PaneSocketError, match="not a socket"):
+        prepare_fixed_socket(target)
+    assert victim.read_text() == "keep"
+    assert target.is_symlink() or target.is_file()
+
+
+def test_a_shared_directory_is_refused(short_dir):
+    parent = short_dir / "p"
+    parent.mkdir()
+    parent.chmod(0o755)
+    with pytest.raises(PaneSocketError, match="private directory"):
+        prepare_fixed_socket(parent / "coder.sock")
+
+
+def test_a_directory_of_another_user_is_refused(short_dir, monkeypatch):
+    parent = short_dir / "p"
+    parent.mkdir(mode=0o700)
+    monkeypatch.setattr(os, "getuid", lambda: os.stat(parent).st_uid + 1)
+    with pytest.raises(PaneSocketError, match="private directory"):
+        prepare_fixed_socket(parent / "coder.sock")
+
+
+def test_a_symlinked_parent_is_refused(short_dir):
+    real = short_dir / "real"
+    real.mkdir(mode=0o700)
+    link = short_dir / "link"
+    link.symlink_to(real)
+    with pytest.raises(PaneSocketError, match="private directory"):
+        prepare_fixed_socket(link / "coder.sock")
