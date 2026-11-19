@@ -1,5 +1,7 @@
 # CI judge setup
 
+Role names follow the [glossary](../glossary.md).
+
 The CI judge runs the FULL suite (visible and holdout) against a pull request head and
 posts a check run with the aggregate status and visible-criterion statuses only.
 `docs/ci/judge.yml` is a template; do not install it in this repository.
@@ -98,8 +100,8 @@ posts a check run with the aggregate status and visible-criterion statuses only.
     (`cheeseless ci-branch --check-payload --no-author-check`) by tree comparison only. It
     fetches PR objects but executes none of their content. Its payload reaches `post` as a
     job output, which a sandboxed job cannot write.
-  - `evaluate` runs for every validated PR and is unprivileged: it runs the sandboxed author
-    check, which executes PR acceptance content, so everything it emits is forgeable. For a
+  - `evaluate` runs for every validated PR and is unprivileged: it runs the sandboxed test-writer
+    check (`author` check), which executes PR acceptance content, so everything it emits is forgeable. For a
     `spec/` PR `ci-branch` writes one job output, `author=pass|fail|unavailable` (ADR 0018),
     from a fixed enum. `post` receives it through an environment variable, never inlined in
     `run:`. A crash or a missing result is `unavailable`, never `fail`.
@@ -109,14 +111,14 @@ posts a check run with the aggregate status and visible-criterion statuses only.
     requires `judged_base` to equal the tip `route` captured, and that tip to still be the default-branch tip (otherwise a stale verdict fails),
     requires every upstream result to be as the class needs (`policy` success;
     `judge` success for `gate/`, skipped otherwise) and builds the check bodies. It believes
-    the author status only if `evaluate` succeeded and the value is exactly `pass`, `fail` or
+    the test-writer check status only if `evaluate` succeeded and the value is exactly `pass`, `fail` or
     `unavailable` (anything else is `unavailable`). Only a `spec/` PR with `fail` adds a failing
     guard on the required check, and it never clears a policy or judge guard; `unavailable`
     adds a fixed-text warning. The check body is fixed text pointing at the `evaluate` log and
     renders nothing PR-controlled. It re-checks that `pulls/N` still has the same head SHA, mints the
     checks token and posts `cheeseless gate` (required) plus the informational
     `cheeseless judge` (`gate/` only) and `cheeseless branch policy` checks.
-  An author PR can never earn an implementation PASS. A PR that cannot be verified (not
+  A test-writer PR (`spec/`) can never earn an implementation PASS. A PR that cannot be verified (not
   exactly one open PR, non-default base, fork head, head moved) publishes nothing, so the
   required check stays missing and the merge stays blocked.
 - Resolves the PR from the head SHA, refuses a non-default base, fetches the head as objects
@@ -125,8 +127,8 @@ posts a check run with the aggregate status and visible-criterion statuses only.
   with the default branch) fails with no run and no charge.
   Protection applies to the net PR tree, not to commit history: a protected change that is
   reverted inside the PR is not flagged. Require squash merges for history-level protection.
-- If the default branch's `acceptance/` differs from the frozen tree, `ci-judge` exits 3
-  (`FREEZE_DRIFT`): re-freeze first.
+- If the default branch's `acceptance/` differs from the locked tree, `ci-judge` exits 3
+  (`FREEZE_DRIFT`): lock the tests again first.
 - Exit codes: 0 PASS, 1 FAIL/BLOCKED, 2 usage or infrastructure error, 3 FREEZE_DRIFT.
   The check is `success` only for exit 0 with status `pass`; anything else is `failure`.
 - Two App tokens, in two different jobs; the App key itself reaches only the mint steps:

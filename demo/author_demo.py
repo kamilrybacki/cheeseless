@@ -1,4 +1,7 @@
-"""Record the author side of cheeseless: reference, authoring, freeze, late edits, disputes.
+"""Record the test-writer side of cheeseless: reference coder, tests, lock, late edits, disputes.
+
+Plain terms (see docs/glossary.md): test writer = ``author`` role, reference coder =
+``reference`` role, coder = ``implementer`` role, "lock the tests" = ``freeze``.
 
 The run drives the real ``cheeseless`` CLI against a scratch repository. The agents are
 scripted stand-ins (``demo/author_agents.py``), not language models, so the recording is
@@ -37,10 +40,10 @@ CHEESELESS = Path(sys.executable).parent / "cheeseless"
 PLACEHOLDER_TASK = "0" * 64
 
 GIT_ENV = {
-    "GIT_AUTHOR_NAME": "Demo Host",
-    "GIT_AUTHOR_EMAIL": "host@example.invalid",
-    "GIT_COMMITTER_NAME": "Demo Host",
-    "GIT_COMMITTER_EMAIL": "host@example.invalid",
+    "GIT_AUTHOR_NAME": "Demo Operator",
+    "GIT_AUTHOR_EMAIL": "operator@example.invalid",
+    "GIT_COMMITTER_NAME": "Demo Operator",
+    "GIT_COMMITTER_EMAIL": "operator@example.invalid",
     "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_CONFIG_GLOBAL": "/dev/null",
 }
@@ -343,8 +346,9 @@ class Demo:
         self.setup()
         ref = self.work / "ref-worktree"
         self.caption(
-            "1. A reference session sees only the contract (spec + criteria), never tests.",
-            "   It writes a reference implementation from the spec.",
+            "1. A reference coder (`reference` in the CLI) sees only the contract "
+            "(spec + criteria),",
+            "   never the tests. It writes code from the spec alone.",
         )
         self.session("reference", "reference", ref)
         self.cli(
@@ -354,13 +358,14 @@ class Demo:
             "--worktree",
             str(ref),
         )
-        self.caption("   What the reference prints for a tie (bb and aa have equal length):")
+        self.caption("   What the reference coder prints for a tie (bb and aa have equal length):")
         self.show_reference(ref)
 
         self.caption(
-            "2. The author writes hidden tests. One of them is deliberate bait:",
-            "   test_ties_alphabetical contradicts the spec's stable tie rule.",
-            "   author_crosscheck runs the tests against the reference and goes red.",
+            "2. The test writer (`author` in the CLI) writes hidden tests from the spec.",
+            "   One is deliberate bait: test_ties_alphabetical contradicts the stable tie rule.",
+            "   The cross-check (author_crosscheck) runs the tests against the reference coder's",
+            "   code and goes red. In CI the same check blocks a spec/ pull request (ADR 0018).",
         )
         bait = self.work / "author-worktree-1"
         out = self.session("author", "author-bait", bait)
@@ -374,20 +379,23 @@ class Demo:
         )
         self.merge_spec()
         pid = self.proposal(out)
-        self.caption("   The host tries to approve anyway; the red crosscheck blocks it.")
+        self.caption(
+            "   The operator tries to lock the tests anyway (`freeze --approve`); "
+            "the red cross-check blocks it."
+        )
         self.cli_tty(
-            f"freeze --approve {self.mask(pid)} --as host",
+            f"freeze --approve {self.mask(pid)} --as operator",
             "freeze",
             "--approve",
             pid,
             "--as",
-            "host",
+            "operator",
             expect=None,
         )
 
         self.caption(
-            "3. The author fixes only the test that contradicted the spec.",
-            "   The crosscheck turns green and the host approves the freeze.",
+            "3. The test writer fixes only the test that contradicted the spec.",
+            "   The cross-check turns green and the operator locks the tests.",
         )
         fixed = self.work / "author-worktree-2"
         out = self.session("author", "author-fix", fixed)
@@ -406,38 +414,42 @@ class Demo:
             "   The demo plays the operator on a pty it owns: it reads the code and types it back.",
         )
         self.cli_tty(
-            f"freeze --approve {self.mask(pid)} --as host",
+            f"freeze --approve {self.mask(pid)} --as operator",
             "freeze",
             "--approve",
             pid,
             "--as",
-            "host",
+            "operator",
         )
 
-        self.caption("4. After the freeze the author can no longer change the suite.")
+        self.caption("4. Once the tests are locked, the test writer can no longer change them.")
         self.session("author", "author-late", self.work / "author-worktree-3")
 
         self.caption(
-            "5. The implementer never sees the hidden tests. It guessed alphabetical ties,",
-            "   fails score, and disputes the criterion. The ack says nothing about tests.",
+            "5. The coder (`implementer` in the CLI) never sees the hidden tests. It guessed",
+            "   alphabetical ties, fails score, and disputes the criterion. The ack says nothing",
+            "   about tests.",
         )
         self.cli("dispute config --enable", "dispute", "config", "--enable")
         self.session("implementer", "implementer", self.work / "impl-worktree")
         listing = self.cli("disputes --show-note --json", "disputes", "--show-note", "--json")
         dispute_id = json.loads(listing)["disputes"][0]["id"]
-        self.caption("   The host reads the note, checks the spec and rejects the dispute.")
+        self.caption(
+            "   The operator reads the note, checks the spec and decides the test stands "
+            "(`--rejected`)."
+        )
         self.cli_tty(
-            f"dispute resolve {self.mask(dispute_id)} --rejected --as host",
+            f"dispute resolve {self.mask(dispute_id)} --rejected --as operator",
             "dispute",
             "resolve",
             dispute_id,
             "--rejected",
             "--as",
-            "host",
+            "operator",
         )
         self.caption(
-            "The crosscheck checks the tests against the spec (via the reference).",
-            "The implementer gate catches gaming. They are two separate controls.",
+            "The cross-check checks the tests against the spec (via the reference coder).",
+            "The coder gate catches gaming. They are two separate controls.",
         )
 
     def proposal(self, session_output: str) -> str:
@@ -452,10 +464,10 @@ def build_player(cast: str) -> str:
     text = "".join(event[2] for event in events).replace("\r\n", "\n")
     return (
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
-        "<title>cheeseless: the author side</title>\n<style>\n"
+        "<title>cheeseless: the test-writer side</title>\n<style>\n"
         "body{background:#111;color:#ddd;font:14px/1.45 ui-monospace,monospace;margin:2rem}\n"
         "pre{white-space:pre-wrap;max-width:110ch}\nh1{font-size:1rem;color:#fff}\n"
-        "</style></head><body>\n<h1>cheeseless: the author side (scripted agents)</h1>\n"
+        "</style></head><body>\n<h1>cheeseless: the test-writer side (scripted agents)</h1>\n"
         f"<pre>{html.escape(text)}</pre>\n</body></html>\n"
     )
 

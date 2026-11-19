@@ -1635,3 +1635,9 @@ Deviations from the ADR text, all fail-closed:
 - `check_payload` (the unprivileged `policy` job's output) no longer renders author notes at all: author text is not part of the policy payload. The only author text in a check body is a fixed string chosen from the enum.
 - A missing `author=` line (no author check ran, refused spec PR, crash before the outcome) reaches `ci-gate` as an empty value, which is `unavailable`.
 - Security tests: `tests/security/test_ci_author_gate.py` covers malformed, injected, oversized and workflow-command values, a non-success evaluate result, `fail` never clearing another guard, and the canary/sentinel check on check bodies.
+
+## Plain role names in prose (docs only)
+
+- Prose now says test writer, reference coder, coder, operator, "lock the tests" and "test was wrong" / "test stands". Code identifiers, CLI commands and flags, MCP tool names, proto fields and accepted ADRs keep the old terms (ADRs are immutable).
+- `docs/glossary.md` maps each plain term to its code term; docs that use the plain terms link to it. The first use of a term in a section shows the code term once, in backticks.
+- The demo actor argument `--as host` became `--as operator` in `demo/author_demo.py`; the author demo recording was regenerated with the new captions. `docs/errors.md` is generated from proto and was left alone.
