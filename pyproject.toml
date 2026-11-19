@@ -153,6 +153,20 @@ forbidden_modules = [
     "tempfile",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Dev-events observer is read-only"
+type = "forbidden"
+source_modules = [
+    "cheeseless.app.dev_observe",
+    "cheeseless.domain.dev_events",
+    "cheeseless.ports.dev_observe",
+]
+forbidden_modules = [
+    "cheeseless.ports.dev_session",
+    "cheeseless.ports.presence",
+    "cheeseless.app.dev_flow",
+]
+
 [[tool.mypy.overrides]]
 module = ["grpc_tools", "grpc_tools.*"]
 ignore_missing_imports = true
