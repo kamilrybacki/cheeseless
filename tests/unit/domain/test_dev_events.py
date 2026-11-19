@@ -396,3 +396,51 @@ def test_schema_refuses_an_out_of_range_holdout_count() -> None:
     line["holdout_failures"] = 4
 
     assert violations(_schema(), line) != []
+
+
+# -- schema bounds -------------------------------------------------------------
+
+
+def _view(**fields: int) -> DevView:
+    base = {"holdout_failures": 0, "open_disputes": 0, "state_version": 0}
+    return DevView(
+        stage=Stage.SPEC,
+        actor=Actor.NONE,
+        awaiting=Awaiting.NONE,
+        reference=ReferenceView.NONE,
+        hint=Hint.NONE,
+        **{**base, **fields},
+    )
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"holdout_failures": 99},
+        {"holdout_failures": -1},
+        {"open_disputes": -1},
+        {"state_version": -1},
+    ],
+)
+def test_a_view_outside_the_schema_bounds_is_rejected(fields: dict[str, int]) -> None:
+    with pytest.raises(ValueError):
+        _view(**fields)
+
+
+def test_derive_rejects_a_state_that_escaped_validation() -> None:
+    state = _state()
+    object.__setattr__(state, "holdout_failures", 99)
+
+    with pytest.raises(ValueError):
+        derive(state, None, 0)
+
+
+def test_derive_rejects_a_negative_dispute_count() -> None:
+    with pytest.raises(ValueError):
+        derive(_state(), None, -1)
+
+
+def test_the_largest_valid_view_still_encodes() -> None:
+    line = encode(event(EventKind.SNAPSHOT, OBSERVED, LINEAGE, _view(holdout_failures=3)))
+
+    assert json.loads(line)["holdout_failures"] == 3

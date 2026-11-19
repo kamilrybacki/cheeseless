@@ -26,7 +26,7 @@ def read_event(
     """One event for ``lineage``, or None when the lineage has no state yet.
 
     A corrupt store yields the fixed error line; its message is never copied into the event.
-    Any other exception is a bug and propagates.
+    A value outside the schema bounds is treated the same way. Any other exception is a bug and propagates.
     """
     try:
         state = port.dev_state(lineage)
@@ -36,7 +36,11 @@ def read_event(
         open_disputes = _open_disputes(port, lineage)
     except StoreError:
         return error_event(observed_at, lineage)
-    view: DevView = derive(state, attempt, open_disputes)
+    try:
+        view: DevView = derive(state, attempt, open_disputes)
+    except ValueError:
+        # A stored value outside the schema bounds is corrupt state, not something to print.
+        return error_event(observed_at, lineage)
     return event(kind, observed_at, lineage, view)
 
 

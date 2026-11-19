@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-from cheeseless.domain.dev_session import DevPhase, DevState
+from cheeseless.domain.dev_session import MAX_HOLDOUT_FAILURES, DevPhase, DevState
 from cheeseless.domain.ids import lineage_id
 from cheeseless.domain.reference_attempt import ReferenceAttempt, ReferenceMode, ReferenceState
 
@@ -91,6 +91,12 @@ class DevView:
     open_disputes: int
     state_version: int
     hint: Hint
+
+    def __post_init__(self) -> None:
+        """Hold the schema bounds, so no out-of-range number can reach the wire."""
+        _bounded("holdout_failures", self.holdout_failures, MAX_HOLDOUT_FAILURES)
+        _bounded("open_disputes", self.open_disputes, None)
+        _bounded("state_version", self.state_version, None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +225,11 @@ def _view_fields(view: DevView) -> dict[str, object]:
         "state_version": view.state_version,
         "hint": view.hint.value,
     }
+
+
+def _bounded(name: str, value: int, maximum: int | None) -> None:
+    if type(value) is not int or value < 0 or (maximum is not None and value > maximum):
+        raise ValueError(f"{name} is outside the v1 schema bounds")
 
 
 def _checked_time(value: str) -> str:

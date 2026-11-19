@@ -191,3 +191,14 @@ def test_unexpected_errors_are_not_swallowed() -> None:
 
     with pytest.raises(RuntimeError):
         read_event(port, LINEAGE, EventKind.SNAPSHOT, OBSERVED)
+
+
+def test_a_state_outside_the_schema_bounds_yields_the_fixed_error_line() -> None:
+    state = _state(phase=DevPhase.SPEC)
+    object.__setattr__(state, "version", -1)
+
+    made = read_event(FakeObservation(state=state), LINEAGE, EventKind.SNAPSHOT, OBSERVED)
+
+    assert made is not None
+    assert made.kind is EventKind.ERROR
+    assert made.view is None
