@@ -4,9 +4,12 @@
 
 # cheeseless
 
-A git-native black-box quality gate for coding agents: frozen acceptance tests the agent
+A git-native black-box quality gate for coding agents: locked acceptance tests the agent
 cannot see, a sandboxed verifier it can only ask "does my tree pass?", a shared run
 budget, egress DLP, and CI as the source of truth.
+
+The docs use plain role names (test writer, reference coder, coder, operator, lock the
+tests); [`docs/glossary.md`](docs/glossary.md) maps each to the term the CLI uses.
 
 **Status:** host-side core, authenticated UDS/MCP, isolated host sessions, the egress
 DLP proxy, the CI judge, the cross-run CI budget counter and the phase 12 local release
@@ -30,8 +33,9 @@ cheeseless session [--task TASK] [--ro PATH] [--home-seed REL=SRC] [--env K=V] \
     [--evidence-dir NEW_DIR] -- AGENT [ARGS...]
 ```
 
-Operator decisions need a person at the terminal (ADR 0017): `freeze --approve ID --as ACTOR`,
-`dispute resolve`, the `author recover` finish step, `promote --approve` on sensitive paths and
+Operator decisions need a person at the terminal (ADR 0017): locking the tests
+(`freeze --approve ID --as ACTOR`), `dispute resolve`, the test writer's recovery finish step
+(`author recover`), `promote --approve` on sensitive paths and
 `freeze --allow-auto` each show a random code on the controlling terminal (`/dev/tty`, never
 stdin) that you must retype. Piped, headless or terminal-less runs are refused. Headless
 operators use the unattended route, `freeze --approve ID --auto` (ADR 0016), which takes no
@@ -57,8 +61,8 @@ A command after `--` or a `--reviewer-model` that contradicts the launcher is re
 
 - The file is refused unless it is a regular file owned by you that group and others cannot
   write, in a directory that is likewise yours; it is never read from inside the repository.
-- Without `--launcher` a session still runs, but no model is recorded, so unattended freeze
-  keeps refusing (`author_unknown_launch`). Attended use is unaffected.
+- Without `--launcher` a session still runs, but no model is recorded, so unattended locking
+  of tests (`freeze --auto`) keeps refusing (`author_unknown_launch`). Attended use is unaffected.
 - Limit: the file is operator-declared. cheeseless records what you configured and cannot
   verify which model the CLI actually talks to.
 
@@ -75,7 +79,7 @@ A preregistered comparison of naive vs cheeseless runs with real coding agents l
   UDS mounted into the sandbox and exposed to clients as loopback `HTTPS_PROXY` through a
   tiny in-sandbox TCP->UDS forwarder; mitmproxy listens on host loopback behind a host
   UDS->TCP bridge.
-- Freeze stores digest-only fingerprints: every k-gram hash of the hidden suite minus
+- Locking the tests (`freeze`) stores digest-only fingerprints: every k-gram hash of the hidden suite minus
   the k-grams of the agent-visible projection (k=24, no winnowing on the protected side),
   plus raw/base64/hex/reversed digests of planted sentinel markers per artifact class.
   Hidden plaintext never enters the trusted-store fingerprint file or the proxy.
@@ -99,10 +103,10 @@ A preregistered comparison of naive vs cheeseless runs with real coding agents l
 Residual limits (ADR 0001/0007 and ledger P8-9): paraphrase/transform leaks below the
 k-gram or marker length, theoretical 64-bit rolling-hash collisions, bytes already
 forwarded before a mid-stream hit, archive caps are hard blocks, and HTTP upgrades/QUIC
-are blocked rather than inspected. Sentinel markers are harvested from the author's
-hidden artifacts, and freeze requires at least two distinct markers per artifact class
+are blocked rather than inspected. Sentinel markers are harvested from the test writer's
+hidden artifacts, and locking the tests requires at least two distinct markers per artifact class
 that has hidden files. A marker that also appears in the agent-visible projection does
-not count and makes freeze refuse.
+not count and makes the lock refuse.
 
 The staged `cheeseless-mcp` shim has the session's verifier socket and task id baked in
 as quoted literals. MCP clients that filter or override `CHEESELESS_SOCKET` and
@@ -114,7 +118,8 @@ Requires Python >=3.12 and `mitmproxy>=12.3.1,<13` (pinned in `pyproject.toml`).
 - Start here: [`planning/handoff.md`](planning/handoff.md)
 - Plan: [`planning/implementation-plan.md`](planning/implementation-plan.md)
 - Decisions: [`planning/ledger.md`](planning/ledger.md), [`docs/adr/`](docs/adr/README.md)
-- Prompt authors: [`docs/agent-prompting.md`](docs/agent-prompting.md)
+- Role names in plain words: [`docs/glossary.md`](docs/glossary.md)
+- Prompt writers: [`docs/agent-prompting.md`](docs/agent-prompting.md)
 - Egress audit: [`docs/egress-audit.md`](docs/egress-audit.md)
 - Defence demo: [`docs/demo/README.md`](docs/demo/README.md)
 - Effectiveness brief: [`docs/effectiveness.md`](docs/effectiveness.md)

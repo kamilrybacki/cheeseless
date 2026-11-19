@@ -1,6 +1,7 @@
 # cheeseless defence demo
 
-A reproducible comparison between a plain repository and a cheeseless host session.
+A reproducible comparison between a plain repository and a cheeseless host session
+(plain role names are explained in the [glossary](../glossary.md)).
 The same scripted adversary runs eight test-gaming tactics against both, plus an honest
 fix as a control. Each tactic is reported as GAMED, BLOCKED or INCONCLUSIVE; only a
 BLOCKED outcome with positive structured evidence counts as blocked.
@@ -60,9 +61,9 @@ was missing; it is excluded from the blocked count and makes the WITH-mode repor
 INVALID (the command exits non-zero). See the "Limits of this evidence" section in
 `report.md`.
 
-## Author side
+## Test-writer side
 
-A second recording shows the test-writer's half of the workflow, driven through the real
+A second recording (the `author` role in the CLI) shows the test writer's half of the workflow, driven through the real
 `cheeseless` CLI against a scratch repository. The agents are scripted stand-ins
 (`demo/author_agents.py`), not language models, so the run is deterministic.
 
@@ -74,28 +75,30 @@ It needs the same bubblewrap and `/usr/bin/python3` as the defence demo.
 
 | File | What it is |
 | --- | --- |
-| `author-side.cast` | asciicast v2 recording of the author-side run. |
+| `author-side.cast` | asciicast v2 recording of the test-writer-side run. |
 | `author-player.html` | Self-contained, static transcript of the same run. |
 
 The story, in five steps:
 
-1. A reference session sees only the contract (`spec.md` and `criteria.yaml`), never a
-   test, and writes a reference implementation from the spec.
-2. The author writes hidden tests. One of them, `test_ties_alphabetical`, is
-   **deliberate bait**: it contradicts the spec's stable tie rule. `author_crosscheck`
-   runs the tests against the reference and goes red on `score`, and the host's
-   `freeze --approve` is refused.
-3. The author fixes only that test; the crosscheck turns green and the freeze is approved.
-4. After the freeze the author can no longer change the suite (`author_refused`).
-5. The implementer never sees the hidden tests, guesses alphabetical ties, fails
-   `score` and files a `contradicts_spec` dispute. The host reads the note, checks the
-   spec and rejects it.
+1. A reference coder (`reference`) sees only the contract (`spec.md` and `criteria.yaml`),
+   never a test, and writes code from the spec.
+2. The test writer (`author`) writes hidden tests. One of them, `test_ties_alphabetical`,
+   is **deliberate bait**: it contradicts the spec's stable tie rule. The cross-check
+   (`author_crosscheck`) runs the tests against the reference coder's code and goes red on
+   `score`, and the operator's attempt to lock the tests (`freeze --approve`) is refused.
+   In CI the same check blocks a `spec/` pull request on a definite fail (ADR 0018).
+3. The test writer fixes only that test; the cross-check turns green and the operator locks
+   the tests.
+4. Once the tests are locked the test writer can no longer change them (`author_refused`).
+5. The coder (`implementer`) never sees the hidden tests, guesses alphabetical ties, fails
+   `score` and files a `contradicts_spec` dispute. The operator reads the note, checks the
+   spec and decides the test stands (`dispute resolve --rejected`).
 
 The faulty test is there on purpose. It shows that cheeseless has two separate controls:
-the crosscheck checks the author's tests against the spec (through the reference), and the
-implementer gate catches an implementer gaming the tests. One does not replace the other.
+the cross-check checks the test writer's tests against the spec (through the reference coder), and the
+coder gate catches a coder gaming the tests. One does not replace the other.
 
-The host's `freeze --approve` and `dispute resolve` are operator decisions, so they need a code
+The operator's `freeze --approve` and `dispute resolve` are decisions only a person may take, so they need a code
 retyped on the terminal (ADR 0017). The demo runs them on a pty it owns, reads the code the
 CLI shows and types it back; the recording shows that prompt. A piped or headless run is
 refused.

@@ -1,7 +1,8 @@
 # Per-criterion-only oracle feedback
 
 The gate deliberately tells a gated agent *whether* each public criterion passed, not
-*why*. This document is for people writing prompts for that agent.
+*why*. This document is for people writing prompts for that agent. Role names follow the
+[glossary](glossary.md).
 
 ## What the agent can see
 
@@ -9,7 +10,7 @@ The gate deliberately tells a gated agent *whether* each public criterion passed
 - Catalogue errors such as `dlp_blocked`, `egress_domain_denied`, `run_budget_exhausted`
   or `infra_error`, with their fixed reason and hint.
 - The public contract tests and criterion descriptions that were visible before the
-  freeze.
+  tests were locked.
 - Its own code, the projection and its build/smoke output.
 
 ## What it never sees
@@ -107,7 +108,7 @@ paid calls (`tests/e2e/test_agent_harness.py`).
 
 ## Operator decisions need a terminal
 
-`freeze --approve ... --as`, `dispute resolve`, the `author recover` finish step,
+locking the tests (`freeze --approve ... --as`), `dispute resolve`, the test writer's recovery finish step (`author recover`),
 `promote --approve` on sensitive paths and `freeze --allow-auto` require a random code retyped
 on the controlling terminal (ADR 0017). They need an interactive terminal; piped or headless
 runs are refused. Do not script them for an agent. Headless operators use the ADR 0016

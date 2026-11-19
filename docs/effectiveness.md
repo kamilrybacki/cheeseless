@@ -17,12 +17,12 @@ proposal and has no results yet.
 
 1. A task and the temptation to make the check green.
 2. Why editable acceptance tests cannot be the sole judge.
-3. Freeze and project: what the agent sees.
+3. Locking the tests and projecting: what the agent sees.
 4. Sandbox, criterion-only feedback and shared budget.
 5. Promotion and independent CI judgment.
 6. Evidence, remaining leaks and what to measure next.
 
-**Claim:** Separating the agent from frozen acceptance tests makes several test-gaming
+**Claim:** Separating the agent from locked acceptance tests makes several test-gaming
 routes harder while retaining a useful feedback loop.
 
 ### 2. Hiding tests does not eliminate information leaks
@@ -73,7 +73,7 @@ relative to the repository root; ledger rows are in `planning/ledger.md`.
 
 | Tactic | Mechanism | Recorded evidence and scope |
 | --- | --- | --- |
-| Edit or replace acceptance tests to make a bad change green | Frozen tests, protected-path promotion filter and CI judge reject protected changes; CI checks freeze drift. | `tests/security/test_freeze_canary.py`, `tests/security/test_ci_judge_canary.py`; P10-2–P10-5. |
+| Edit or replace acceptance tests to make a bad change green | Locked tests, protected-path promotion filter and CI judge reject protected changes; CI checks lock drift (`freeze` drift). | `tests/security/test_freeze_canary.py`, `tests/security/test_ci_judge_canary.py`; P10-2–P10-5. |
 | Read hidden tests and tailor code to their cases | Agent projection excludes hidden material; sandbox separates the candidate and trusted artifacts. | `tests/security/test_projection_canary.py`, `tests/security/test_sandbox_canary.py`, `tests/security/test_session_canary.py`; P11-9 records zero canaries in the toy projection. |
 | Extract test details from failures | Verifier discloses aggregate and per-public-criterion status rather than hidden names, assertions or output. | `docs/agent-prompting.md`, `tests/security/test_disclosure_canary.py`, `tests/security/test_runner_canary.py`. A criterion result still leaks information. |
 | Probe the verifier repeatedly | Shared lineage budget limits queries, including the CI counter across runs. | `tests/security/test_ci_budget_counter.py`, `tests/security/test_ci_budget_init.py`; P13-10 records 13/13 live release-gate checks passing on real GitHub. This is a release-gate check count, not an attack success rate. |
@@ -106,7 +106,7 @@ ADR 0001, ADR 0007 and P8-9/P8-12 describe residuals: paraphrases or transformat
 below the k-gram or marker length can pass; other encodings and split markers can evade
 sentinels; theoretical hash collisions exist; clean bytes sent before a streaming hit
 cannot be recalled; archive caps and upgrades/QUIC are blocked rather than inspected.
-P11-19 records a host-side mount-check race. The gate also depends on correctly authored
+P11-19 records a host-side mount-check race. The gate also depends on correctly written
 criteria and trusted infrastructure.
 
 The demo observed no successful tactics with cheeseless, so the sentence to use is:
@@ -188,7 +188,7 @@ actual outcomes below are cues to show recorded observations, not predictions.
 - **0:30–1:45, recording 1 — WITHOUT:** Show a scripted tactic against an ordinary
   editable test setup, the resulting gate verdict, and the independent correctness check.
   Show whether the tactic actually succeeded and any error.
-- **1:45–3:00, recording 2 — WITH:** Replay the same tactic against a frozen task in a
+- **1:45–3:00, recording 2 — WITH:** Replay the same tactic against a task with locked tests in a
   cheeseless session. Show the visible feedback, promotion or CI outcome, and the same
   independent check. Do not expose hidden test content.
 - **3:00–3:45:** Show the honest-fix control in both modes and the complete suite table,

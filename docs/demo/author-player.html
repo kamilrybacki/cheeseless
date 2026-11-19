@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>cheeseless: the author side</title>
+<title>cheeseless: the test-writer side</title>
 <style>
 body{background:#111;color:#ddd;font:14px/1.45 ui-monospace,monospace;margin:2rem}
 pre{white-space:pre-wrap;max-width:110ch}
 h1{font-size:1rem;color:#fff}
 </style></head><body>
-<h1>cheeseless: the author side (scripted agents)</h1>
+<h1>cheeseless: the test-writer side (scripted agents)</h1>
 <pre>
 # Author side of cheeseless. The agents below are scripted stand-ins, not LLMs.
 # The repo has a spec and a smoke test; there are no hidden tests yet.
@@ -22,8 +22,8 @@ src/toy/__main__.py
 $ grep &#x27;equal length&#x27; acceptance/contract/spec.md
 - words of equal length keep their input order (a stable sort)
 
-# 1. A reference session sees only the contract (spec + criteria), never tests.
-#    It writes a reference implementation from the spec.
+# 1. A reference coder (`reference` in the CLI) sees only the contract (spec + criteria),
+#    never the tests. It writes code from the spec alone.
 $ cheeseless session --role reference --projection &lt;ref-worktree&gt; -- &lt;scripted agent: reference&gt;
   agent&gt; I can see 5 files: README.md, acceptance/contract/criteria.yaml, acceptance/contract/spec.md, src/toy/__init__.py, src/toy/__main__.py
   agent&gt; test files visible to me: 0
@@ -32,14 +32,15 @@ $ cheeseless session --role reference --projection &lt;ref-worktree&gt; -- &lt;s
 $ cheeseless reference record --worktree &lt;ref-worktree&gt;
 reference recorded: &lt;id-1&gt;
 
-#    What the reference prints for a tie (bb and aa have equal length):
+#    What the reference coder prints for a tie (bb and aa have equal length):
 $ printf &#x27;bb aa\n&#x27; | python3 src/toy/__main__.py score   # in &lt;ref-worktree&gt;
 bb
 aa
 
-# 2. The author writes hidden tests. One of them is deliberate bait:
-#    test_ties_alphabetical contradicts the spec&#x27;s stable tie rule.
-#    author_crosscheck runs the tests against the reference and goes red.
+# 2. The test writer (`author` in the CLI) writes hidden tests from the spec.
+#    One is deliberate bait: test_ties_alphabetical contradicts the stable tie rule.
+#    The cross-check (author_crosscheck) runs the tests against the reference coder&#x27;s
+#    code and goes red. In CI the same check blocks a spec/ pull request (ADR 0018).
 $ cheeseless session --role author --projection &lt;author-worktree-1&gt; -- &lt;scripted agent: author-bait&gt;
   agent&gt; writing hidden tests, including test_ties_alphabetical (contradicts the spec)
   agent&gt; wrote acceptance/hidden/test_normalize.py
@@ -53,12 +54,12 @@ $ cheeseless promote --role author --worktree &lt;author-worktree-1&gt;
 promoted refs/heads/spec/toy &lt;id-2&gt;
 $ git merge --ff-only spec/toy
 
-#    The host tries to approve anyway; the red crosscheck blocks it.
-$ cheeseless freeze --approve &lt;proposal-1&gt; --as host
+#    The operator tries to lock the tests anyway (`freeze --approve`); the red cross-check blocks it.
+$ cheeseless freeze --approve &lt;proposal-1&gt; --as operator
 refused: the reference failed the author&#x27;s tests: score
 
-# 3. The author fixes only the test that contradicted the spec.
-#    The crosscheck turns green and the host approves the freeze.
+# 3. The test writer fixes only the test that contradicted the spec.
+#    The cross-check turns green and the operator locks the tests.
 $ cheeseless session --role author --projection &lt;author-worktree-2&gt; -- &lt;scripted agent: author-fix&gt;
   agent&gt; the crosscheck was red on score; fixing only the test that contradicts the spec
   agent&gt; wrote acceptance/hidden/test_normalize.py
@@ -74,26 +75,27 @@ $ git merge --ff-only spec/toy
 
 #    Operator decisions need a code retyped on the terminal (ADR 0017).
 #    The demo plays the operator on a pty it owns: it reads the code and types it back.
-$ cheeseless freeze --approve &lt;proposal-2&gt; --as host
+$ cheeseless freeze --approve &lt;proposal-2&gt; --as operator
 cheeseless: confirm an operator decision at this terminal
   operation: freeze-approve
   lineage:   toy
   subject:   &lt;proposal-2&gt;
-  actor:     host
+  actor:     operator
   outcome:   freeze
-type this code to confirm: A4Q98FJW
-(typed back: A4Q98FJW)
+type this code to confirm: 4PATDY5T
+(typed back: 4PATDY5T)
 
 frozen task: &lt;proposal-2&gt;
 
-# 4. After the freeze the author can no longer change the suite.
+# 4. Once the tests are locked, the test writer can no longer change them.
 $ cheeseless session --role author --projection &lt;author-worktree-3&gt; -- &lt;scripted agent: author-late&gt;
   agent&gt; trying to change the frozen suite
   agent&gt; author_check       -&gt; refused: author_refused
   agent&gt; freeze_propose     -&gt; refused: author_refused
 
-# 5. The implementer never sees the hidden tests. It guessed alphabetical ties,
-#    fails score, and disputes the criterion. The ack says nothing about tests.
+# 5. The coder (`implementer` in the CLI) never sees the hidden tests. It guessed
+#    alphabetical ties, fails score, and disputes the criterion. The ack says nothing
+#    about tests.
 $ cheeseless dispute config --enable
 disputes enabled, cap 3
 $ cheeseless session --role implementer --projection &lt;impl-worktree&gt; -- &lt;scripted agent: implementer&gt;
@@ -117,21 +119,21 @@ $ cheeseless disputes --show-note --json
   ]
 }
 
-#    The host reads the note, checks the spec and rejects the dispute.
-$ cheeseless dispute resolve d-1 --rejected --as host
+#    The operator reads the note, checks the spec and decides the test stands (`--rejected`).
+$ cheeseless dispute resolve d-1 --rejected --as operator
 cheeseless: confirm an operator decision at this terminal
   operation: dispute-resolve
   lineage:   toy
   subject:   d-1
-  actor:     host
+  actor:     operator
   outcome:   rejected
-type this code to confirm: WCNVA7GW
-(typed back: WCNVA7GW)
+type this code to confirm: 7R8YLZLR
+(typed back: 7R8YLZLR)
 
-d-1: rejected by host
+d-1: rejected by operator
 A fresh implementer session may start for this task.
 
-# The crosscheck checks the tests against the spec (via the reference).
-# The implementer gate catches gaming. They are two separate controls.
+# The cross-check checks the tests against the spec (via the reference coder).
+# The coder gate catches gaming. They are two separate controls.
 </pre>
 </body></html>

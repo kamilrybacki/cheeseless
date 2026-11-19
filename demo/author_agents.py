@@ -2,7 +2,7 @@
 
 These are deterministic scripts, not language models. Each step plays one role in a
 cheeseless session and talks to the verifier only through the session socket, the same
-way an MCP-connected agent would. The host copies this file into the sandbox HOME and
+way an MCP-connected agent would. The operator's CLI copies this file into the sandbox HOME and
 runs it with ``/usr/bin/python3 -I``; the working directory is the session projection.
 """
 
