@@ -1033,14 +1033,28 @@ def _check_pane_session(
     """Refuse a pty for any session that is not a role pane of a ``cheeseless dev`` run."""
     if role not in (SessionRole.AUTHOR, SessionRole.IMPLEMENTER):
         raise SessionOptionError("a pty is only for a dev author, an implementer or a reference")
-    if role is SessionRole.AUTHOR and dev_lineage is None:
-        raise SessionOptionError("only a dev author session can run on a pty")
+    if dev_lineage is None:
+        raise SessionOptionError("a role pane needs an open dev session for its lineage")
     if agent_stdio:
         raise SessionOptionError("a pty and stdio are exclusive")
     if pane_lineage is None:
         raise SessionOptionError("a role pane needs its lineage")
-    if ids.lineage_id(pane_lineage) != (dev_lineage if dev_lineage is not None else pane_lineage):
+    if ids.lineage_id(pane_lineage) != dev_lineage:
         raise SessionOptionError("the pane lineage must be the dev session's lineage")
+
+
+def _pane_dev_lineage(
+    store: object, role: SessionRole, dev_lineage: str | None, pane_lineage: str | None
+) -> str | None:
+    """The dev lineage a pane session belongs to.
+
+    An author carries it. An implementer is started fresh and never inherits one, so it is
+    the lineage of the open dev session that ``pane_lineage`` names, if any.
+    """
+    if dev_lineage is not None or role is not SessionRole.IMPLEMENTER or pane_lineage is None:
+        return dev_lineage
+    lineage = ids.lineage_id(pane_lineage)
+    return lineage if cast(DevSessionStore, store).dev_state(lineage) is not None else None
 
 
 @contextmanager
@@ -1135,7 +1149,12 @@ def host_session(
     elif log_file is not None:
         raise SessionOptionError("a log file is only for a reference attempt")
     elif agent_pty is not None:
-        _check_pane_session(bound, dev_lineage, pane_lineage, agent_stdio)
+        _check_pane_session(
+            bound,
+            _pane_dev_lineage(ctx.store, bound, dev_lineage, pane_lineage),
+            pane_lineage,
+            agent_stdio,
+        )
     elif pane_lineage is not None:
         raise SessionOptionError("a pane lineage needs a pty")
     reference_tui = new_reference is not None and new_reference.mode is ReferenceMode.TUI
@@ -1499,6 +1518,7 @@ def host_session(
                 pty_master,
                 on_attach=on_attach,
                 view_only=pane_layout.mode_of(_pane_role(bound)) is pane_layout.PaneMode.VIEW,
+                state_root=_state_home(state_dir),
                 fixed_socket=None
                 if pane_lineage is None
                 else pane_layout.socket_path(

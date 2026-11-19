@@ -67,18 +67,45 @@ class PaneSocketError(RuntimeError):
     """A fixed relay socket path cannot be used safely."""
 
 
-def prepare_fixed_socket(path: Path) -> None:
-    """Make ``path`` bindable: a private parent dir, no live peer, no stale socket.
-
-    The parent is created 0700 if missing and must be owned by this uid and not group or
-    world accessible. A live relay on the path is refused; a dead socket file is removed;
-    anything that is not a socket (a symlink included) is refused rather than replaced.
-    """
-    parent = path.parent
-    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = parent.lstat()
+def _check_private_dir(directory: Path) -> None:
+    info = directory.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise PaneSocketError("the pane socket directory must be a private directory of this user")
+
+
+def _ensure_private_chain(path: Path, root: Path) -> None:
+    """Create and vet every directory from ``root`` (exclusive) down to ``path.parent``."""
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise PaneSocketError("the pane socket path is outside the state dir")
+    root.mkdir(parents=True, exist_ok=True)
+    current = root
+    for part in path.parent.relative_to(root).parts:
+        current = current / part
+        try:
+            current.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        _check_private_dir(current)
+    # Re-check right before bind: nothing in the chain may have been swapped for a symlink.
+    if not path.parent.resolve().is_relative_to(root.resolve()):
+        raise PaneSocketError("the pane socket path is outside the state dir")
+
+
+def prepare_fixed_socket(path: Path, root: Path | None = None) -> None:
+    """Make ``path`` bindable: private parent dirs, no live peer, no stale socket.
+
+    With ``root`` (the state dir) every directory below it down to the socket's parent is
+    created 0700 and must be a real directory owned by this uid with no group or world
+    access; a symlink anywhere in the chain is refused. Without it only the parent is
+    checked. A live relay on the path is refused; a dead socket file is removed; anything
+    that is not a socket (a symlink included) is refused rather than replaced.
+    """
+    parent = path.parent
+    if root is not None:
+        _ensure_private_chain(path, root)
+    else:
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _check_private_dir(parent)
     try:
         existing = path.lstat()
     except FileNotFoundError:
@@ -110,11 +137,14 @@ class PaneRelay:
         on_attach: Callable[[], None] | None = None,
         view_only: bool = False,
         fixed_socket: Path | None = None,
+        state_root: Path | None = None,
     ) -> None:
         self._master = master_fd
         self._base_dir = base_dir
         self._view_only = view_only
         self._fixed_socket = fixed_socket
+        self._state_root = state_root
+        self._bound = False
         self._host_uid = os.getuid() if host_uid is None else host_uid
         self._peer_uid_of = peer_uid_of
         self._on_attach = on_attach
@@ -153,7 +183,7 @@ class PaneRelay:
 
     def _prepare_socket_path(self) -> None:
         if self._fixed_socket is not None:
-            prepare_fixed_socket(self._fixed_socket)
+            prepare_fixed_socket(self._fixed_socket, self._state_root)
             return
         self._dir = Path(tempfile.mkdtemp(prefix="cheeseless-pane-", dir=self._base_dir))
         os.chmod(self._dir, 0o700)
@@ -161,7 +191,10 @@ class PaneRelay:
     def start(self) -> Path:
         self._prepare_socket_path()
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        if self._fixed_socket is not None and self._state_root is not None:
+            _ensure_private_chain(self._fixed_socket, self._state_root)
         listener.bind(str(self.socket_path))
+        self._bound = True
         os.chmod(self.socket_path, 0o600)
         listener.listen(1)
         listener.setblocking(False)
@@ -315,7 +348,8 @@ class PaneRelay:
             with contextlib.suppress(OSError):
                 os.close(fd)
         if self._fixed_socket is not None:
-            with contextlib.suppress(OSError):
-                self._fixed_socket.unlink()
+            if self._bound:  # never unlink a socket another session owns
+                with contextlib.suppress(OSError):
+                    self._fixed_socket.unlink()
         elif self._dir is not None:
             shutil.rmtree(self._dir, ignore_errors=True)

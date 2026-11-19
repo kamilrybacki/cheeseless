@@ -278,7 +278,13 @@ def build_parser() -> argparse.ArgumentParser:
         "pane-relay", help="Attach this terminal to a reference pane relay (host-side)."
     )
     target = relay.add_mutually_exclusive_group(required=True)
-    target.add_argument("--socket", type=Path, default=None, help="Relay socket path.")
+    target.add_argument(
+        "--socket",
+        type=Path,
+        default=None,
+        help="Relay socket path. A view-only relay (reference, coder) disconnects a client "
+        "that is not --view on its first frame.",
+    )
     target.add_argument(
         "--role",
         choices=[role.value for role in PaneRole],

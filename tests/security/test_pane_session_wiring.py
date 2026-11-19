@@ -149,7 +149,27 @@ def test_the_author_relay_is_interactive_and_lives_at_the_role_path(repo, state,
     assert not relay.socket_path.exists(), "the host removes the socket when the session ends"
 
 
+def _implementer_pane(**extra):
+    return {"role": "implementer", "agent_pty": (24, 80), "pane_lineage": LINEAGE, **extra}
+
+
+def test_a_coder_pane_of_another_lineage_is_refused(repo, state, tmp_path, probe):
+    _open_dev(repo, state)
+    with pytest.raises(SessionOptionError, match="lineage"):
+        with _session(repo, state, tmp_path, **_implementer_pane(pane_lineage="other")):
+            pass
+    assert "launch" not in probe
+
+
+def test_a_coder_pane_without_an_open_dev_session_is_refused(repo, state, tmp_path, probe):
+    with pytest.raises(SessionOptionError):
+        with _session(repo, state, tmp_path, **_implementer_pane()):
+            pass
+    assert "launch" not in probe
+
+
 def test_the_implementer_relay_is_view_only_at_the_coder_path(repo, state, tmp_path):
+    _open_dev(repo, state)
     store = FileStore(store_root(repo.common_dir(), state))
     commit(prepare(repo, PytestRunner(), BwrapSandbox()), store)
     kwargs = {"role": "implementer", "agent_pty": (24, 80), "pane_lineage": LINEAGE}
@@ -200,3 +220,80 @@ def test_a_reference_pane_lineage_must_be_the_attempts_lineage(repo, state, tmp_
         with _session(repo, state, tmp_path, **_reference(pane_lineage="other")):
             pass
     assert "launch" not in probe
+
+
+# The agent puts its tty in raw mode, prints a tick every 50 ms and reports every byte that
+# reaches its stdin as ``RX:<hex>``; a frame leaking into the pty would show up in the output.
+_ECHO_AGENT = [
+    PYTHON,
+    "-I",
+    "-c",
+    "import os,select,sys,time,tty\n"
+    "tty.setraw(0)\n"
+    "end=time.time()+12\n"
+    "while time.time()<end:\n"
+    "    if select.select([0],[],[],0.05)[0]:\n"
+    "        os.write(1,b'RX:'+os.read(0,4096).hex().encode()+b' ')\n"
+    "    else:\n"
+    "        os.write(1,b'TICK ')\n",
+]
+_CANARY = b"CANARY-SENT-TO-A-VIEW-ONLY-ROLE-SOCKET"
+
+
+def _assert_view_only_through_the_wiring(relay) -> None:
+    import socket
+    import time
+
+    from cheeseless.domain.pane_frames import Data, FrameDecoder, encode_data
+
+    assert relay.view_only is True
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(3)
+    sock.connect(str(relay.socket_path))
+    sock.sendall(encode_data(_CANARY))
+    try:
+        assert sock.recv(4096) == b"", "the relay must close a view-only client that sends"
+    except ConnectionResetError:
+        pass
+    sock.close()
+    # Reconnect as a plain reader and read the pane's output for a moment.
+    reader = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    reader.settimeout(0.5)
+    reader.connect(str(relay.socket_path))
+    decoder = FrameDecoder()
+    seen = b""
+    end = time.monotonic() + 1.5
+    while time.monotonic() < end:
+        try:
+            chunk = reader.recv(4096)
+        except TimeoutError:
+            continue
+        if not chunk:
+            break
+        seen += b"".join(f.payload for f in decoder.feed(chunk) if isinstance(f, Data))
+    reader.close()
+    assert b"TICK" in seen, "the agent must have been running and visible"
+    assert b"RX:" not in seen, "bytes reached the pty"
+    assert _CANARY.hex().encode() not in seen
+
+
+def test_a_canary_frame_to_the_coder_socket_never_reaches_the_pty(repo, state, tmp_path):
+    _open_dev(repo, state)
+    store = FileStore(store_root(repo.common_dir(), state))
+    commit(prepare(repo, PytestRunner(), BwrapSandbox()), store)
+    with host_session(
+        state_dir=state,
+        cwd=repo.root,
+        projection_dir=tmp_path / "projection",
+        socket_dir=tmp_path / "sockets",
+        agent_command=_ECHO_AGENT,
+        **_implementer_pane(),
+    ) as info:
+        _assert_view_only_through_the_wiring(info["relay"])
+
+
+def test_a_canary_frame_to_the_reference_socket_never_reaches_the_pty(repo, state, tmp_path):
+    with _session(
+        repo, state, tmp_path, **_reference(pane_lineage=LINEAGE, agent_command=_ECHO_AGENT)
+    ) as info:
+        _assert_view_only_through_the_wiring(info["relay"])

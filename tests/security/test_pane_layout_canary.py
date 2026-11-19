@@ -112,6 +112,47 @@ def test_the_panes_event_carries_no_canary_digest_or_session_id(run_paned, state
     _assert_clean(run_paned(state, role))
 
 
+_EVENT_KEYS = {"event", "schema", "lineage", "panes"}
+_PANE_KEYS = {"role", "mode", "socket"}
+
+
+def _panes_event(out: str) -> dict[str, Any]:
+    events = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
+    assert len(events) == 1
+    return events[0]
+
+
+def _assert_closed_schema(event: dict[str, Any]) -> None:
+    assert set(event) == _EVENT_KEYS
+    assert event["lineage"] == LINEAGE
+    for pane in event["panes"]:
+        assert set(pane) == _PANE_KEYS
+        assert pane["role"] in {r.value for r in PaneRole}
+        assert pane["mode"] in {m.value for m in pane_layout.PaneMode}
+
+
+@pytest.mark.parametrize("role", ["author", "implementer"])
+def test_the_panes_event_keys_and_values_come_from_a_closed_set(run_paned, state, role) -> None:
+    _assert_closed_schema(_panes_event(run_paned(state, role)))
+
+
+def test_negative_control_an_injected_digest_is_caught_by_the_scan(run_paned, state) -> None:
+    """Prove the canary scan has teeth: the same checks must fail on a tainted event."""
+    event = _panes_event(run_paned(state, "author"))
+    for tainted in (
+        {**event, "spec": DIGEST},  # a new key carrying a digest
+        {**event, "lineage": DIGEST},  # a digest in a known value
+        {**event, "panes": [{**event["panes"][0], "session": SESSION}]},
+    ):
+        with pytest.raises(AssertionError):
+            _assert_closed_schema(tainted)
+            _assert_clean(json.dumps(tainted))
+    with pytest.raises(AssertionError):
+        _assert_clean(json.dumps({**event, "lineage": DIGEST}))
+    with pytest.raises(AssertionError):
+        _assert_clean(json.dumps({**event, "note": CANARIES[0]}))
+
+
 @pytest.mark.parametrize("role", ["author", "implementer"])
 def test_the_panes_event_paths_stay_inside_the_state_dir(run_paned, state, role) -> None:
     out = run_paned(state, role)
