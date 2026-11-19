@@ -26,7 +26,8 @@ def read_event(
     """One event for ``lineage``, or None when the lineage has no state yet.
 
     A corrupt store yields the fixed error line; its message is never copied into the event.
-    A value outside the schema bounds is treated the same way. Any other exception is a bug and propagates.
+    A value outside the schema bounds is treated the same way. Any other exception is a bug
+    and propagates.
     """
     try:
         state = port.dev_state(lineage)

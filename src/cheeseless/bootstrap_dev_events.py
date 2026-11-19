@@ -37,7 +37,8 @@ def run_dev_events_command(args: argparse.Namespace) -> int:
         return USAGE_EXIT
     if not 0 < args.interval <= MAX_INTERVAL_SECONDS:  # also rejects nan
         print(
-            f"cheeseless dev-events: --interval must be above 0 and at most {MAX_INTERVAL_SECONDS:g}",
+            "cheeseless dev-events: --interval must be above 0 and at most "
+            f"{MAX_INTERVAL_SECONDS:g}",
             file=sys.stderr,
         )
         return USAGE_EXIT

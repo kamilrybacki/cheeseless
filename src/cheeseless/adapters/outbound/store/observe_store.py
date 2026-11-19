@@ -1,7 +1,8 @@
 """Read-only view of the trusted store for the dev-events observer.
 
 It never creates, locks, repairs or writes anything: a missing store reads as empty and
-a corrupt one raises ``StoreError``. It builds on the read-only mixins, so no write method exists on it at runtime.
+a corrupt one raises ``StoreError``. It builds on the read-only mixins, so no write method
+exists on it at runtime.
 """
 
 from __future__ import annotations
