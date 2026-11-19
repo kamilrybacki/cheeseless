@@ -317,6 +317,19 @@ def build_parser() -> argparse.ArgumentParser:
     dev.add_argument("--launcher", default=None, metavar="NAME", help=LAUNCHER_HELP)
     dev.add_argument("--json", action="store_true")
 
+    devev = sub.add_parser(
+        "dev-events",
+        help="Host only: read-only NDJSON view of a dev lineage's phase (no writes).",
+    )
+    devev.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)
+    devev.add_argument("--lineage", required=True, help="The dev lineage to observe.")
+    mode = devev.add_mutually_exclusive_group()
+    mode.add_argument("--once", action="store_true", help="Print one snapshot and exit (default).")
+    mode.add_argument(
+        "--follow", action="store_true", help="Stream changes until a terminal phase."
+    )
+    devev.add_argument("--interval", type=float, default=1.0, help="Seconds between polls.")
+
     uds = sub.add_parser("serve-uds", help="Run the verifier UDS server for one session.")
     uds.add_argument("--socket", type=Path, default=None)
     uds.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)

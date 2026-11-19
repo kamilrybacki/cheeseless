@@ -66,20 +66,38 @@ def _tests_phase(**fields: object) -> DevState:
     [
         (_state(), Stage.SPEC, Actor.TEST_WRITER, Awaiting.SPEC_DONE, Hint.RUN_DEV_RESUME),
         (
-            _state(phase=DevPhase.IMPLEMENT, spec_digest=DIGEST, proposal_id=PROPOSAL,
-                   implementer_session=SESSION),
-            Stage.CODE, Actor.CODER, Awaiting.NONE, Hint.NONE,
+            _state(
+                phase=DevPhase.IMPLEMENT,
+                spec_digest=DIGEST,
+                proposal_id=PROPOSAL,
+                implementer_session=SESSION,
+            ),
+            Stage.CODE,
+            Actor.CODER,
+            Awaiting.NONE,
+            Hint.NONE,
         ),
         (
             _state(phase=DevPhase.BLOCKED, spec_digest=DIGEST, proposal_id=PROPOSAL),
-            Stage.BLOCKED, Actor.OPERATOR, Awaiting.RUN_GRANT, Hint.GRANT_RUNS_OR_ABORT,
+            Stage.BLOCKED,
+            Actor.OPERATOR,
+            Awaiting.RUN_GRANT,
+            Hint.GRANT_RUNS_OR_ABORT,
         ),
         (
             _state(phase=DevPhase.DISPUTED, spec_digest=DIGEST, proposal_id=PROPOSAL),
-            Stage.DISPUTE, Actor.OPERATOR, Awaiting.DISPUTE_RESOLUTION, Hint.RUN_DISPUTE_RESOLVE,
+            Stage.DISPUTE,
+            Actor.OPERATOR,
+            Awaiting.DISPUTE_RESOLUTION,
+            Hint.RUN_DISPUTE_RESOLVE,
         ),
-        (_state(phase=DevPhase.DONE, spec_digest=DIGEST, proposal_id=PROPOSAL),
-         Stage.DONE, Actor.NONE, Awaiting.NONE, Hint.NONE),
+        (
+            _state(phase=DevPhase.DONE, spec_digest=DIGEST, proposal_id=PROPOSAL),
+            Stage.DONE,
+            Actor.NONE,
+            Awaiting.NONE,
+            Hint.NONE,
+        ),
         (_state(phase=DevPhase.ABORTED), Stage.ABORTED, Actor.NONE, Awaiting.NONE, Hint.NONE),
     ],
     ids=["spec", "implement", "blocked", "disputed", "done", "aborted"],
@@ -161,8 +179,12 @@ def test_reference_of_another_spec_is_ignored() -> None:
 
 
 def test_reference_is_not_shown_outside_the_tests_phase() -> None:
-    state = _state(phase=DevPhase.IMPLEMENT, spec_digest=DIGEST, proposal_id=PROPOSAL,
-                   implementer_session=SESSION)
+    state = _state(
+        phase=DevPhase.IMPLEMENT,
+        spec_digest=DIGEST,
+        proposal_id=PROPOSAL,
+        implementer_session=SESSION,
+    )
 
     view = derive(state, _attempt(ReferenceState.DONE), open_disputes=0)
 
@@ -171,8 +193,13 @@ def test_reference_is_not_shown_outside_the_tests_phase() -> None:
 
 
 def test_holdout_limit_asks_for_refreeze_or_abort() -> None:
-    state = _state(phase=DevPhase.IMPLEMENT, spec_digest=DIGEST, proposal_id=PROPOSAL,
-                   implementer_session=SESSION, holdout_failures=3)
+    state = _state(
+        phase=DevPhase.IMPLEMENT,
+        spec_digest=DIGEST,
+        proposal_id=PROPOSAL,
+        implementer_session=SESSION,
+        holdout_failures=3,
+    )
 
     view = derive(state, None, open_disputes=0)
 
@@ -183,8 +210,13 @@ def test_holdout_limit_asks_for_refreeze_or_abort() -> None:
 
 
 def test_counts_and_version_are_carried_through() -> None:
-    state = _state(phase=DevPhase.DISPUTED, spec_digest=DIGEST, proposal_id=PROPOSAL,
-                   holdout_failures=2, version=7)
+    state = _state(
+        phase=DevPhase.DISPUTED,
+        spec_digest=DIGEST,
+        proposal_id=PROPOSAL,
+        holdout_failures=2,
+        version=7,
+    )
 
     view = derive(state, None, open_disputes=2)
 
@@ -203,7 +235,8 @@ def test_counts_and_version_are_carried_through() -> None:
 def test_every_phase_derives_without_error() -> None:
     for phase in DevPhase:
         spec = None if phase in (DevPhase.SPEC, DevPhase.ABORTED) else DIGEST
-        proposal = PROPOSAL if phase not in (DevPhase.SPEC, DevPhase.TESTS, DevPhase.ABORTED) else None
+        frozen = (DevPhase.SPEC, DevPhase.TESTS, DevPhase.ABORTED)
+        proposal = None if phase in frozen else PROPOSAL
         state = _state(phase=phase, spec_digest=spec, proposal_id=proposal)
 
         for attempt in (None, *(_attempt(s) for s in ReferenceState)):
@@ -349,8 +382,16 @@ def test_schema_refuses_a_free_text_field() -> None:
 
 
 def test_schema_refuses_an_out_of_range_holdout_count() -> None:
-    view = derive(_state(phase=DevPhase.IMPLEMENT, spec_digest=DIGEST, proposal_id=PROPOSAL,
-                         implementer_session=SESSION), None, 0)
+    view = derive(
+        _state(
+            phase=DevPhase.IMPLEMENT,
+            spec_digest=DIGEST,
+            proposal_id=PROPOSAL,
+            implementer_session=SESSION,
+        ),
+        None,
+        0,
+    )
     line = json.loads(encode(event(EventKind.CHANGE, OBSERVED, LINEAGE, view)))
     line["holdout_failures"] = 4
 
