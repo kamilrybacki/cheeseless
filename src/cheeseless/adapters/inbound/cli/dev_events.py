@@ -16,11 +16,16 @@ from cheeseless.domain.dev_events import (
     EventKind,
     Stage,
     encode,
+    error_event,
     event,
 )
 from cheeseless.ports.dev_observe import DevObservation
 
 HEARTBEAT_SECONDS = 15.0
+EXIT_OK = 0
+EXIT_ERROR_LINE = 1
+EXIT_NO_SUCH_LINEAGE = 3
+EXIT_INTERRUPTED = 130
 TERMINAL_STAGES = frozenset({Stage.DONE, Stage.ABORTED})
 
 
@@ -37,18 +42,51 @@ def run_dev_events(
 ) -> int:
     """Print the lineage's dev-events and return the exit code.
 
-    ``--once`` prints one snapshot: exit 1 when it is a fixed error line, 0 otherwise (an
-    unknown lineage prints nothing). ``--follow`` prints a snapshot, then a change line
-    whenever the view changes and a heartbeat after 15 quiet seconds; it exits 0 once the
-    phase is terminal. ``limit`` bounds the number of polls (tests only).
+    ``--once`` prints one snapshot: exit 1 when it is a fixed error line, 3 (and no output)
+    when the lineage has no state, 0 otherwise. ``--follow`` waits for the lineage to appear,
+    so a viewer can be opened before the session starts; it then prints a snapshot, a change
+    line whenever the view changes and a heartbeat after 15 quiet seconds. It exits 0 once
+    the phase is terminal and 1 on an error line, including a lineage that vanishes after it
+    was seen. ``limit`` bounds the number of polls (tests only).
+
+    A closed pipe exits 0 and an interrupt exits 130, both silently. Any other OS or value
+    error becomes the fixed error line and exit 1: no message or path is ever printed.
     """
+    try:
+        return _run(port, lineage, follow, interval, out, now, sleep, limit)
+    except BrokenPipeError:
+        return EXIT_OK
+    except KeyboardInterrupt:
+        return EXIT_INTERRUPTED
+    except (OSError, ValueError):
+        return _fixed_error(out, lineage, now)
+
+
+def _run(
+    port: DevObservation,
+    lineage: str,
+    follow: bool,
+    interval: float,
+    out: TextIO,
+    now: Callable[[], datetime],
+    sleep: Callable[[float], None],
+    limit: int | None,
+) -> int:
     if not follow:
         made = read_event(port, lineage, EventKind.SNAPSHOT, _stamp(now()))
         if made is None:
-            return 0
+            return EXIT_NO_SUCH_LINEAGE
         _emit(out, made)
-        return 1 if made.kind is EventKind.ERROR else 0
+        return EXIT_ERROR_LINE if made.kind is EventKind.ERROR else EXIT_OK
     return _follow(port, lineage, interval, out, now, sleep, limit)
+
+
+def _fixed_error(out: TextIO, lineage: str, now: Callable[[], datetime]) -> int:
+    try:
+        _emit(out, error_event(_stamp(now()), lineage))
+    except OSError:
+        pass  # the output itself is broken; the exit code is all that is left to report
+    return EXIT_ERROR_LINE
 
 
 def _follow(
@@ -73,15 +111,19 @@ def _follow(
             _emit(out, made)
             last, last_sent = made, now()
             if made.kind is EventKind.END:
-                return 0
+                return EXIT_OK
             if made.kind is EventKind.ERROR:
                 # An error line carries no view, so no later poll can change it: stop here.
-                return 1
+                return EXIT_ERROR_LINE
+        elif made is None and last is not None:
+            # The state was seen and is gone: the store changed under us. Never keep waiting.
+            _emit(out, error_event(stamp, lineage))
+            return EXIT_ERROR_LINE
         elif last is not None and last.view is not None and _quiet_long_enough(last_sent, now()):
             _emit(out, event(EventKind.HEARTBEAT, stamp, last.lineage, last.view))
             last_sent = now()
         sleep(interval)
-    return 0
+    return EXIT_OK
 
 
 def _changed(made: DevEvent, last: DevEvent | None) -> bool:

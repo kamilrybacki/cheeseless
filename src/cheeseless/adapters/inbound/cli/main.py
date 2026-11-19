@@ -320,13 +320,23 @@ def build_parser() -> argparse.ArgumentParser:
     devev = sub.add_parser(
         "dev-events",
         help="Host only: read-only NDJSON view of a dev lineage's phase (no writes).",
+        description="Read-only NDJSON view of a dev lineage's phase. --once exits 0 after one "
+        "snapshot, 1 after an error line, 3 (no output) for a lineage with no state. --follow "
+        "waits for the lineage to appear, so a viewer can start first; it then streams until "
+        "a terminal phase (0) or an error line (1, also if the state vanishes).",
     )
     devev.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)
     devev.add_argument("--lineage", required=True, help="The dev lineage to observe.")
     mode = devev.add_mutually_exclusive_group()
-    mode.add_argument("--once", action="store_true", help="Print one snapshot and exit (default).")
     mode.add_argument(
-        "--follow", action="store_true", help="Stream changes until a terminal phase."
+        "--once",
+        action="store_true",
+        help="Print one snapshot and exit (default); exit 3 if the lineage is unknown.",
+    )
+    mode.add_argument(
+        "--follow",
+        action="store_true",
+        help="Wait for the lineage, then stream changes until a terminal phase.",
     )
     devev.add_argument("--interval", type=float, default=1.0, help="Seconds between polls.")
 

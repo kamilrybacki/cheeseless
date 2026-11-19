@@ -320,7 +320,7 @@ def test_observing_an_unknown_lineage_creates_no_store(
 
     code, out = _run_main(capsys, repo, state_home, "--lineage", "nobody", "--once")
 
-    assert code == 0
+    assert code == 3
     assert out == ""
     assert not state_home.exists()
 

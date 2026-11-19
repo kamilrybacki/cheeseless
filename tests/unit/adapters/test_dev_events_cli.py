@@ -110,10 +110,10 @@ def test_once_prints_one_snapshot_line_and_exits_zero() -> None:
     assert lines[0]["stage"] == "lock"  # a frozen proposal in the tests phase is the lock stage
 
 
-def test_once_for_an_unknown_lineage_prints_nothing_and_exits_zero() -> None:
+def test_once_for_an_unknown_lineage_prints_nothing_and_exits_three() -> None:
     code, text, _ = _run(ScriptedObservation([None]))
 
-    assert code == 0
+    assert code == 3
     assert text == ""
 
 
@@ -232,3 +232,57 @@ def test_unknown_write_or_incomplete_flags_are_rejected_with_exit_two(argv: list
         build_parser().parse_args(argv)
 
     assert info.value.code == 2
+
+
+ERROR_LINE = {"v": 1, "kind": "error", "observed_at": "2026-11-19T10:00:00Z", "lineage": LINEAGE}
+
+
+def test_follow_reports_an_error_when_the_state_vanishes_after_it_was_seen() -> None:
+    observation = ScriptedObservation([_state(DevPhase.TESTS), None])
+
+    code, text, _ = _run(observation, follow=True, limit=10)
+
+    lines = _lines(text)
+    assert code == 1
+    assert [line["kind"] for line in lines] == ["snapshot", "error"]
+    assert lines[-1]["lineage"] == LINEAGE
+    assert observation.polls == 2
+
+
+class _Raising(ScriptedObservation):
+    def dev_state(self, lineage_id: str) -> DevState | None:
+        raise self.error  # type: ignore[misc]
+
+
+def test_a_broken_pipe_exits_zero_without_output_or_traceback() -> None:
+    code, text, _ = _run(_Raising([], error=BrokenPipeError()))
+
+    assert code == 0
+    assert text == ""
+
+
+def test_a_keyboard_interrupt_exits_130_quietly() -> None:
+    code, text, _ = _run(_Raising([], error=KeyboardInterrupt()), follow=True, limit=3)
+
+    assert code == 130
+    assert text == ""
+
+
+@pytest.mark.parametrize("error", [OSError("/home/x/secret"), ValueError("/home/x/secret")])
+def test_an_unexpected_os_or_value_error_prints_the_fixed_line_and_exits_one(
+    error: Exception,
+) -> None:
+    code, text, _ = _run(_Raising([], error=error))
+
+    assert code == 1
+    assert _lines(text) == [ERROR_LINE]
+    assert "secret" not in text
+
+
+def test_the_command_help_documents_the_waiting_and_unknown_lineage_behaviour() -> None:
+    parser = build_parser()
+    sub = next(a for a in parser._actions if a.dest == "command")  # noqa: SLF001
+    text = sub.choices["dev-events"].format_help()  # type: ignore[attr-defined]
+
+    assert "exit 3" in text
+    assert "waits" in text
