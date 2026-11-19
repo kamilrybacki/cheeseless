@@ -1607,3 +1607,7 @@ Deviations from the ADR text, all fail-closed:
 ## PR #35 review — gpt-6-luna (2026-11-18)
 - MEDIUM, accepted: the demo pty driver leaked the pty fds if `Popen` raised and killed only the direct child on timeout. Both fds now close on setup failure and cleanup kills and reaps the child's whole session.
 - LOW, accepted: added tests for timeout cleanup (fds and a descendant) and for a command that cannot start.
+
+## Blocking CI author check — operator decision (2026-11-19)
+- The operator asked for the CI author check on `spec/` PRs to block instead of advise. ADR 0009 says that output is advisory, so ADR 0018 (proposed) supersedes only that clause: a definite `fail` blocks, `unavailable` only warns, and `post` reads a closed enum, never PR text.
+- The operator kept `spec/<lineage>` branch naming; no rename.
