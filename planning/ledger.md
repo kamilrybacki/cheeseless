@@ -1627,3 +1627,11 @@ Deviations from the ADR text, all fail-closed:
 - LOW, accepted (implementation): update the `ci_branch.py` docstring, the `authoring.py` "advisory" wording, `judge.yml` comments and step name, and `docs/ci/README.md`.
 - LOW, accepted: supersession scope now quotes ADR 0009 and names what stays unchanged.
 - ADR accepted after both reviews' findings were addressed.
+
+## ADR 0018 implementation decisions (2026-11-19)
+- `author_check(..., contain_failures=False)`: exception containment is a CI-only opt-in (`bootstrap_ci` passes `True`). Local `author_check`, `author_crosscheck` and freeze approval behave as before: `gate_author_check` still wraps exceptions into `INFRA_ERROR`, and `RepositoryError` is caught only under the opt-in, so a missing contract file stays a hard error locally but is a host-side `fail` in CI.
+- `AuthorCheckResult.status` is a derived property over `ok` and the new `unavailable` flag, so the three states are one source of truth; `ok` with `unavailable` is rejected at construction.
+- The value reaches `ci-gate` as `--author=VALUE` (never a separate argument), so a forged value starting with `-` cannot be parsed as an option. `--evaluate-result` is passed with it so a non-success `evaluate` job is `unavailable`.
+- `check_payload` (the unprivileged `policy` job's output) no longer renders author notes at all: author text is not part of the policy payload. The only author text in a check body is a fixed string chosen from the enum.
+- A missing `author=` line (no author check ran, refused spec PR, crash before the outcome) reaches `ci-gate` as an empty value, which is `unavailable`.
+- Security tests: `tests/security/test_ci_author_gate.py` covers malformed, injected, oversized and workflow-command values, a non-success evaluate result, `fail` never clearing another guard, and the canary/sentinel check on check bodies.

@@ -401,7 +401,12 @@ def build_parser() -> argparse.ArgumentParser:
     cib.add_argument(
         "--no-author-check",
         action="store_true",
-        help="Skip the advisory author check: no sandbox, no PR content is executed.",
+        help="Skip the author check: no sandbox, no PR content is executed (status unavailable).",
+    )
+    cib.add_argument(
+        "--author-output",
+        default="",
+        help="Append 'author=<pass|fail|unavailable>' to this file (a job output) for spec/.",
     )
 
     cir = sub.add_parser(
@@ -422,6 +427,16 @@ def build_parser() -> argparse.ArgumentParser:
     cig.add_argument("--judge-code", default="", help="Exit code of ci-judge (gate/ only).")
     cig.add_argument("--verdict", default="", help="Path to the ci-judge --json output.")
     cig.add_argument("--current-base", default="", help="Default-branch tip now (gate/ freshness).")
+    cig.add_argument(
+        "--author",
+        default="",
+        help="The evaluate job's author status; only exact pass/fail/unavailable is believed.",
+    )
+    cig.add_argument(
+        "--evaluate-result",
+        default="",
+        help="The evaluate job result; anything but success makes the author status unavailable.",
+    )
     cig.add_argument(
         "--guards-ok",
         choices=("true", "false"),

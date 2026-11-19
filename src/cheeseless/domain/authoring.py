@@ -31,6 +31,43 @@ class TaskPhase(enum.Enum):
     FROZEN = "frozen"
 
 
+class AuthorStatus(enum.StrEnum):
+    """What the author check says about a spec tree (ADR 0018): a closed three-value enum.
+
+    ``fail`` is a finding about the tree. ``unavailable`` means the check could not tell, which
+    is never a finding: it is a warning, not a block.
+    """
+
+    PASS = "pass"  # noqa: S105 - a status word, not a credential
+    FAIL = "fail"
+    UNAVAILABLE = "unavailable"
+
+
+def parse_author_status(raw: object) -> AuthorStatus:
+    """The status named by exactly one of the three wire values, else ``unavailable``.
+
+    The value crosses a job boundary a pull request's test code can write to, so nothing is
+    normalised or trimmed: other casing, whitespace, extra lines, oversized or non-string input
+    all mean "could not tell". Only an exact match is believed."""
+    if type(raw) is str:
+        for status in AuthorStatus:
+            if raw == status.value:
+                return status
+    return AuthorStatus.UNAVAILABLE
+
+
+def author_output_line(status: AuthorStatus) -> str:
+    """The one job-output line for ``status``, built from a fixed table, never from free text."""
+    return f"author={_OUTPUT_VALUE[status]}\n"
+
+
+_OUTPUT_VALUE = {
+    AuthorStatus.PASS: "pass",
+    AuthorStatus.FAIL: "fail",
+    AuthorStatus.UNAVAILABLE: "unavailable",
+}
+
+
 def spec_digest(contract_bytes: bytes) -> str:
     """Digest of the contract bytes only: what the reference session was given."""
     return hashlib.sha256(contract_bytes).hexdigest()
@@ -273,11 +310,14 @@ __all__ = [
     "MAX_REFERENCE_RETRIES",
     "AuthoringError",
     "AuthoringState",
+    "AuthorStatus",
     "CrosscheckRecord",
     "Proposal",
     "StrengthReview",
     "TaskPhase",
+    "author_output_line",
     "crosscheck_binds",
+    "parse_author_status",
     "spec_digest",
     "strength_review_binds",
     "vendor_of_model",

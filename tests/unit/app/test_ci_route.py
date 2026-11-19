@@ -73,7 +73,7 @@ def test_a_spec_check_is_named_for_branch_policy_and_is_never_the_judge_check() 
     assert ok["name"] == BRANCH_POLICY_CHECK != "cheeseless judge"
     assert ok["head_sha"] == SHA and ok["conclusion"] == "success"
     assert "not an implementation verdict" in ok["output"]["summary"]
-    assert "note" in ok["output"]["summary"]
+    assert "note" not in ok["output"]["summary"]  # ADR 0018: no author text in the body
 
 
 @pytest.mark.parametrize(
