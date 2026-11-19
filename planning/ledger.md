@@ -1641,3 +1641,8 @@ Deviations from the ADR text, all fail-closed:
 - Prose now says test writer, reference coder, coder, operator, "lock the tests" and "test was wrong" / "test stands". Code identifiers, CLI commands and flags, MCP tool names, proto fields and accepted ADRs keep the old terms (ADRs are immutable).
 - `docs/glossary.md` maps each plain term to its code term; docs that use the plain terms link to it. The first use of a term in a section shows the code term once, in backticks.
 - The demo actor argument `--as host` became `--as operator` in `demo/author_demo.py`; the author demo recording was regenerated with the new captions. `docs/errors.md` is generated from proto and was left alone.
+
+## Phase view and per-role T3 threads: design (2026-11-19, proposal only)
+
+- Part A (read-only `cheeseless dev-events`, closed schema v1, canary test) needs no ADR: it projects existing host state and changes no accepted decision. An ADR becomes necessary if events ever carry free text or a viewer gets a write path.
+- Part B: agent-per-T3-thread is rejected (agent outside the sandbox reads hidden state; ADR 0003/0009/0013). Recommended: host-owned relay panels (ADR 0019 draft, proposed, no reviewers yet); sandboxed T3 launch is a later spike. Details and open questions: `planning/phase-view-design.md`.

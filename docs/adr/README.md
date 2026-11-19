@@ -21,3 +21,4 @@ Only critical, long-lived decisions live here. Everything else goes to
 | [0016](0016-strength-review-substitutes-human-approval.md) | A strength review replaces the operator's strength review, not the executable checks; bounded, not safe | accepted |
 | [0017](0017-attended-approval-tty-challenge.md) | Attended operator decisions (approve, resolve, recover-finish, sensitive promote, auto-freeze opt-in) need a typed challenge on the controlling terminal | accepted |
 | [0018](0018-blocking-author-check-in-ci.md) | A definite author-check failure fails the CI gate on spec/ PRs; an unavailable check only warns | accepted |
+| [0019](0019-view-only-role-relay.md) | Show every role through a host-owned relay, view-only except the test writer | proposed |
