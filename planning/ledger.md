@@ -1607,3 +1607,23 @@ Deviations from the ADR text, all fail-closed:
 ## PR #35 review — gpt-6-luna (2026-11-18)
 - MEDIUM, accepted: the demo pty driver leaked the pty fds if `Popen` raised and killed only the direct child on timeout. Both fds now close on setup failure and cleanup kills and reaps the child's whole session.
 - LOW, accepted: added tests for timeout cleanup (fds and a descendant) and for a command that cannot start.
+
+## Blocking CI author check — operator decision (2026-11-19)
+- The operator asked for the CI author check on `spec/` PRs to block instead of advise. ADR 0009 says that output is advisory, so ADR 0018 (proposed) supersedes only that clause: a definite `fail` blocks, `unavailable` only warns, and `post` reads a closed enum, never PR text.
+- The operator kept `spec/<lineage>` branch naming; no rename.
+
+## ADR 0018 review — gpt-6.1-sol (2026-11-19), verdict ACCEPT-WITH-CHANGES
+- HIGH, accepted: enum validation alone does not stop injection. The value now travels by env var into `ci-gate --author`, is validated in tested Python, and can only add a guard, never clear policy, judge or another guard.
+- MEDIUM, accepted: `AuthorCheckResult` has no typed basis for the classification. `author_check` gets a typed status; host-side defects take precedence over an unavailable runner.
+- MEDIUM, accepted: "crashes its own collection" contradicted the `fail` definition. Reported collection errors are `fail`; only launch failure, timeout or no usable result is `unavailable`.
+- MEDIUM, accepted: forging needs no sandbox escape; PR test code can print a forged record or kill the driver. Consequences say so.
+
+## ADR 0018 review — claude-sonnet-5-5 (2026-11-19), verdict ACCEPT-WITH-CHANGES
+- HIGH, accepted: host-side contract and sentinel problems were misassigned to `unavailable` when the runner also failed. They are now `fail` with precedence.
+- MEDIUM, accepted in part: the `unavailable` path is PR-controlled; documented. Rejected for now: treating "driver ran but produced no result record" as `fail`, because an OOM kill or sandbox teardown looks the same and would fail a required check on a flake. Revisit if the driver can tell its own exit from an external kill.
+- MEDIUM, accepted: the `evaluate` output step was unspecified. `ci-branch` writes `author=` itself from the enum; no JSON field copy; no problem text in the summary. Security tests in `tests/security/` cover multi-line, empty, oversized, odd-case and missing values, all mapping to `unavailable`.
+- MEDIUM, accepted: the guard keys on route's `BRANCH_CLASS`, never on `evaluate` output; policy rejection and `gate/` PRs are unaffected.
+- MEDIUM, accepted: false `fail` recovery is a re-run or an admin merge after reading the `evaluate` log; check text is fixed.
+- LOW, accepted (implementation): update the `ci_branch.py` docstring, the `authoring.py` "advisory" wording, `judge.yml` comments and step name, and `docs/ci/README.md`.
+- LOW, accepted: supersession scope now quotes ADR 0009 and names what stays unchanged.
+- ADR accepted after both reviews' findings were addressed.

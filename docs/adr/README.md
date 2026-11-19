@@ -13,10 +13,11 @@ Only critical, long-lived decisions live here. Everything else goes to
 | [0006](0006-ci-source-of-truth-and-promote.md) | CI authoritative, promote path allowlist, hooks not a boundary | accepted |
 | [0007](0007-egress-dlp-proxy.md) | Host-side MITM proxy with DLP for all gated egress | accepted |
 | [0008](0008-agent-facing-error-model.md) | One typed agent-facing error and staged disclosure | accepted |
-| [0009](0009-author-and-implementer-roles.md) | Separate author and implementer roles, reference crosscheck, dispute channel | accepted |
+| [0009](0009-author-and-implementer-roles.md) | Separate author and implementer roles, reference crosscheck, dispute channel | accepted (advisory CI author check superseded by ADR-0018) |
 | [0010](0010-author-runner-candidate-broker.md) | Reach the candidate from the author sandbox only through a host broker | accepted |
 | [0013](0013-interactive-dev-mode.md) | Drive spec, tests and code from one host command, `cheeseless dev` | accepted (point 2 superseded by ADR-0014) |
 | [0014](0014-dev-reference-tui-pane.md) | Run the dev-mode reference as a visible TUI in a second pane | accepted |
 | [0015](0015-strength-review-record.md) | Gate auto-freeze on a stored, bound strength-review record | accepted (substitute and trusted-config claims superseded by ADR-0016) |
 | [0016](0016-strength-review-substitutes-human-approval.md) | A strength review replaces the operator's strength review, not the executable checks; bounded, not safe | accepted |
 | [0017](0017-attended-approval-tty-challenge.md) | Attended operator decisions (approve, resolve, recover-finish, sensitive promote, auto-freeze opt-in) need a typed challenge on the controlling terminal | accepted |
+| [0018](0018-blocking-author-check-in-ci.md) | A definite author-check failure fails the CI gate on spec/ PRs; an unavailable check only warns | accepted |
