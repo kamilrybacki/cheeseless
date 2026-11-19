@@ -153,6 +153,38 @@ forbidden_modules = [
     "tempfile",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Dev-events observer is read-only"
+type = "forbidden"
+source_modules = [
+    "cheeseless.app.dev_observe",
+    "cheeseless.domain.dev_events",
+    "cheeseless.ports.dev_observe",
+]
+forbidden_modules = [
+    "cheeseless.ports.dev_session",
+    "cheeseless.ports.presence",
+    "cheeseless.app.dev_flow",
+]
+
+[[tool.importlinter.contracts]]
+name = "Dev-events CLI never imports outbound adapters"
+type = "forbidden"
+source_modules = ["cheeseless.adapters.inbound.cli.dev_events"]
+forbidden_modules = ["cheeseless.adapters.outbound"]
+
+[[tool.importlinter.contracts]]
+name = "Agent-facing adapters never reach the observe store"
+type = "forbidden"
+source_modules = [
+    "cheeseless.adapters.inbound.mcp",
+    "cheeseless.adapters.inbound.uds",
+]
+forbidden_modules = [
+    "cheeseless.bootstrap_dev_events",
+    "cheeseless.adapters.outbound.store.observe_store",
+]
+
 [[tool.mypy.overrides]]
 module = ["grpc_tools", "grpc_tools.*"]
 ignore_missing_imports = true

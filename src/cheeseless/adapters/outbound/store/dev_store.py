@@ -62,7 +62,9 @@ def _decode(lineage: str, data: dict[str, Any]) -> DevState:
     )
 
 
-class DevStoreMixin:
+class DevReadMixin:
+    """The read paths only; the observer builds on this and never sees a write."""
+
     _root: Path
 
     def _dev_path(self, lineage: str) -> Path:
@@ -81,6 +83,8 @@ class DevStoreMixin:
     def dev_state(self, lineage_id: str) -> DevState | None:
         return self._read_dev(_lineage(lineage_id))
 
+
+class DevStoreMixin(DevReadMixin):
     def save_dev_state(self, state: DevState) -> DevState:
         lineage = _lineage(state.lineage_id)
         _fs.ensure_private_dir(self._root / _DIR)

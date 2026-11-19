@@ -1655,3 +1655,14 @@ Deviations from the ADR text, all fail-closed:
 
 ### 2026-11-19 · ADR 0019 review round 2 (gpt-6.1-sol: ACCEPT)
 - No findings. Notes: hidden-test isolation for panes still depends on the GUI never feeding scrollback to an agent (open question Q3); S6–S7 wait for it. ADR 0019 accepted; reviewers gpt-6-luna, gpt-6.1-sol (author claude-sonnet-5-5, revision claude-opus-5-5).
+
+## Dev-events host command, Part A (S1 to S5, 2026-11-19)
+
+- No ADR: Part A projects existing host state and changes no accepted decision. An ADR is needed if events ever carry free text or a viewer gets a write path.
+- Schema v1 is closed (`additionalProperties: false`, enums only). The canary test checks every stage's output against it, with a byte scan for canaries, 64-hex digests, 32-hex and UUID session ids and paths.
+- `--follow` stops on an `error` line. An error line has no view, so a later poll can never change it; without this stop a corrupt store made `--follow` spin forever (found by the S4 canary, fixed with a unit test).
+- The disputes fixture had an invalid `DisputeCode`; the store rejected the file (correctly). The fixture now uses `contradicts_spec`.
+- `bootstrap_dev_events.py` builds `ObserveStore` directly and never calls `build_context`, so observing creates no directories. The inbound CLI sees only the `DevObservation` port (adapter-independence contract).
+- Session ids in the canary are UUIDs, because `ids.session_id` requires the UUID form.
+- review round 1 by claude-sonnet-5-5: REJECT; fixed items 1–8 (read-only `ObserveStore`, schema bounds in `encode`, follow vanish error and docs, exception mapping, `--interval` bound, repository guard, import-linter contracts, `--once` exit 3).
+- not addressed: per-poll O(n) reference attempt scan and corrupt foreign attempt files — accepted as LOW, reason: host-only, small n.
