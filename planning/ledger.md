@@ -1694,3 +1694,22 @@ Deviations from the ADR text, all fail-closed:
   only from the UI; the test-writer pane stays open while the tab is hidden.
 - All six review findings were accepted (design section 10). Finding 1 is narrowed, not closed:
   a host agent with a shell still reaches the store (ADR 0019 residual).
+
+## T3 tab phase 0: `dev-lineages` and `pane-relay --wait` (2026-11-20)
+
+- The output contract was fixed with the T3 fork author. It supersedes the draft format in
+  design section 7: one line, `{"schema":1,"lineages":[{lineage,stage,updated_at}]}`,
+  newest first, at most 100, with a closed schema in `docs/schemas/dev-lineages-v1.json`.
+  On a store error it prints the fixed line `{"schema":1,"error":"store"}` and exits 1.
+- `stage` comes from the same view code as `dev-events` (`current_view`). A security canary
+  checks that both commands agree on every stage.
+- `updated_at` is the newest mtime of the lineage's state file and its reference-attempt
+  files, in whole seconds, UTC. `DevState` has no timestamp. A reference run changes the stage
+  without rewriting the state file, so the attempt files count too.
+- No ADR. The listing is host-only and read-only, and it is not on MCP or UDS, so ADR 0019's
+  boundary is unchanged. import-linter keeps `bootstrap_dev_lineages` out of mcp/uds.
+- `--wait` polls only for the socket path to exist, every 0.1 s, with a final check at the
+  deadline. A socket that refuses connections (the bind-to-listen window, or a stale socket)
+  is not retried; it exits 1 like any connect error. A path that cannot be stat'ed counts as
+  present, so connect reports the real error. `--wait` works with both `--socket` and
+  `--role`.

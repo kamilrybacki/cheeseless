@@ -120,6 +120,16 @@ def list_regular(directory: Path) -> tuple[Path, ...]:
     return tuple(sorted(files, key=lambda path: path.name))
 
 
+def mtime_ns(path: Path) -> int | None:
+    """The modification time of ``path`` itself, or None when it no longer exists."""
+    try:
+        return os.lstat(path).st_mtime_ns
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise StoreError(f"cannot stat {path}: {exc}") from exc
+
+
 def append_line(path: Path, line: bytes) -> None:
     try:
         fd = _open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)

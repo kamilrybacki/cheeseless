@@ -1,7 +1,7 @@
 """A dependency-free checker for the JSON Schema subset ``docs/schemas`` uses.
 
 The project has no ``jsonschema`` dependency, and the dev-event schema is closed on purpose,
-so the checker supports exactly the keywords that schema is written with and refuses any
+so the checker supports exactly the keywords those schemas are written with and refuses any
 other keyword. A test that passes here means every line satisfies the schema as written.
 """
 
@@ -25,6 +25,8 @@ _SUPPORTED = frozenset(
         "pattern",
         "minimum",
         "maximum",
+        "items",
+        "maxItems",
         "oneOf",
         "anyOf",
         "not",
@@ -35,6 +37,7 @@ _TYPES: dict[str, tuple[type, ...]] = {
     "object": (dict,),
     "string": (str,),
     "integer": (int,),
+    "array": (list,),
 }
 
 
@@ -61,6 +64,8 @@ def violations(schema: dict[str, Any], value: Any, path: str = "$") -> list[str]
         problems.extend(_bounds(schema, value, path))
     if isinstance(value, dict):
         problems.extend(_object(schema, value, path))
+    if isinstance(value, list):
+        problems.extend(_array(schema, value, path))
     problems.extend(_combinators(schema, value, path))
     return problems
 
@@ -91,6 +96,16 @@ def _object(schema: dict[str, Any], value: dict[str, Any], path: str) -> list[st
             problems.extend(violations(properties[key], item, f"{path}.{key}"))
         elif schema.get("additionalProperties") is False:
             problems.append(f"{path}: unexpected field {key!r}")
+    return problems
+
+
+def _array(schema: dict[str, Any], value: list[Any], path: str) -> list[str]:
+    problems: list[str] = []
+    if "maxItems" in schema and len(value) > schema["maxItems"]:
+        problems.append(f"{path}: {len(value)} items, at most {schema['maxItems']}")
+    if "items" in schema:
+        for index, item in enumerate(value):
+            problems.extend(violations(schema["items"], item, f"{path}[{index}]"))
     return problems
 
 

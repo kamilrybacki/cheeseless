@@ -97,6 +97,22 @@ class ReferenceReadMixin:
                 found.append(attempt)
         return tuple(found)
 
+    def _reference_lineage_mtimes(self) -> dict[str, int]:
+        """The newest attempt-file mtime per lineage, in nanoseconds.
+
+        A reference run changes the stage without rewriting the dev state file, so the
+        listing needs this too. A corrupt attempt raises ``StoreError``.
+        """
+        found: dict[str, int] = {}
+        for attempt in self.reference_attempts():
+            lineage = attempt.lineage_id
+            if lineage is None:  # a one-off reference run belongs to no lineage
+                continue
+            stamp = _fs.mtime_ns(self._reference_path(attempt.attempt_id))
+            if stamp is not None:
+                found[lineage] = max(stamp, found.get(lineage, stamp))
+        return found
+
 
 class ReferenceStoreMixin(ReferenceReadMixin):
     def save_reference_attempt(self, attempt: ReferenceAttempt) -> ReferenceAttempt:

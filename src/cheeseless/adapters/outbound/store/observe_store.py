@@ -7,21 +7,31 @@ exists on it at runtime.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from cheeseless.adapters.outbound.store import _fs, codec
 from cheeseless.adapters.outbound.store.dev_store import DevReadMixin
 from cheeseless.adapters.outbound.store.reference_store import ReferenceReadMixin
+from cheeseless.domain.dev_lineages import LineageStamp
 from cheeseless.domain.dispute import DisputeCode, DisputeRecord, DisputeStatus
 from cheeseless.ports.store import StoreError
 
 
 class ObserveStore(DevReadMixin, ReferenceReadMixin):
-    """Satisfies the ``DevObservation`` port. Constructing it touches nothing on disk."""
+    """Satisfies the ``LineageListing`` port. Constructing it touches nothing on disk."""
 
     def __init__(self, root: Path) -> None:
         self._root = root
+
+    def lineage_stamps(self) -> tuple[LineageStamp, ...]:
+        """Every lineage with a state file, at its newest state or reference-attempt mtime."""
+        attempts = self._reference_lineage_mtimes()
+        return tuple(
+            LineageStamp(lineage, _utc(max(stamp, attempts.get(lineage, stamp))))
+            for lineage, stamp in sorted(self._dev_lineage_mtimes().items())
+        )
 
     def disputes(self) -> tuple[DisputeRecord, ...]:
         raw = self._read_disputes().get("records", [])
@@ -40,6 +50,10 @@ class ObserveStore(DevReadMixin, ReferenceReadMixin):
         if not isinstance(data, dict):
             raise StoreError("dispute records are invalid")
         return data
+
+
+def _utc(nanoseconds: int) -> datetime:
+    return datetime.fromtimestamp(nanoseconds // 10**9, tz=UTC)
 
 
 def _dispute(row: dict[str, Any]) -> DisputeRecord:

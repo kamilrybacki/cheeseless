@@ -831,12 +831,10 @@ def _run_pane_relay(parser: argparse.ArgumentParser, args: argparse.Namespace) -
     With ``--role`` the socket is resolved from the state dir and the mode comes from the
     role, so a coder or reference pane is always a viewer.
     """
-    from cheeseless.adapters.inbound.cli.pane_client import run_pane_client  # noqa: PLC0415
-
     if args.role is None:
         if args.lineage is not None:
             parser.error("--lineage is only for --role")
-        return run_pane_client(args.socket, view_only=args.view)
+        return _attach_pane(args.socket, view_only=args.view, wait=args.wait)
     if args.lineage is None:
         parser.error("--role needs --lineage")
     if args.view:
@@ -846,7 +844,27 @@ def _run_pane_relay(parser: argparse.ArgumentParser, args: argparse.Namespace) -
         path = pane_layout.socket_path(_state_home(args.state_dir), args.lineage, role)
     except ValueError as exc:  # PaneLayoutError, or a lineage id that is not one
         parser.error(str(exc))
-    return run_pane_client(path, view_only=pane_layout.mode_of(role) is pane_layout.PaneMode.VIEW)
+    view_only = pane_layout.mode_of(role) is pane_layout.PaneMode.VIEW
+    return _attach_pane(path, view_only=view_only, wait=args.wait)
+
+
+def _attach_pane(path: Path, *, view_only: bool, wait: float | None) -> int:
+    """Connect to the relay at ``path``; with ``wait``, first poll for the socket to appear.
+
+    Exit codes: 0 the relay closed cleanly, 1 connect or relay error, 3 ``--wait`` timed
+    out before the socket appeared, 130 interrupted while waiting.
+    """
+    from cheeseless.adapters.inbound.cli import pane_client  # noqa: PLC0415
+
+    if wait is not None:
+        try:
+            appeared = pane_client.wait_for_socket(path, wait)
+        except KeyboardInterrupt:
+            return 130
+        if not appeared:
+            print(pane_client.NO_SOCKET_MESSAGE, file=sys.stderr)
+            return pane_client.EXIT_NO_SOCKET
+    return pane_client.run_pane_client(path, view_only=view_only)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -875,6 +893,10 @@ def main(argv: list[str] | None = None) -> int:
         from cheeseless.bootstrap_dev_events import run_dev_events_command  # noqa: PLC0415
 
         return run_dev_events_command(args)
+    if args.command == "dev-lineages":
+        from cheeseless.bootstrap_dev_lineages import run_dev_lineages_command  # noqa: PLC0415
+
+        return run_dev_lineages_command(args)
     if args.command == "serve-uds":
         return serve_uds(
             socket_path=getattr(args, "socket", None),
