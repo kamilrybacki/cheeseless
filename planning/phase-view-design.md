@@ -155,8 +155,8 @@ forwarded) is new behaviour for ADR 0014's "anyone at the pane can steer" risk, 
 ADR draft: `docs/adr/0019-view-only-role-relay.md`. It extends 0014; it supersedes nothing.
 
 ### Residual risks of B3
-- A T3 terminal runs as the operator's UID; scrollback holds what the agent printed. For the
-  reference and coder panes that is test-free by design; for the test writer it holds hidden
+- A T3 terminal runs as the operator's UID; scrollback holds what the agent printed. The reference pane
+  is test-free (ADR 0009); the coder pane holds no hidden tests but can hold visible tests and code; for the test writer it holds hidden
   tests, which the operator is allowed to see. T3 must not feed terminal text to another agent
   (Q3): a viewer thread must never be given a role pane's scrollback.
 - A thread agent in the same T3 project can still read the store. The view does not make that
@@ -173,7 +173,7 @@ ADR draft: `docs/adr/0019-view-only-role-relay.md`. It extends 0014; it supersed
 | S4 | `tests/security/test_dev_events_canary.py` (above) | canary, schema, mutation, endpoint-absence |
 | S5 | `docs/t3-phase-view.md`: viewer recipe, a `render_panel` spec example, "do not trust, do not run `hint`" | docs link check in `test_adr_set`-style test if the repo has one |
 | S6 | `cheeseless dev` prints a closed `panes` event (role to relay socket path, view/interactive) on stderr or in `dev-events` | no path outside the state dir; canary test: socket paths carry no digest |
-| S7 | `pane-relay --view-only` (drops stdin frames in the relay, not only the client) and relay for coder and test writer panes, behind ADR 0019 acceptance | security: stdin bytes reach no pty; relay refuses a client frame in view mode; closing the pane stops nothing |
+| S7 | `pane-relay --view-only` (host relay reads no client frame, `Data` or `Resize`, on any connection; a frame closes that connection) and relay for coder and test writer panes, behind ADR 0019 acceptance | security: stdin and resize frames reach no pty across reconnects; a client frame closes the connection; closing the pane stops nothing |
 | S8 | B2 spike (only if T3 lists a custom launcher and a non-pty protocol): design note, no code | none until an ADR exists |
 
 S1 to S5 are independent of every T3 question and deliver Part A. S6 and S7 wait for Q1/Q3 and
