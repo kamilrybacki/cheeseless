@@ -1,7 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-11-19
-reviewers: []
+reviewers: [gpt-6-luna, gpt-6.1-sol]
 ---
 # 0019. Relay every role to a GUI pane; only the test writer pane takes input
 

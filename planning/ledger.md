@@ -1645,10 +1645,13 @@ Deviations from the ADR text, all fail-closed:
 ## Phase view and per-role T3 threads: design (2026-11-19, proposal only)
 
 - Part A (read-only `cheeseless dev-events`, closed schema v1, canary test) needs no ADR: it projects existing host state and changes no accepted decision. An ADR becomes necessary if events ever carry free text or a viewer gets a write path.
-- Part B: agent-per-T3-thread is rejected (agent outside the sandbox reads hidden state; ADR 0003/0009/0013). Recommended: host-owned relay panels (ADR 0019 draft, proposed, no reviewers yet); sandboxed T3 launch is a later spike. Details and open questions: `planning/phase-view-design.md`.
+- Part B: agent-per-T3-thread is rejected (agent outside the sandbox reads hidden state; ADR 0003/0009/0013). Recommended: host-owned relay panels (ADR 0019, accepted); sandboxed T3 launch is a later spike. Details and open questions: `planning/phase-view-design.md`.
 
 ### 2026-11-19 · ADR 0019 review round 1 (gpt-6-luna: REJECT)
 - high, resize and reconnect bypass view-only: accepted. View-only now reads no client frame (`Data` or `Resize`) on any connection; the host alone sets pty size; a frame closes that connection. S7 tests updated.
 - high, coder pane output not shown test-free: accepted. ADR states the output boundary per pane (reference test-free per ADR 0009; coder has no hidden tests per ADR 0003 but may show visible tests and code) and that scrollback must reach no agent.
 - low, rejected option omitted the GUI orchestrator: accepted, option now names it and the ADR 0013 break.
 - low, title overstated "every role view-only": accepted, retitled; modes per role listed.
+
+### 2026-11-19 · ADR 0019 review round 2 (gpt-6.1-sol: ACCEPT)
+- No findings. Notes: hidden-test isolation for panes still depends on the GUI never feeding scrollback to an agent (open question Q3); S6–S7 wait for it. ADR 0019 accepted; reviewers gpt-6-luna, gpt-6.1-sol (author claude-sonnet-5-5, revision claude-opus-5-5).
