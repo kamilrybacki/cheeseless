@@ -128,10 +128,40 @@ cheeseless pane-relay --role reference --lineage demo
 cheeseless pane-relay --role coder --lineage demo
 ```
 
-### Test-writer pane: supported only with `persistHistory:false`
+On a T3 build with command terminals, declare each script as a terminal command, so it runs
+from `argv` with no shell and no history on disk. `command` is then only the display label:
 
-The test-writer pane shows the hidden tests as they are written. **Support it only on a T3
-build with command terminals and `persistHistory:false`** (a fork patch is in progress). On
-stock T3 that pane's scrollback is persisted to disk and can be added to a chat, which leaks
-the hidden tests to an agent. On stock T3, use only the `reference` and `coder` panes, and
-keep the test-writer in your own terminal.
+```json
+{
+  "id": "cheeseless-test-writer",
+  "name": "Test writer",
+  "command": "cheeseless pane-relay --role test-writer --lineage demo",
+  "icon": "test",
+  "runOnWorktreeCreate": false,
+  "runAs": "terminal-command",
+  "argv": ["cheeseless", "pane-relay", "--role", "test-writer", "--lineage", "demo"]
+}
+```
+
+The `reference` and `coder` scripts have the same shape, with only their `--role` changed.
+`argv` is required with `runAs`, and its first entry names the program.
+
+### Test-writer pane: supported only as a command terminal
+
+The test-writer pane shows the hidden tests as they are written. **Run it only as a
+`runAs: "terminal-command"` script on a T3 build with command terminals.** Such a build
+enforces these rules on the server:
+
+- A command terminal never writes history to disk.
+- A command terminal keeps the command it was launched with. It cannot be turned into a shell
+  by a plain attach.
+- "Add to chat" stays hidden for a terminal without history.
+
+On stock T3, that pane's scrollback is saved to disk and can be added to a chat, which leaks
+the hidden tests to an agent. There, use only the `reference` and `coder` panes and keep the
+test-writer in your own terminal.
+
+One gap remains. The server forgets which terminals were command terminals when it restarts.
+After a restart, a plain attach can open a shell in that terminal's slot. The shell holds only
+its own new output, never the earlier test-writer output, but close the test-writer pane
+before restarting T3 anyway.
