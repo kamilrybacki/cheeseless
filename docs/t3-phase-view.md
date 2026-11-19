@@ -35,8 +35,15 @@ The viewer should:
    and `open_disputes`.
 3. Stop when it sees `end` or `error`, or when the process exits.
 
-Exit codes: `0` normal, `1` after an `error` line, `2` for bad usage (a write flag such as
-`--as`, a bad lineage, or `--once` with `--follow`).
+Exit codes: `0` normal (also a closed pipe), `1` after an `error` line (including state that
+vanishes mid-`--follow`, a store or I/O error, or a value outside the schema bounds), `2` for bad
+usage (a write flag such as `--as`, a bad lineage, `--once` with `--follow`, `--interval` outside
+`0 < interval <= 60`, or running outside a git repository), `3` when `--once` names a lineage with
+no state (nothing is printed), `130` when interrupted.
+
+`--follow` on a lineage with no state yet waits silently until state appears, so a viewer can start
+before the session does. If state was seen and then disappears, it prints the fixed `error` line
+and exits `1`.
 
 ## Render spec example
 

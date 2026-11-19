@@ -1664,3 +1664,5 @@ Deviations from the ADR text, all fail-closed:
 - The disputes fixture had an invalid `DisputeCode`; the store rejected the file (correctly). The fixture now uses `contradicts_spec`.
 - `bootstrap_dev_events.py` builds `ObserveStore` directly and never calls `build_context`, so observing creates no directories. The inbound CLI sees only the `DevObservation` port (adapter-independence contract).
 - Session ids in the canary are UUIDs, because `ids.session_id` requires the UUID form.
+- review round 1 by claude-sonnet-5-5: REJECT; fixed items 1–8 (read-only `ObserveStore`, schema bounds in `encode`, follow vanish error and docs, exception mapping, `--interval` bound, repository guard, import-linter contracts, `--once` exit 3).
+- not addressed: per-poll O(n) reference attempt scan and corrupt foreign attempt files — accepted as LOW, reason: host-only, small n.
