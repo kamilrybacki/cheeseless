@@ -1686,3 +1686,11 @@ Deviations from the ADR text, all fail-closed:
 - The first fork review (claude-sonnet-5-5) blocked it because the history guarantees depended on what the client sent. Fixes: a command terminal never persists; dropping history is one-way; a live terminal keeps its command (`TerminalCommandConflictError`); a command or ephemeral terminal that is gone is not recreated as a shell by a plain attach or resume; "Add to chat" is hidden until the summary arrives; `runAs` requires a valid `argv`; NUL bytes are rejected; total size is capped at 128 KiB.
 - The re-review (claude-sonnet-5-5) approved. Accepted risks: (1) MEDIUM the command-terminal mark is in memory only, so after a server restart a plain attach can open a shell in that slot. It holds only new output, never earlier test-writer output, and the doc says to close the pane before a restart. (2) MEDIUM an explicit plain `open` of a closed command terminal creates a persistent shell. This is intended, and the same reason applies. (3) LOW the web launched-as-command flag is never cleared, so it fails closed.
 - Not done: the raised `agentContextBudget.json` limits in the fork were not measured. Fork CI does not run, because GitHub Actions billing is blocked on the private fork. The merge relied on local tests (145 targeted tests) and `tsc` in three packages.
+
+## Native T3 tab for cheeseless: design review (2026-11-20)
+
+- Design: `planning/t3-panel-tab-design.md` (author claude-sonnet-5-5, reviewer gpt-6.1-sol).
+- Operator decisions: config lineage with latest as fallback; the cheeseless block is settable
+  only from the UI; the test-writer pane stays open while the tab is hidden.
+- All six review findings were accepted (design section 10). Finding 1 is narrowed, not closed:
+  a host agent with a shell still reaches the store (ADR 0019 residual).
