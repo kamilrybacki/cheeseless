@@ -185,6 +185,20 @@ forbidden_modules = [
     "cheeseless.adapters.outbound.store.observe_store",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Agent-facing adapters never reach the pane layout or relay"
+type = "forbidden"
+source_modules = [
+    "cheeseless.adapters.inbound.mcp",
+    "cheeseless.adapters.inbound.uds",
+]
+forbidden_modules = [
+    "cheeseless.pane_layout",
+    "cheeseless.adapters.outbound.pane",
+    "cheeseless.adapters.inbound.cli.pane_client",
+    "cheeseless.bootstrap_dev",
+]
+
 [[tool.mypy.overrides]]
 module = ["grpc_tools", "grpc_tools.*"]
 ignore_missing_imports = true

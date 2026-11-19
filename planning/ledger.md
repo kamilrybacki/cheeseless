@@ -1666,3 +1666,15 @@ Deviations from the ADR text, all fail-closed:
 - Session ids in the canary are UUIDs, because `ids.session_id` requires the UUID form.
 - review round 1 by claude-sonnet-5-5: REJECT; fixed items 1–8 (read-only `ObserveStore`, schema bounds in `encode`, follow vanish error and docs, exception mapping, `--interval` bound, repository guard, import-linter contracts, `--once` exit 3).
 - not addressed: per-poll O(n) reference attempt scan and corrupt foreign attempt files — accepted as LOW, reason: host-only, small n.
+
+## Role panes, Part B (S6–S7, 2026-11-19)
+
+- No new ADR: this implements the accepted ADR 0019 and changes no decision.
+- View-only is a relay-level flag. Any non-empty client read drops the connection before it is decoded, so no `Data` or `Resize` frame reaches a pty, on any connection. The host alone sets the pty size. The pane client's viewer mode sends nothing and leaves the tty cooked as the polite half.
+- Socket layout `<state>/cheeseless/panes/<lineage>/<role>.sock`: deterministic, no digest, in a private 0700 leaf dir. The relay refuses a live peer, removes a stale socket, and refuses symlinks and non-sockets. `lineage_id` is validated, and the 107-byte AF_UNIX limit is checked up front with a clear error. Risk: the same lineage id in two repos that share a state dir shares a path (the second host refuses a live peer).
+- The role to mode mapping lives in one tested place, `pane_layout`.
+- The `panes` event goes on `cheeseless dev` **stderr**, not in `dev-events`: the Part A schema is closed and its canary forbids paths. It is not on MCP or UDS. An import-linter forbidden contract keeps `adapters.inbound.mcp` and `adapters.inbound.uds` away from `pane_layout`, the pane relay, the pane client and `bootstrap_dev`.
+- `--panes` on `dev` is opt-in so existing behaviour is unchanged. With it, the host waits on the agent process instead of tearing the session down at once.
+- The fixed socket is used only when `pane_lineage` is passed. A reference attempt in TUI mode now passes it; the tmux reference pane runs `pane-relay --view`. Its old input path is removed on purpose (the ADR 0019 behaviour change).
+- The test-writer pane is supported only on a T3 build with command terminals and `persistHistory:false`. On stock T3 its scrollback is persisted and can be added to a chat, which leaks hidden tests (docs/t3-phase-view.md).
+- Tests: `tests/security/test_pane_view_only.py` (frames reach no pty across reconnects, a frame closes only its connection, closing the pane stops nothing), `test_pane_session_wiring.py` (roles, modes, paths through `host_session`) and `test_pane_layout_canary.py` (canaries, 64-hex and 32-hex, paths inside the state dir, store-hash mutation check, MCP and UDS source scan).

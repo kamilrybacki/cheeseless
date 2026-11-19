@@ -39,6 +39,7 @@ from cheeseless.domain.dispute import DEFAULT_CAP, DisputeRecord
 from cheeseless.domain.launcher import Launcher, LauncherError
 from cheeseless.domain.presence import PresenceRefused
 from cheeseless.domain.result import Result
+from cheeseless.pane_layout import PaneRole
 from cheeseless.ports.launchers import LauncherCatalog
 from cheeseless.ports.presence import PresenceProof
 from cheeseless.ports.repository import Repository, SnapshotRejected
@@ -276,7 +277,22 @@ def build_parser() -> argparse.ArgumentParser:
     relay = sub.add_parser(
         "pane-relay", help="Attach this terminal to a reference pane relay (host-side)."
     )
-    relay.add_argument("--socket", type=Path, required=True, help="Relay socket path.")
+    target = relay.add_mutually_exclusive_group(required=True)
+    target.add_argument("--socket", type=Path, default=None, help="Relay socket path.")
+    target.add_argument(
+        "--role",
+        choices=[role.value for role in PaneRole],
+        default=None,
+        help="Attach to this role's pane of --lineage (the socket is resolved from the state dir).",
+    )
+    relay.add_argument("--lineage", default=None, help="Lineage of the pane (with --role).")
+    relay.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)
+    relay.add_argument(
+        "--view",
+        action="store_true",
+        help="With --socket: attach as a read-only viewer "
+        "(a --role pane takes its mode from the role).",
+    )
 
     devref = sub.add_parser(
         "dev-reference",
@@ -315,6 +331,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dev.add_argument("--reference-timeout", type=float, default=1800.0)
     dev.add_argument("--launcher", default=None, metavar="NAME", help=LAUNCHER_HELP)
+    dev.add_argument(
+        "--panes",
+        action="store_true",
+        help="Run the phase's agent on a host-owned pty and announce its pane relay "
+        "as a `panes` event on stderr (ADR 0019).",
+    )
     dev.add_argument("--json", action="store_true")
 
     devev = sub.add_parser(

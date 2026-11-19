@@ -2,8 +2,8 @@
 
 `cheeseless dev-events` prints the state of one lineage as newline-delimited JSON. A viewer
 (a T3 panel or a terminal) reads it and draws the current stage. The command is host-only and
-read-only: it is not on MCP or UDS, and it writes nothing. Part B (per-role panes) is not
-implemented; see `planning/phase-view-design.md`.
+read-only: it is not on MCP or UDS, and it writes nothing. Part B (per-role panes, ADR 0019)
+is described in [Role panes](#role-panes); the design is in `planning/phase-view-design.md`.
 
 ## The contract
 
@@ -72,3 +72,66 @@ Map each enum value to a fixed label in the viewer. Do not interpolate anything 
 - **Never give a viewer thread a role pane's scrollback or the stream of another agent.** The
   viewer reads only the dev-events lines.
 - **Read-only.** A viewer must not write to the state directory or call a write command.
+
+## Role panes
+
+Each role can show its live terminal in a T3 terminal pane. The host owns the pty and a
+relay socket (ADR 0014); the pane is only a client of that socket. Nothing GUI-side enters a
+sandbox.
+
+| Role | Pane mode | Input |
+| --- | --- | --- |
+| test writer (`test-writer`) | interactive | the operator types into the agent |
+| reference coder (`reference`) | view only | none |
+| coder (`coder`) | view only | none |
+
+A view-only relay reads no client frame into the pty, neither input nor resize, on any
+connection including reconnects. The host alone sets the pty size. Any client frame closes
+that connection only; the session keeps running, and closing a pane stops nothing.
+
+### Starting a pane
+
+`cheeseless dev --panes` runs the phase's agent on a host pty and prints one `panes` event on
+**stderr** (not in `dev-events`, whose closed schema has no paths):
+
+```json
+{"event":"panes","lineage":"demo","panes":[{"mode":"interactive","role":"test-writer","socket":"<state>/cheeseless/panes/demo/test-writer.sock"}],"schema":1}
+```
+
+The author phase announces the `test-writer` pane, the implement phase announces `coder`. A
+TUI reference attempt serves the `reference` pane at its role path too, but does not print a
+`panes` event; its own tmux pane already runs the viewer. The socket path is
+`<state>/cheeseless/panes/<lineage>/<role>.sock`: it holds no digest, no session id and no
+hidden-test information, and it never leaves the state directory. The pane client resolves it
+itself:
+
+```sh
+cheeseless pane-relay --role coder --lineage demo           # view only, from the role
+cheeseless pane-relay --role test-writer --lineage demo     # interactive
+cheeseless pane-relay --socket /path/to/x.sock [--view]     # the older form still works
+```
+
+`--view` is allowed only with `--socket`; a role fixes its own mode. Use `--state-dir` if the
+host was started with one.
+
+### Example T3 project scripts
+
+One script per role. Each is a terminal command the T3 project runs; replace `demo` with the
+lineage.
+
+```sh
+# test-writer: interactive
+cheeseless pane-relay --role test-writer --lineage demo
+# reference: view only
+cheeseless pane-relay --role reference --lineage demo
+# coder: view only
+cheeseless pane-relay --role coder --lineage demo
+```
+
+### Test-writer pane: supported only with `persistHistory:false`
+
+The test-writer pane shows the hidden tests as they are written. **Support it only on a T3
+build with command terminals and `persistHistory:false`** (a fork patch is in progress). On
+stock T3 that pane's scrollback is persisted to disk and can be added to a chat, which leaks
+the hidden tests to an agent. On stock T3, use only the `reference` and `coder` panes, and
+keep the test-writer in your own terminal.

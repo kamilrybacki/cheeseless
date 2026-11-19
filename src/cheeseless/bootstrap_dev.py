@@ -37,8 +37,9 @@ from cheeseless.app.dev_flow import (
     start_phase,
 )
 from cheeseless.app.dev_session import open_session
-from cheeseless.bootstrap import build_context, host_session, resolve_cli_launch
+from cheeseless.bootstrap import _state_home, build_context, host_session, resolve_cli_launch
 from cheeseless.domain.dev_session import DevPhase, DevSessionError, DevState
+from cheeseless.pane_layout import PaneRole, panes_event_line
 from cheeseless.ports.dev_session import DevSessionStore
 from cheeseless.ports.reference_attempt import ReferenceAttemptStore
 
@@ -160,6 +161,42 @@ def _phase_of(store: DevSessionStore, lineage: str) -> str:
     return state.phase.value if state is not None else "unknown"
 
 
+_PANE_ROWS, _PANE_COLS = 24, 80
+_PANE_OF_ROLE = {"author": PaneRole.TEST_WRITER, "implementer": PaneRole.CODER}
+
+
+def _run_paned_session(
+    args: argparse.Namespace,
+    start: PhaseStart,
+    agent: Sequence[str],
+    lineage: str,
+    agent_model: str,
+) -> None:
+    """Run the agent on a pty behind a host relay and wait for it to end.
+
+    The ``panes`` event goes to stderr, never to ``dev-events``: that stream is a closed,
+    byte-scanned schema with no paths in it (ADR 0019). The pane is announced before the
+    wait so a viewer can attach while the agent runs.
+    """
+    pane = _PANE_OF_ROLE.get(start.role)
+    if pane is None:
+        raise ValueError(f"the {start.role} phase has no pane")
+    state_dir = getattr(args, "state_dir", None)
+    with host_session(
+        state_dir=state_dir,
+        agent_command=list(agent),
+        role=start.role,
+        dev_lineage=start.dev_lineage,
+        agent_model=agent_model,
+        agent_pty=(_PANE_ROWS, _PANE_COLS),
+        pane_lineage=lineage,
+    ) as info:
+        print(
+            panes_event_line(_state_home(state_dir), lineage, (pane,)), file=sys.stderr, flush=True
+        )
+        info["agent_proc"].wait()
+
+
 def _run_session(
     args: argparse.Namespace,
     start: PhaseStart,
@@ -174,15 +211,18 @@ def _run_session(
     ``spec_done``; the implementer is started fresh and never inherits a session id.
     """
     try:
-        with host_session(
-            state_dir=getattr(args, "state_dir", None),
-            agent_command=list(agent),
-            role=start.role,
-            dev_lineage=start.dev_lineage,
-            agent_model=agent_model,
-        ):
-            # The session runs to completion inside the context; the host tears down.
-            pass
+        if getattr(args, "panes", False):
+            _run_paned_session(args, start, agent, lineage, agent_model)
+        else:
+            with host_session(
+                state_dir=getattr(args, "state_dir", None),
+                agent_command=list(agent),
+                role=start.role,
+                dev_lineage=start.dev_lineage,
+                agent_model=agent_model,
+            ):
+                # The session runs to completion inside the context; the host tears down.
+                pass
         if start.role == "implementer":
             _emit(
                 args,
