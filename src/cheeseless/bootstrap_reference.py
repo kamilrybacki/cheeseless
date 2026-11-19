@@ -34,7 +34,13 @@ from cheeseless.app.reference_run import (
     reap_attempts,
     stop_attempt,
 )
-from cheeseless.bootstrap import _terminate, build_context, host_session, resolve_cli_launch
+from cheeseless.bootstrap import (
+    PRE_FREEZE_TASK,
+    _terminate,
+    build_context,
+    host_session,
+    resolve_cli_launch,
+)
 from cheeseless.domain import ids
 from cheeseless.domain.reference_attempt import (
     AttemptOwner,
@@ -45,7 +51,7 @@ from cheeseless.domain.reference_attempt import (
 )
 from cheeseless.session_options import SessionOptionError
 
-PLACEHOLDER_TASK = "0" * 64
+PLACEHOLDER_TASK = PRE_FREEZE_TASK
 S = ReferenceState
 
 

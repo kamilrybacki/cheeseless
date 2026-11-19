@@ -24,7 +24,7 @@ $ grep &#x27;equal length&#x27; acceptance/contract/spec.md
 
 # 1. A reference session sees only the contract (spec + criteria), never tests.
 #    It writes a reference implementation from the spec.
-$ cheeseless session --role reference --task &lt;placeholder-task&gt; --projection &lt;ref-worktree&gt; -- &lt;scripted agent: reference&gt;
+$ cheeseless session --role reference --projection &lt;ref-worktree&gt; -- &lt;scripted agent: reference&gt;
   agent&gt; I can see 5 files: README.md, acceptance/contract/criteria.yaml, acceptance/contract/spec.md, src/toy/__init__.py, src/toy/__main__.py
   agent&gt; test files visible to me: 0
   agent&gt; implementing from the spec: words of equal length keep their input order (a stable sort)
@@ -40,7 +40,7 @@ aa
 # 2. The author writes hidden tests. One of them is deliberate bait:
 #    test_ties_alphabetical contradicts the spec&#x27;s stable tie rule.
 #    author_crosscheck runs the tests against the reference and goes red.
-$ cheeseless session --role author --task &lt;placeholder-task&gt; --projection &lt;author-worktree-1&gt; -- &lt;scripted agent: author-bait&gt;
+$ cheeseless session --role author --projection &lt;author-worktree-1&gt; -- &lt;scripted agent: author-bait&gt;
   agent&gt; writing hidden tests, including test_ties_alphabetical (contradicts the spec)
   agent&gt; wrote acceptance/hidden/test_normalize.py
   agent&gt; wrote acceptance/hidden/test_score.py
@@ -59,7 +59,7 @@ refused: the reference failed the author&#x27;s tests: score
 
 # 3. The author fixes only the test that contradicted the spec.
 #    The crosscheck turns green and the host approves the freeze.
-$ cheeseless session --role author --task &lt;placeholder-task&gt; --projection &lt;author-worktree-2&gt; -- &lt;scripted agent: author-fix&gt;
+$ cheeseless session --role author --projection &lt;author-worktree-2&gt; -- &lt;scripted agent: author-fix&gt;
   agent&gt; the crosscheck was red on score; fixing only the test that contradicts the spec
   agent&gt; wrote acceptance/hidden/test_normalize.py
   agent&gt; wrote acceptance/hidden/test_score.py

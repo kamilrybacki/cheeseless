@@ -238,3 +238,29 @@ def test_main_session_default_projection_is_owned(launched: list[dict[str, objec
 
     assert main(["session", "--", "agent"]) == 7
     assert launched[0]["projection_dir"] is None
+
+
+def test_main_session_resolves_a_relative_projection(
+    launched: list[dict[str, object]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S48: a relative path is made absolute against the cwd, without following symlinks."""
+    from cheeseless.bootstrap import main
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["session", "--projection", "rel/p", "--", "agent"]) == 7
+    assert launched[0]["projection_dir"] == tmp_path / "rel" / "p"
+    assert Path(str(launched[0]["projection_dir"])).is_absolute()
+
+
+def test_main_session_keeps_a_symlinked_projection_visible_as_a_symlink(
+    launched: list[dict[str, object]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cheeseless.bootstrap import main
+
+    (tmp_path / "real").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    monkeypatch.chdir(tmp_path)
+    assert main(["session", "--projection", "link", "--", "agent"]) == 7
+    # not resolved: the host's is_symlink refusal must still see the link
+    assert launched[0]["projection_dir"] == tmp_path / "link"
+    assert Path(str(launched[0]["projection_dir"])).is_symlink()

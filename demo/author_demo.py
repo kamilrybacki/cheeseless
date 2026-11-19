@@ -272,17 +272,13 @@ class Demo:
             raise RuntimeError(f"{display}: exit {result.returncode}\n{self.mask(output)}")
         return output
 
-    def session(self, role: str, step: str, projection: Path, *, placeholder: bool) -> str:
-        task = ["--task", PLACEHOLDER_TASK] if placeholder else []
-        shown_task = " --task <placeholder-task>" if placeholder else ""
+    def session(self, role: str, step: str, projection: Path) -> str:
         agent = 'exec /usr/bin/python3 -I "$HOME/.demo/author_agents.py" "$1"'
         return self.cli(
-            f"session --role {role}{shown_task} --projection <{projection.name}> "
-            f"-- <scripted agent: {step}>",
+            f"session --role {role} --projection <{projection.name}> -- <scripted agent: {step}>",
             "session",
             "--role",
             role,
-            *task,
             "--projection",
             str(projection),
             "--home-seed",
@@ -350,7 +346,7 @@ class Demo:
             "1. A reference session sees only the contract (spec + criteria), never tests.",
             "   It writes a reference implementation from the spec.",
         )
-        self.session("reference", "reference", ref, placeholder=True)
+        self.session("reference", "reference", ref)
         self.cli(
             "reference record --worktree <ref-worktree>",
             "reference",
@@ -367,7 +363,7 @@ class Demo:
             "   author_crosscheck runs the tests against the reference and goes red.",
         )
         bait = self.work / "author-worktree-1"
-        out = self.session("author", "author-bait", bait, placeholder=True)
+        out = self.session("author", "author-bait", bait)
         self.cli(
             "promote --role author --worktree <author-worktree-1>",
             "promote",
@@ -394,7 +390,7 @@ class Demo:
             "   The crosscheck turns green and the host approves the freeze.",
         )
         fixed = self.work / "author-worktree-2"
-        out = self.session("author", "author-fix", fixed, placeholder=True)
+        out = self.session("author", "author-fix", fixed)
         self.cli(
             "promote --role author --worktree <author-worktree-2>",
             "promote",
@@ -419,14 +415,14 @@ class Demo:
         )
 
         self.caption("4. After the freeze the author can no longer change the suite.")
-        self.session("author", "author-late", self.work / "author-worktree-3", placeholder=False)
+        self.session("author", "author-late", self.work / "author-worktree-3")
 
         self.caption(
             "5. The implementer never sees the hidden tests. It guessed alphabetical ties,",
             "   fails score, and disputes the criterion. The ack says nothing about tests.",
         )
         self.cli("dispute config --enable", "dispute", "config", "--enable")
-        self.session("implementer", "implementer", self.work / "impl-worktree", placeholder=False)
+        self.session("implementer", "implementer", self.work / "impl-worktree")
         listing = self.cli("disputes --show-note --json", "disputes", "--show-note", "--json")
         dispute_id = json.loads(listing)["disputes"][0]["id"]
         self.caption("   The host reads the note, checks the spec and rejects the dispute.")

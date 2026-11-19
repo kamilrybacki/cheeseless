@@ -104,7 +104,7 @@ posts a check run with the aggregate status and visible-criterion statuses only.
   - `post` is the only job that can publish checks. It has the environment and the checks App key
     but checks out only the default branch and never fetches or runs PR code. It runs
     `cheeseless ci-gate`, which validates the policy payload (exact schema, head SHA, class),
-    requires `judged_base` to equal the current default-branch tip (a stale verdict fails),
+    requires `judged_base` to equal the tip `route` captured, and that tip to still be the default-branch tip (otherwise a stale verdict fails),
     requires every upstream result to be as the class needs (`policy` success;
     `judge` success for `gate/`, skipped otherwise) and builds the check bodies, re-checks that `pulls/N` still has the same head SHA, mints the
     checks token and posts `cheeseless gate` (required) plus the informational
