@@ -9,7 +9,8 @@ from cheeseless.adapters.outbound.store.file_store import FileStore
 from cheeseless.adapters.outbound.store.observe_store import ObserveStore
 
 _WRITE_PREFIXES = ("save_", "transition_", "bind_", "file_")
-_READ_API = {"dev_state", "reference_attempt", "reference_attempts", "disputes"}
+# lineage_stamps (LineageListing port) only lists and stats state files.
+_READ_API = {"dev_state", "reference_attempt", "reference_attempts", "disputes", "lineage_stamps"}
 
 
 def _own(cls: type) -> set[str]:

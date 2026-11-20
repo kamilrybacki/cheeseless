@@ -1,4 +1,4 @@
-"""Read one dev-event for a lineage through the read-only observation port."""
+"""Read a lineage's dev view, or one dev-event, through the read-only observation port."""
 
 from __future__ import annotations
 
@@ -30,19 +30,31 @@ def read_event(
     and propagates.
     """
     try:
-        state = port.dev_state(lineage)
-        if state is None:
-            return None
-        attempt = _latest_attempt(port, lineage, state)
-        open_disputes = _open_disputes(port, lineage)
+        view = current_view(port, lineage)
     except StoreError:
         return error_event(observed_at, lineage)
-    try:
-        view: DevView = derive(state, attempt, open_disputes)
-    except ValueError:
-        # A stored value outside the schema bounds is corrupt state, not something to print.
-        return error_event(observed_at, lineage)
+    if view is None:
+        return None
     return event(kind, observed_at, lineage, view)
+
+
+def current_view(port: DevObservation, lineage: str) -> DevView | None:
+    """The derived view of ``lineage``, or None when it has no state yet.
+
+    Raises StoreError when the store is corrupt, including a stored value outside the
+    schema bounds. Shared by the dev-events stream and the dev-lineages listing, so both
+    compute the stage the same way.
+    """
+    state = port.dev_state(lineage)
+    if state is None:
+        return None
+    attempt = _latest_attempt(port, lineage, state)
+    open_disputes = _open_disputes(port, lineage)
+    try:
+        return derive(state, attempt, open_disputes)
+    except ValueError as exc:
+        # A stored value outside the schema bounds is corrupt state, not something to print.
+        raise StoreError("dev state is out of bounds") from exc
 
 
 def _latest_attempt(

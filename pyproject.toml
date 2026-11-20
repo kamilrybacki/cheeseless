@@ -157,8 +157,10 @@ forbidden_modules = [
 name = "Dev-events observer is read-only"
 type = "forbidden"
 source_modules = [
+    "cheeseless.app.dev_lineages",
     "cheeseless.app.dev_observe",
     "cheeseless.domain.dev_events",
+    "cheeseless.domain.dev_lineages",
     "cheeseless.ports.dev_observe",
 ]
 forbidden_modules = [
@@ -170,7 +172,10 @@ forbidden_modules = [
 [[tool.importlinter.contracts]]
 name = "Dev-events CLI never imports outbound adapters"
 type = "forbidden"
-source_modules = ["cheeseless.adapters.inbound.cli.dev_events"]
+source_modules = [
+    "cheeseless.adapters.inbound.cli.dev_events",
+    "cheeseless.adapters.inbound.cli.dev_lineages",
+]
 forbidden_modules = ["cheeseless.adapters.outbound"]
 
 [[tool.importlinter.contracts]]
@@ -182,6 +187,7 @@ source_modules = [
 ]
 forbidden_modules = [
     "cheeseless.bootstrap_dev_events",
+    "cheeseless.bootstrap_dev_lineages",
     "cheeseless.adapters.outbound.store.observe_store",
 ]
 

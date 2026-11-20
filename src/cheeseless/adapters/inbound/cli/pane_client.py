@@ -21,6 +21,7 @@ import struct
 import sys
 import termios
 import threading
+import time
 import tty
 from collections.abc import Callable
 from pathlib import Path
@@ -29,6 +30,51 @@ from cheeseless.domain.pane_frames import Data, FrameDecoder, FrameError, encode
 
 _READ_SIZE = 16 * 1024
 _TERMINATING = (signal.SIGTERM, signal.SIGHUP)
+
+EXIT_NO_SOCKET = 3
+"""`pane-relay --wait` gave up: the socket never appeared (the host has not started yet)."""
+NO_SOCKET_MESSAGE = "pane-relay: the relay socket did not appear in time"
+_WAIT_INTERVAL = 0.1
+
+
+def _socket_present(path: Path) -> bool:
+    """True once ``path`` exists. Any error other than "absent" counts as present.
+
+    A path we cannot stat (no permission, say) is left to ``connect``, which reports the
+    real error instead of a misleading timeout.
+    """
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def wait_for_socket(
+    path: Path,
+    seconds: float,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    interval: float = _WAIT_INTERVAL,
+) -> bool:
+    """Poll until ``path`` exists or ``seconds`` pass; True if it appeared.
+
+    It checks first, so an existing socket costs no sleep, and checks once more at the
+    deadline. It only waits for the path to exist: a socket that exists but refuses the
+    connection (the host is between ``bind`` and ``listen``, or it is stale) is left to
+    ``connect``, which exits 1.
+    """
+    deadline = clock() + seconds
+    while True:
+        if _socket_present(path):
+            return True
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return False
+        sleep(min(interval, remaining))
 
 
 def write_all(fd: int, data: bytes) -> None:

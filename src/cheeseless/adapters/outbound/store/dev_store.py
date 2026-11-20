@@ -24,6 +24,15 @@ def _lineage(value: str) -> str:
         raise StoreError(f"invalid lineage id: {exc}") from exc
 
 
+def _state_lineage(name: str) -> str | None:
+    if not (name.startswith("state-") and name.endswith(".json")):
+        return None
+    try:
+        return ids.lineage_id(name[len("state-") : -len(".json")])
+    except ValueError:
+        return None
+
+
 def _encode(state: DevState) -> dict[str, Any]:
     return {
         "lineage_id": state.lineage_id,
@@ -82,6 +91,22 @@ class DevReadMixin:
 
     def dev_state(self, lineage_id: str) -> DevState | None:
         return self._read_dev(_lineage(lineage_id))
+
+    def _dev_lineage_mtimes(self) -> dict[str, int]:
+        """Each lineage with a state file, and that file's mtime in nanoseconds.
+
+        Names that are not ``state-<lineage id>.json`` (temp files, strays) are skipped. A
+        file that vanishes while listing is skipped too.
+        """
+        found: dict[str, int] = {}
+        for path in _fs.list_regular(self._root / _DIR):
+            lineage = _state_lineage(path.name)
+            if lineage is None:
+                continue
+            stamp = _fs.mtime_ns(path)
+            if stamp is not None:
+                found[lineage] = stamp
+        return found
 
 
 class DevStoreMixin(DevReadMixin):

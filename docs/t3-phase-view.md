@@ -62,6 +62,32 @@ A panel can be described with fields only, never with text from the store:
 
 Map each enum value to a fixed label in the viewer. Do not interpolate anything else.
 
+## Listing lineages
+
+A panel that does not know the lineage yet can list them:
+
+```sh
+cheeseless dev-lineages [--state-dir DIR]
+```
+
+It is host-only and read-only. It writes nothing, and it is not exposed on MCP or UDS. It
+prints exactly one line, which validates against
+[`schemas/dev-lineages-v1.json`](schemas/dev-lineages-v1.json):
+
+```json
+{"schema":1,"lineages":[{"lineage":"demo","stage":"code","updated_at":"2026-11-20T09:15:02Z"}]}
+```
+
+The list is newest first, at most 100 entries. `stage` is the same enum `dev-events` reports,
+and `updated_at` is when the lineage last changed on disk, in whole seconds, UTC. There are no
+paths, digests or free text.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | the listing was printed; an empty list is normal |
+| 1 | the store could not be read; prints exactly `{"schema":1,"error":"store"}` |
+| 2 | bad usage, or not inside a git repository |
+
 ## Rules for viewers
 
 - **Do not trust `hint`.** It is a message key such as `run_dev_resume`, and the viewer shows
@@ -113,6 +139,25 @@ cheeseless pane-relay --socket /path/to/x.sock [--view]     # the older form sti
 
 `--view` is allowed only with `--socket`; a role fixes its own mode. Use `--state-dir` if the
 host was started with one.
+
+A pane opened before the host has started can wait for its socket:
+
+```sh
+cheeseless pane-relay --role coder --lineage demo --wait 120
+```
+
+`--wait SECONDS` (more than 0, at most 600) polls until the socket path exists, then connects.
+It waits only for the path to exist. A socket that exists but refuses the connection, in the
+short window between the host binding it and listening, or because it is stale, is not retried
+and exits 1.
+
+| `pane-relay` exit | Meaning |
+| --- | --- |
+| 0 | the relay closed the connection (the host session ended) |
+| 1 | cannot connect, or a relay or terminal error |
+| 2 | bad usage |
+| 3 | `--wait` ran out before the socket appeared: the host has not started yet |
+| 130 | interrupted while waiting |
 
 ### Example T3 project scripts
 

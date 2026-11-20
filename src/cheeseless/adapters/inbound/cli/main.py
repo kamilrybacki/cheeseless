@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -118,6 +119,22 @@ def _add_session_parser(sub: Any) -> None:
         metavar="DIR",
         help="Empty or absent directory outside the repo; kept after the session for promote.",
     )
+
+
+MAX_RELAY_WAIT_SECONDS = 600.0
+
+
+def _wait_seconds(text: str) -> float:
+    """`pane-relay --wait`: a finite number of seconds in (0, 600]."""
+    try:
+        seconds = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("--wait takes a number of seconds") from None
+    if not math.isfinite(seconds) or not 0 < seconds <= MAX_RELAY_WAIT_SECONDS:
+        raise argparse.ArgumentTypeError(
+            f"--wait must be more than 0 and at most {MAX_RELAY_WAIT_SECONDS:g} seconds"
+        )
+    return seconds
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -299,6 +316,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="With --socket: attach as a read-only viewer "
         "(a --role pane takes its mode from the role).",
     )
+    relay.add_argument(
+        "--wait",
+        type=_wait_seconds,
+        default=None,
+        metavar="SECONDS",
+        help=f"If the socket does not exist yet, poll for it for up to SECONDS "
+        f"(0 < SECONDS <= {MAX_RELAY_WAIT_SECONDS:g}), then connect; exit 3 if it never appears.",
+    )
 
     devref = sub.add_parser(
         "dev-reference",
@@ -367,6 +392,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Wait for the lineage, then stream changes until a terminal phase.",
     )
     devev.add_argument("--interval", type=float, default=1.0, help="Seconds between polls.")
+
+    lineages = sub.add_parser(
+        "dev-lineages",
+        help="Host only: read-only JSON list of this repository's dev lineages (no writes).",
+        description="Print one JSON line listing this repository's dev lineages, newest "
+        "first (at most 100), each with its stage and last update time. Exit 0 for a list "
+        "(an empty one included), 1 with a fixed error line when the store cannot be read, "
+        "2 for bad usage or outside a git repository.",
+    )
+    lineages.add_argument("--state-dir", type=Path, default=argparse.SUPPRESS)
 
     uds = sub.add_parser("serve-uds", help="Run the verifier UDS server for one session.")
     uds.add_argument("--socket", type=Path, default=None)
