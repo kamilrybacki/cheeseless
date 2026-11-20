@@ -1713,3 +1713,10 @@ Deviations from the ADR text, all fail-closed:
   is not retried; it exits 1 like any connect error. A path that cannot be stat'ed counts as
   present, so connect reports the real error. `--wait` works with both `--socket` and
   `--role`.
+- Review (gpt-6.1-terra, PR #44): `updated_at` ignores `disputes.json`, although an open
+  dispute changes the stage. Accepted as a known limit for phase 0, not fixed. The stage is
+  still correct, because it is derived live on every listing; only `updated_at` and the
+  newest-first order can lag. A dispute change does not bump the lineage until its state or
+  attempt files change. `disputes.json` is one shared file and its records carry no
+  timestamp, so no honest per-lineage change time exists today. Follow-up: add a change time
+  to dispute records and count it in `lineage_stamps`.
