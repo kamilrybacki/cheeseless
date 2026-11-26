@@ -1,6 +1,9 @@
 # Native cheeseless tab in the T3 right panel (design)
 
-Status: proposal, not accepted. No code changes. Scope: a fork-only T3 feature
+Status: implemented (2026-11-26). Phase 0 is in cheeseless (#44); phases 1-4 are merged in the
+fork. Phase 5 (a real `cheeseless dev --panes` run through the tab) is not done yet. The
+sections below keep the original design; section 10 and the fork's
+`apps/server/src/cheeseless/security-canary.md` override them where they differ. Scope: a fork-only T3 feature
 (`t3code` fork, branch `feat/command-terminals`, merged to the fork's main) plus the small
 cheeseless changes it needs. Contracts used: `docs/t3-phase-view.md`, ADR 0019,
 `docs/schemas/dev-event-v1.json`. Today the operator opens three project scripts in the bottom
