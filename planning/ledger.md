@@ -1720,3 +1720,14 @@ Deviations from the ADR text, all fail-closed:
   attempt files change. `disputes.json` is one shared file and its records carry no
   timestamp, so no honest per-lineage change time exists today. Follow-up: add a change time
   to dispute records and count it in `lineage_stamps`.
+
+## 2026-11-26 - T3 tab status
+
+- The T3 tab design (`planning/t3-panel-tab-design.md`) moved from proposal to implemented.
+  Phase 0 is #44 here. Phases 1-4 are merged in the T3 fork with a real-server and
+  real-browser canary test and a mutation runner (15 rows, all killed). One row, the message
+  and attachment check, is synthetic: no real path leaks pane output into a message.
+- Open: phase 5 integration (a real `dev --panes` lineage through the tab, reconnect, server
+  restart, tab close); a real preview capture with a non-T3 positive control, which needs a
+  provider-session token; thread-scoped MCP tools beyond their refusal. Until phase 5 runs,
+  `docs/t3-phase-view.md` keeps the project scripts as the documented path.

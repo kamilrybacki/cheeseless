@@ -210,3 +210,20 @@ One gap remains. The server forgets which terminals were command terminals when 
 After a restart, a plain attach can open a shell in that terminal's slot. The shell holds only
 its own new output, never the earlier test-writer output, but close the test-writer pane
 before restarting T3 anyway.
+
+### Native cheeseless tab (fork build only)
+
+A T3 fork build has a native **cheeseless** tab in the right panel. It replaces the three
+project scripts above with one surface: a phase header fed by `dev-events` and three role
+panes. The coder and reference panes are view-only; the test-writer pane is interactive and
+isolated. Pane traffic is not persisted, not traced, not exposed through MCP and cannot be
+added to chat. Panes are keyed by project, lineage, role and generation, and the server runs
+`dev-lineages`, `dev-events --follow` and `pane-relay --wait` itself, with argv built from
+enums only.
+
+Status: the tab is implemented and covered by canary tests (a real server, a real browser and
+a mutation runner). Its evidence and limits are in the fork's
+`apps/server/src/cheeseless/security-canary.md`. Two limits are not closed: there is no real
+preview capture against the mounted tab with a non-T3 positive control, and the thread-scoped
+MCP tools are checked only for their refusal. A run of a real `cheeseless dev --panes` lineage
+through the tab has not been done, so the scripts above stay the documented path until it has.
